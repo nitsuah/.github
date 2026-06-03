@@ -115,7 +115,7 @@ WebGL/Three.js    ████████████░░░░░░░░ 6
 
 *Inspired by William Shatner's "The Unexplained" — pursuing the CIA's* ***Kryptos*** *sculpture.*
 
-![Kryptos Decryption Log](./kryptos.svg)
+![Kryptos Decryption Log](https://raw.githubusercontent.com/nitsuah/.github/main/profile/kryptos.svg)
 
 ---
 
