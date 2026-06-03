@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="320" viewBox="0 0 760 320" xml:space="preserve">
+  <defs>
+    <style>
+      .f  { font-family: 'Courier New', Courier, monospace; font-size: 13px; }
+      .hi { fill: #00FF41; }
+      .lo { fill: #1d5c1d; }
+      .k4 { fill: #00FF41; animation: pulse 1.8s ease-in-out infinite; }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.25; }
+      }
+    </style>
+    <!-- subtle scanline overlay -->
+    <pattern id="scan" width="1" height="3" patternUnits="userSpaceOnUse">
+      <rect width="1" height="1" y="2" fill="#000" opacity="0.18"/>
+    </pattern>
+  </defs>
+
+  <!-- background -->
+  <rect width="760" height="320" fill="#0d0208"/>
+  <rect width="760" height="320" fill="url(#scan)"/>
+
+  <!-- header prompts -->
+  <text x="20" y="30"  class="f hi">&gt; CONSTRUCT LOADED  ·  KRYPTOS  ·  CIA HQ LANGLEY  ·  1990</text>
+  <text x="20" y="49"  class="f hi">&gt; INITIATING DECRYPT SEQUENCE...</text>
+
+  <!-- K1 -->
+  <text x="20" y="73"  class="f hi">  K1  KEY: PALIMPSEST   ████████████████████  DECODED</text>
+  <text x="20" y="91"  class="f lo">      EMOUWJJSSDQXOHSNITQPHCPLHULLFVCLHLHJTHGJNPGSV...</text>
+  <text x="20" y="109" class="f hi">      → BETWEEN SUBTLE SHADING AND THE ABSENCE OF LIGHT</text>
+
+  <!-- K2 -->
+  <text x="20" y="129" class="f hi">  K2  KEY: ABSCISSA     ████████████████████  DECODED</text>
+  <text x="20" y="147" class="f lo">      VFPJUDEEHZWETZYVGWHKKQETGFQJNCEGGWHKKTQ...</text>
+  <text x="20" y="165" class="f hi">      → IT WAS TOTALLY INVISIBLE HOWS THAT POSSIBLE</text>
+
+  <!-- K3 -->
+  <text x="20" y="185" class="f hi">  K3  KEY: KRYPTOS      ████████████████████  DECODED</text>
+  <text x="20" y="203" class="f lo">      ENDYAHROHNLSRHEOCPTEOIBIDYSHNAIAHAHSCLTP...</text>
+  <text x="20" y="221" class="f hi">      → SLOWLY DESPARATLY SLOWLY THE REMAINS OF PASSAGE</text>
+
+  <!-- K4 — blinks -->
+  <text x="20" y="241" class="f k4">  K4  KEY: ?????????    ░░░░░░░░░░░░░░░░░░░░  RUNNING</text>
+  <text x="20" y="259" class="f lo">      OBKRUOXOGHULBSOLIFBBWFLRVQQPRNGKSSOTWTQSJQSS...</text>
+  <text x="20" y="277" class="f k4">      → ????????????????????????????????????????????????</text>
+
+  <!-- footer -->
+  <text x="20" y="307" class="f hi">&gt; FOLLOW THE WHITE RABBIT  →  github.com/nitsuah/kryptos</text>
+</svg>
