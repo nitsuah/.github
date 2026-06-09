@@ -1,8 +1,5 @@
 # CODEOWNERS
 
-> This file defines who owns and should review changes to specific files or directories.
-> Learn more: [CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
-
 ## Default owner - all changes require review from @nitsuah
 
 * @nitsuah
