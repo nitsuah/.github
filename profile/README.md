@@ -39,7 +39,7 @@
 | [**games**](https://github.com/nitsuah/games) | Browser arcade — asteroids, FPS tanks, breakout · Next.js · Three.js | [![CI](https://github.com/nitsuah/games/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/nitsuah/games/actions) |
 | [**osrs**](https://github.com/nitsuah/osrs) | Old School RuneScape automation — computer vision, OCR, thieving + fishing | [![CI](https://github.com/nitsuah/osrs/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/osrs/actions) |
 | [**avatar**](https://github.com/nitsuah/avatar) | AI avatar generation — Dreambooth + Stable Diffusion, Colab pipeline | [![CI](https://github.com/nitsuah/avatar/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/avatar/actions) |
-| [**agent-board**](https://github.com/nitsuah/agent-board) | Local-first AI ops cockpit — multi-model routing, OpenTelemetry, safety rails | [![CI](https://github.com/nitsuah/agent-board/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/agent-board/actions) |
+| [**motor-pool**](https://github.com/nitsuah/motor-pool) | Local-first AI ops cockpit — multi-model routing, OpenTelemetry, safety rails | [![CI](https://github.com/nitsuah/motor-pool/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/motor-pool/actions) |
 | [**bb-mcp**](https://github.com/nitsuah/bb-mcp) | Blackboard Learn → MCP server · 91% coverage · 0 critical vulns | [![CI](https://github.com/nitsuah/bb-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/bb-mcp/actions) |
 
 ---
