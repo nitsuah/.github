@@ -38,7 +38,9 @@
 | [**darkmoon**](https://github.com/nitsuah/darkmoon) | Solo 3D browser tag game — React 19, Three Fiber, Socket.io · [live](https://darkmoon.dev) | [![CI](https://github.com/nitsuah/darkmoon/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/darkmoon/actions) |
 | [**games**](https://github.com/nitsuah/games) | Browser arcade — asteroids, FPS tanks, breakout · Next.js · Three.js · [live](https://nitsuah-arcade.netlify.app) | [![CI](https://github.com/nitsuah/games/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/nitsuah/games/actions) |
 | [**kryptos**](https://github.com/nitsuah/kryptos) | Autonomous Kryptos solver — Vigenère, Hill cipher, transposition analysis · [live](https://kryptos-k4.netlify.app/) | [![CI](https://github.com/nitsuah/kryptos/actions/workflows/ci-fast.yml/badge.svg)](https://github.com/nitsuah/kryptos/actions) |
+| [**nitsuah-io**](https://github.com/Nitsuah-Labs/nitsuah-io) | Personal Portfolio · [live](https://nitsuah.io) | [![CI Fast](https://github.com/Nitsuah-Labs/nitsuah-io/actions/workflows/ci.yml/badge.svg)](https://github.com/Nitsuah-Labs/nitsuah-io/actions) |
 | [**overseer**](https://github.com/nitsuah/overseer) | Repo intelligence layer — health scoring, AI doc automation, unified view · [live](https://ghoverseer.netlify.app/) | [![CI](https://github.com/nitsuah/overseer/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/overseer/actions) |
+
 
 ---
 
