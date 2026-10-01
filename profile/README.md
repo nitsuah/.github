@@ -22,24 +22,17 @@ I build tools that eliminate toil, connect systems, and give people leverage: en
 
 ## Projects
 
-| Project | What it does | CI |
-|:----------|:------|:------:|
-| [**agent-board**](https://github.com/nitsuah/agent-board) | Local-first console for chatting with and comparing multiple LLMs (Ollama, Docker Model Runner) — safety rails and full request tracing, nothing leaves your machine | [![CI](https://github.com/nitsuah/agent-board/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/agent-board/actions) |
-| [**bb-mcp**](https://github.com/nitsuah/bb-mcp) | MCP server that puts the Blackboard Learn API in front of LLM clients, with role-based access control | [![CI](https://github.com/nitsuah/bb-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/bb-mcp/actions) |
-| [**ats-fill**](https://github.com/nitsuah/ats-fill) | Chrome extension that reads a job posting and fills out the application using your own API key — no server, nothing tracked | [![CI](https://github.com/nitsuah/ats-fill/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/ats-fill/actions) |
-| [**darkmoon**](https://github.com/nitsuah/darkmoon) | Solo browser combat game — React 19, Three.js, Socket.io. Multiplayer and mobile in progress · [live](https://darkmoon.dev) | [![CI](https://github.com/nitsuah/darkmoon/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/darkmoon/actions) |
-| [**games**](https://github.com/nitsuah/games) | Browser arcade — seven classic games (asteroids, tanks, breakout, snake, and more) rebuilt in Next.js and Three.js · [live](https://nitsuah-arcade.netlify.app) | [![CI](https://github.com/nitsuah/games/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/nitsuah/games/actions) |
-| [**kryptos**](https://github.com/nitsuah/kryptos) | An ongoing attempt at the CIA's unsolved Kryptos K4 cipher — classical cryptanalysis, automated hypothesis testing, reproducible results · [live](https://kryptos-k4.netlify.app/) | [![CI](https://github.com/nitsuah/kryptos/actions/workflows/ci-fast.yml/badge.svg)](https://github.com/nitsuah/kryptos/actions) |
-| [**nitsuah-io**](https://github.com/Nitsuah-Labs/nitsuah-io) | Personal site and project showcase · [live](https://nitsuah.io) | [![CI](https://github.com/Nitsuah-Labs/nitsuah-io/actions/workflows/ci.yml/badge.svg)](https://github.com/Nitsuah-Labs/nitsuah-io/actions) |
-| [**vigil**](https://github.com/nitsuah/vigil) | Points at a GitHub repo, audits its docs, CI, tests, and security, and opens PRs with the fixes · [live](https://ghvigil.netlify.app/) | [![CI](https://github.com/nitsuah/vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/vigil/actions) |
-
----
-
-## Kryptos K4
-
-A hobby inspired by William Shatner's *The Unexplained* — chasing the CIA's unsolved sculpture cipher.
-
-![Kryptos Decryption Log](https://raw.githubusercontent.com/nitsuah/.github/main/profile/kryptos.svg)
+| Project | What it does | Try it | CI |
+|:----------|:------|:------:|:------:|
+| [**agent-board**](https://github.com/nitsuah/agent-board) | Local-first console for chatting with and comparing multiple LLMs (Ollama, Docker Model Runner) — safety rails and full request tracing, nothing leaves your machine |  | [![CI](https://github.com/nitsuah/agent-board/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/agent-board/actions) |
+| [**bb-mcp**](https://github.com/nitsuah/bb-mcp) | MCP server that puts the Blackboard Learn API in front of LLM clients, with role-based access control |  | [![CI](https://github.com/nitsuah/bb-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/bb-mcp/actions) |
+| [**ats-fill**](https://github.com/nitsuah/ats-fill) | Chrome extension that reads a job posting and fills out the application using your own API key — no server, nothing tracked | [![Pages](https://img.shields.io/badge/Pages-24292f?style=flat-square&logo=githubpages&logoColor=white)](https://nitsuah.github.io/ats-fill/) | [![CI](https://github.com/nitsuah/ats-fill/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/ats-fill/actions) |
+| [**darkmoon**](https://github.com/nitsuah/darkmoon) | Solo browser combat game — React 19, Three.js, Socket.io. Multiplayer and mobile in progress | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://darkmoon.dev) | [![CI](https://github.com/nitsuah/darkmoon/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/darkmoon/actions) |
+| [**fire**](https://github.com/nitsuah/fire) | Self-hosted FIRE (Financial Independence, Retire Early) tracker — net worth, projections, and a read-only MCP server for LLM clients; your financial data stays on your machine | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://lifefire.netlify.app/) [![Pages](https://img.shields.io/badge/Pages-24292f?style=flat-square&logo=githubpages&logoColor=white)](https://nitsuah.github.io/fire/) | [![CI](https://github.com/nitsuah/fire/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/fire/actions) |
+| [**games**](https://github.com/nitsuah/games) | Browser arcade — seven classic games (asteroids, tanks, breakout, snake, and more) rebuilt in Next.js and Three.js | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://nitsuah-arcade.netlify.app) | [![CI](https://github.com/nitsuah/games/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/nitsuah/games/actions) |
+| [**kryptos**](https://github.com/nitsuah/kryptos) | An ongoing attempt at the CIA's unsolved Kryptos K4 cipher — classical cryptanalysis, automated hypothesis testing, reproducible results | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://kryptos-k4.netlify.app/) | [![CI](https://github.com/nitsuah/kryptos/actions/workflows/ci-fast.yml/badge.svg)](https://github.com/nitsuah/kryptos/actions) |
+| [**nitsuah-io**](https://github.com/Nitsuah-Labs/nitsuah-io) | Personal site and project showcase | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://nitsuah.io) | [![CI](https://github.com/Nitsuah-Labs/nitsuah-io/actions/workflows/ci.yml/badge.svg)](https://github.com/Nitsuah-Labs/nitsuah-io/actions) |
+| [**vigil**](https://github.com/nitsuah/vigil) | Points at a GitHub repo, audits its docs, CI, tests, and security, and opens PRs with the fixes | [![Live](https://img.shields.io/badge/Live-2ea44f?style=flat-square&logo=googlechrome&logoColor=white)](https://gh-vigil.netlify.app/) [![Pages](https://img.shields.io/badge/Pages-24292f?style=flat-square&logo=githubpages&logoColor=white)](https://nitsuah.github.io/vigil/) | [![CI](https://github.com/nitsuah/vigil/actions/workflows/ci.yml/badge.svg)](https://github.com/nitsuah/vigil/actions) |
 
 ---
 
