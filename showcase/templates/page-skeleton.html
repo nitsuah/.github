@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>REPO: one-line pitch</title>
+  <meta name="description" content="One-line pitch." />
+  <!-- Absolute URLs so link previews unfurl. -->
+  <meta property="og:title" content="REPO" />
+  <meta property="og:description" content="One-line pitch." />
+  <meta property="og:image" content="https://nitsuah.github.io/REPO/assets/poster.jpg" />
+  <meta property="og:video" content="https://nitsuah.github.io/REPO/assets/REPO.mp4" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="assets/favicon.svg" />
+  <!-- Showcase kit: click-to-expand images, fullscreen button on videos. Spec: nitsuah/.github showcase/STANDARD.md -->
+  <script src="https://cdn.jsdelivr.net/gh/nitsuah/.github@main/showcase/expand.js" defer></script>
+  <style>
+    :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --card: #161b22; --line: #30363d; }
+    @media (prefers-color-scheme: light) { :root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --accent: #0969da; --card: #f6f8fa; --line: #d1d9e0; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 system-ui, sans-serif; }
+    main { max-width: 1200px; margin: 0 auto; padding: 0 16px 64px; }
+    a { color: var(--accent); }
+    .hero { padding: 48px 0 24px; }
+    .hero video, .shot img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+    section { padding: 32px 0; border-top: 1px solid var(--line); }
+    /* Big images: a primary shot spans the column; galleries are at most 2-up. */
+    .gallery { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+    figure { margin: 0; }
+    figcaption { color: var(--muted); font-size: 15px; margin-top: 8px; }
+    .ways { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+    .ways div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <h1>REPO</h1>
+      <p>One-line pitch: who it's for and what it does.</p>
+      <video src="assets/REPO.mp4" poster="assets/poster.jpg" muted loop playsinline autoplay controls preload="metadata" aria-label="21-second REPO launch video"></video>
+    </header>
+
+    <!-- One section per FEATURES.md category, same order. Lead with its screenshot or spot. -->
+    <section id="category-1">
+      <h2>Category one</h2>
+      <p>What this group of features does for the user.</p>
+      <figure class="shot"><img src="assets/feature.webp" width="1600" height="900" alt="Describe what the screenshot shows" loading="lazy" /></figure>
+    </section>
+
+    <section id="use-it">
+      <h2>Use it three ways</h2>
+      <div class="ways">
+        <div><h3>Run it</h3><p><a href="https://LIVE-URL">Open the live app</a>.</p></div>
+        <div><h3>Clone it</h3><p><a href="https://github.com/nitsuah/REPO#quick-start">Quick start</a> in the README.</p></div>
+        <div><h3>Use it from Claude</h3><p>Install the <a href="https://github.com/nitsuah/REPO/tree/main/skills">Claude Code skill</a> or MCP server.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="https://github.com/nitsuah/REPO">README</a> · <a href="https://github.com/nitsuah/REPO/blob/main/FEATURES.md">Features</a> ·
+      <a href="https://github.com/nitsuah/REPO/blob/main/ROADMAP.md">Roadmap</a> · <a href="https://github.com/nitsuah/REPO/blob/main/CHANGELOG.md">Changelog</a>
+    </footer>
+  </main>
+</body>
+</html>
