@@ -84,7 +84,7 @@ Every Pages site (`site/` preferred, deployed by `.github/workflows/pages.yml` o
    - Primary screenshots span the content column, at least 720 px wide on desktop.
    - Galleries are at most 2-up on desktop and 1-up under 720 px.
    - No thumbnail grids. Thumbnails are what the expand viewer is for.
-3. **A hero video** with `poster`, `muted loop playsinline`, `preload="metadata"` and an `aria-label` that gives its length.
+3. **A hero video** with `poster`, `muted loop playsinline`, `preload="metadata"` and an `aria-label` that gives its length. If it autoplays, it needs a way to pause it, either `controls` or the site's own pause button (WCAG 2.2.2).
 4. **Feature sections in FEATURES.md order.** Each one leads with its screenshot or spot.
 5. **"Use it three ways"**, whichever apply:
    - **Run it**: the deployed app (▶ LIVE).

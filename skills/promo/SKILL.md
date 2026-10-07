@@ -32,13 +32,14 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
    - Read `promo/spots.json` if it exists.
    - Read only the parts of ROADMAP, CHANGELOG and `docs/` that cover features changed since the last spot's `rendered` date: `git log --since=<date> --stat`.
    - Don't read the whole `docs/` tree.
-3. **Run the audit with vigil** (`~/code/vigil`, in Docker):
+3. **Run the audit with vigil**, in vigil's test image. That image has `tsx` pinned by vigil's lockfile and native dependencies built for Linux. Mount the target repo read-only:
 
    ```bash
-   docker run --rm -v "$HOME/code:/code" -w /code/vigil node:22-alpine npx -y tsx scripts/showcase.ts audit /code/<repo>
+   cd ~/code/vigil && docker compose -p vigil-showcase -f config/docker-compose.test.yml run --rm \
+     -v "$HOME/code/<repo>:/target:ro" test npx tsx scripts/showcase.ts audit /target
    ```
 
-   No `promo/spots.json` yet? Run `apply` instead of `audit`. It scaffolds the file from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
+   No `promo/spots.json` yet? Run `apply` instead of `audit`. Point it at the worktree and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
 
 ## Screenshots and diagrams (CI)
 
@@ -78,7 +79,7 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 `/promo reel hero` concatenates the spots listed in `reels[].spots`. Run it in Docker with the same encode settings as the spots so the joins are invisible:
 
 ```bash
-docker run --rm -v "$PWD:/w" -w /w jrottenberg/ffmpeg:7.1-alpine \
+docker run --rm -v "$PWD:/w" -w /w jrottenberg/ffmpeg:7.1-alpine@sha256:8ec1ee1f6a0fcd37c97725827b6b7832795c9596e3439b8da56d7700d61ae778 \
   -i promo/out/a/a.mp4 -i promo/out/b/b.mp4 \
   -filter_complex "[0:v][1:v]xfade=transition=fade:duration=0.3:offset=<a_seconds-0.3>[v];[0:a][1:a]acrossfade=d=0.3[a]" \
   -map "[v]" -map "[a]" -c:v libx264 -crf 17 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 192k promo/out/reel-hero.mp4
