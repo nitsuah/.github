@@ -32,14 +32,15 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
    - Read `promo/spots.json` if it exists.
    - Read only the parts of ROADMAP, CHANGELOG and `docs/` that cover features changed since the last spot's `rendered` date: `git log --since=<date> --stat`.
    - Don't read the whole `docs/` tree.
-3. **Run the audit with vigil**, in vigil's test image. That image has `tsx` pinned by vigil's lockfile and native dependencies built for Linux. Mount the target repo read-only:
+3. **Run the audit with vigil**, in vigil's test image. That image has `tsx` pinned by vigil's lockfile and native dependencies built for Linux. Set `REPO` to the absolute path of the repo you resolved in the first step (the worktree, or the current directory). Mount it read-only:
 
    ```bash
+   REPO="$(cd <repo-path> && pwd)"
    cd ~/code/vigil && docker compose -p vigil-showcase -f config/docker-compose.test.yml run --rm \
-     -v "$HOME/code/<repo>:/target:ro" test npx tsx scripts/showcase.ts audit /target
+     -v "$REPO:/target:ro" test npm run showcase -- audit /target
    ```
 
-   No `promo/spots.json` yet? Run `apply` instead of `audit`. Point it at the worktree and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
+   No `promo/spots.json` yet? Run `apply` instead of `audit`. `REPO` must be the worktree, and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
 
 ## Screenshots and diagrams (CI)
 
