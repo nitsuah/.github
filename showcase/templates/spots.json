@@ -1,0 +1,12 @@
+{
+  "product": "REPO",
+  "live": null,
+  "page": "https://nitsuah.github.io/REPO/",
+  "pagesDir": "site",
+  "features": [
+    { "id": "example-feature", "title": "Example feature", "category": "Core", "screenshots": [], "spots": [] }
+  ],
+  "spots": [],
+  "reels": [ { "id": "hero", "spots": [], "published": null } ],
+  "brand": { "source": null, "derived": [], "manual": [] }
+}
