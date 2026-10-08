@@ -63,7 +63,9 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 
 ## Spots (video, local only)
 
-**One spot = one feature category or one idea, 21 s by default.** Don't make one video that tries to cover everything. When FEATURES.md has more categories than one spot can carry, plan several spots and a reel.
+**One spot = one feature category or one idea, about 12–21 s.** Don't make one video that tries to cover everything. When FEATURES.md has more categories than one spot can carry, plan several spots plus one hero cut.
+
+**Feature spots don't share an intro or outro.** Each spot plays only its own scenes: wordmark on screen from frame 0 (no question-hook-plus-reveal preamble), outro of 3 s or less, natural length (don't stretch to 21). The shared hook, reveal and full outro belong once, in the hero. Check it with a same-timestamp frame grid across the spots (frames at 1.5, 5, 9, 15 s, one row per spot). If two rows match for more than ~3 s, the spots will read as one video in a gallery. vigil's first run failed this: 10 of 21 s were identical in every spot.
 
 1. **Plan the spot list from spots.json.**
    - Each category with no spot, or whose features changed after the spot's `rendered` date, needs one.
@@ -72,7 +74,7 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
    - The repo has `promo/build.sh` (fire, vigil): use it. It's reproducible and runs in Docker. Don't copy `compose.html`/`synth.py` per spot. Reuse one composition: vigil's spots set `"base": "brag-30s"` in `spot.json` and list a subset of its scenes with their own times; each scene's motion and sound cues are time-mapped into the slot. A new cut is then `spot.json` + `share-copy.txt`. Port that (`promo/spot-config.js`, the `T(id)` blocks in compose, `cue()` in synth) before adding a second spot to a repo whose compose is one long timeline.
    - Check stills with a contact sheet when the repo has `promo/sheet.sh` (vigil): `promo/sheet.sh <spot>` tiles them into one image, which is cheaper to review. Without it, still pull and look at at least four stills one by one before calling the render done.
    - Otherwise: invoke **/brag** (or **/brag-slim** on Opus 5.5) with a focused brief. The brief must contain:
-     - the spot id and the duration: `--duration 21`, unless the user said otherwise,
+     - the spot id and the duration: the content's natural length, 12–21 s (`--duration 15`), unless the user said otherwise. Say "no intro, no reveal, outro of 3 s or less" for a feature spot,
      - the 2–4 features it covers, quoted from FEATURES.md,
      - the deployed URL and Pages URL from spots.json,
      - the demo-data rule: fictional seed only, never the user's real accounts, inbox, portfolio or Chrome profile,
@@ -85,9 +87,12 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
    - [ ] A `-web.mp4` cut exists (CRF ≈ 27, `+faststart`) under ~8 MB for Pages.
    - [ ] `share-copy.txt` is specific to this spot. No "excited to share".
    - [ ] The outro URL is the current deployment or Pages URL from spots.json.
+   - [ ] Spots don't repeat each other: in a same-timestamp frame grid across all spots, no two rows match for more than ~3 s.
 4. **Record it in spots.json**: `id`, `seconds`, `format`, `tool`, `features`, `rendered` (today), `published` (path once published). Also set each covered feature's `spots[]`.
 
 ## Reels
+
+**Prefer one continuous hero cut** (every feature scene, one hook, one outro). With a reusable composition it's one more scene list (vigil: `hero-37s`), listed as a one-spot reel. Concatenate spots only when they carry no intro or outro of their own:
 
 `/promo reel hero` concatenates the spots listed in `reels[].spots`. Run it in Docker with the same encode settings as the spots so the joins are invisible:
 
@@ -98,7 +103,7 @@ docker run --rm -v "$PWD:/w" -w /w jrottenberg/ffmpeg:7.1-alpine@sha256:8ec1ee1f
   -map "[v]" -map "[a]" -c:v libx264 -crf 17 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 192k promo/out/reel-hero.mp4
 ```
 
-Chain `xfade` for three or more spots (vigil's `promo/reel.sh <id>` builds the chain from spots.json). Add an 'intro' or 'outro' card only if the user asks; the spots already have hooks. The reel's poster is its first spot's poster. Set `reels[].published` when it goes on the page.
+Chain `xfade` for three or more spots (vigil's `promo/reel.sh <id>` builds the chain from spots.json). Don't add intro or outro cards. The reel's poster is its first spot's poster. Set `reels[].published` when it goes on the page.
 
 ## Vertical shorts
 
