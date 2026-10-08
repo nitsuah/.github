@@ -42,6 +42,17 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
 
    No `promo/spots.json` yet? Run `apply` instead of `audit`. `REPO` must be the worktree, and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
 
+   In a worktree, `.git` is a pointer file to a Windows path, so the container sees no history: the audit prints `spot-stale-unchecked` and labels the repo `target`. Check staleness yourself with `git log -1 --format=%cs -- FEATURES.md` against each spot's `rendered`.
+4. **Cull the feature list before mapping anything.** FEATURES.md usually over-reports (vigil: 201 bullets, 57 user-visible). A feature gets a visual only when a user can see it or do it: a screen, a button, a CLI or MCP response. Mark it `"visual": "none"` when it is:
+   - an implementation detail (caching, TTLs, env vars, logging, parsers, DB batching, CSS tweaks, error plumbing),
+   - one item of a list that a parent check already covers (each doc type, each community standard, each best practice),
+   - tech stack or deployment,
+   - a duplicate of a feature in another category (AI/market-trend recaps),
+   - a process or marketing statement ("quarterly review"),
+   - not shipped, or claimed but missing in code (grep for it).
+
+   Don't delete FEATURES.md lines yourself. List proposed trims in the PR for the user to confirm. If more than about 40% are `none`, say FEATURES.md over-reports.
+
 ## Screenshots and diagrams (CI)
 
 Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/visual-docs.yml`, adopt the recipe from vigil's [docs/VISUAL_DOCS.md](https://github.com/nitsuah/vigil/blob/main/docs/VISUAL_DOCS.md) rather than taking screenshots by hand:
@@ -56,9 +67,10 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 
 1. **Plan the spot list from spots.json.**
    - Each category with no spot, or whose features changed after the spot's `rendered` date, needs one.
-   - Show the user the list (id, features covered, seconds, tool) and get an OK before rendering more than one.
+   - Show the user the list (id, features covered, seconds, tool) and get an OK before rendering more than one. If the user already asked for the full run, post the list and go on.
 2. **Choose the engine.**
-   - The repo has `promo/build.sh` (fire, vigil): use it. It's reproducible and runs in Docker. Add a new spot folder by copying an existing one: `spot.json`, `compose.html`, `synth.py`, `share-copy.txt`.
+   - The repo has `promo/build.sh` (fire, vigil): use it. It's reproducible and runs in Docker. Don't copy `compose.html`/`synth.py` per spot. Reuse one composition: vigil's spots set `"base": "brag-30s"` in `spot.json` and list a subset of its scenes with their own times; each scene's motion and sound cues are time-mapped into the slot. A new cut is then `spot.json` + `share-copy.txt`. Port that (`promo/spot-config.js`, the `T(id)` blocks in compose, `cue()` in synth) before adding a second spot to a repo whose compose is one long timeline.
+   - Check stills with a contact sheet (`promo/sheet.sh <spot>`, one image instead of one per still). It's cheaper to review.
    - Otherwise: invoke **/brag** (or **/brag-slim** on Opus 5.5) with a focused brief. The brief must contain:
      - the spot id and the duration: `--duration 21`, unless the user said otherwise,
      - the 2–4 features it covers, quoted from FEATURES.md,
@@ -66,7 +78,7 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
      - the demo-data rule: fictional seed only, never the user's real accounts, inbox, portfolio or Chrome profile,
      - the output location: work in `promo/<spot-id>/`. Keep the plan, `compose`, `synth` and `share-copy` there. Renders go to `promo/out/<spot-id>/`, which is gitignored. **Never** commit a root `brag-output/` (bb-mcp did, and it's dead weight).
 3. **Double-check every render** before calling it done. Brag tends to drift, so check each of these:
-   - [ ] The duration is within ±2 s of the target, and the first 2 s say what the product is.
+   - [ ] The duration is within ±2 s of the target, and the first 2 s say what the product is. A question hook alone doesn't: put the wordmark on screen from frame 0.
    - [ ] Every feature in the brief is visibly on screen. Name the timestamp for each.
    - [ ] No real personal data in any frame. Pull 4 stills and look at them.
    - [ ] Frame 0 is the poster (a settled frame, not mid-transition), and `<spot>.jpg` matches it.
@@ -86,7 +98,7 @@ docker run --rm -v "$PWD:/w" -w /w jrottenberg/ffmpeg:7.1-alpine@sha256:8ec1ee1f
   -map "[v]" -map "[a]" -c:v libx264 -crf 17 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 192k promo/out/reel-hero.mp4
 ```
 
-Chain `xfade` for three or more spots. Add an 'intro' or 'outro' card only if the user asks; the spots already have hooks.
+Chain `xfade` for three or more spots (vigil's `promo/reel.sh <id>` builds the chain from spots.json). Add an 'intro' or 'outro' card only if the user asks; the spots already have hooks. The reel's poster is its first spot's poster. Set `reels[].published` when it goes on the page.
 
 ## Vertical shorts
 
