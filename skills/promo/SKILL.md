@@ -42,7 +42,7 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
 
    No `promo/spots.json` yet? Run `apply` instead of `audit`. `REPO` must be the worktree, and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
 
-   In a worktree, `.git` is a pointer file to a Windows path, so the container sees no history: the audit prints `spot-stale-unchecked` and labels the repo `target`. Check staleness yourself with `git log -1 --format=%cs -- FEATURES.md` against each spot's `rendered`.
+   In a worktree, `.git` is a pointer file to a Windows path, so the container sees no history: the audit prints `spot-stale-unchecked` and labels the repo `target`. Check staleness yourself, per spot: `git log --since=<rendered> -p -- FEATURES.md` and look for changed lines that name one of the spot's `features`. An edit to some other feature doesn't make the spot stale.
 4. **Cull the feature list before mapping anything.** FEATURES.md usually over-reports (vigil: 201 bullets, 57 user-visible). A feature gets a visual only when a user can see it or do it: a screen, a button, a CLI or MCP response. Mark it `"visual": "none"` when it is:
    - an implementation detail (caching, TTLs, env vars, logging, parsers, DB batching, CSS tweaks, error plumbing),
    - one item of a list that a parent check already covers (each doc type, each community standard, each best practice),
@@ -70,7 +70,7 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
    - Show the user the list (id, features covered, seconds, tool) and get an OK before rendering more than one. If the user already asked for the full run, post the list and go on.
 2. **Choose the engine.**
    - The repo has `promo/build.sh` (fire, vigil): use it. It's reproducible and runs in Docker. Don't copy `compose.html`/`synth.py` per spot. Reuse one composition: vigil's spots set `"base": "brag-30s"` in `spot.json` and list a subset of its scenes with their own times; each scene's motion and sound cues are time-mapped into the slot. A new cut is then `spot.json` + `share-copy.txt`. Port that (`promo/spot-config.js`, the `T(id)` blocks in compose, `cue()` in synth) before adding a second spot to a repo whose compose is one long timeline.
-   - Check stills with a contact sheet (`promo/sheet.sh <spot>`, one image instead of one per still). It's cheaper to review.
+   - Check stills with a contact sheet when the repo has `promo/sheet.sh` (vigil): `promo/sheet.sh <spot>` tiles them into one image, which is cheaper to review. Without it, still pull and look at at least four stills one by one before calling the render done.
    - Otherwise: invoke **/brag** (or **/brag-slim** on Opus 5.5) with a focused brief. The brief must contain:
      - the spot id and the duration: `--duration 21`, unless the user said otherwise,
      - the 2–4 features it covers, quoted from FEATURES.md,
