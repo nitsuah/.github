@@ -30,8 +30,8 @@ A feature without a screenshot or spot shows up as a gap in `vigil showcase audi
 
 ## Video spots
 
-- **Default length: 21 s.** One spot covers one feature category, or one hero idea. Name it `<topic>-<seconds>s` (`fill-21s`, `chaos-24s`).
-- **Hero / YouTube cut = a reel.** `reels[]` in spots.json lists spots in order. `/promo reel` concatenates them with ffmpeg in Docker (same codec settings, 0.3 s crossfade), so a long video never needs one giant brag run.
+- **A feature spot shows one idea, about 12–21 s.** Use the content's natural length; don't stretch scenes to hit 21. Name it `<topic>-<seconds>s` (`fill-21s`, `health-17s`). It plays only its own scenes: the wordmark from frame 0 and an outro of 3 s or less. **No intro or reveal shared with other spots.** Spots that share intros look like one video repeated when they sit side by side in a gallery (vigil, 2026-10-08).
+- **Hero / YouTube cut = one continuous cut** with one intro and one outro, through every feature scene. With a reusable composition (vigil's `"base"` spots) it's just another scene list. `reels[]` lists it (a one-spot reel). Concatenating spots (`/promo reel`, ffmpeg in Docker, 0.3 s crossfade) is for spots that carry no intro or outro of their own; otherwise the reel repeats them.
 - **Vertical (Shorts / Reels / TikTok):** render a spot with `--format vertical --voice`. It goes in `promo/<spot>-vert/` and is listed under `spots[]` with `"format": "vertical"`.
 - Every spot ships `<spot>.mp4`, a poster `.jpg` (frame 0 = poster), a `-web.mp4` cut for Pages (CRF ≈ 27), and `share-copy.txt`.
 - **Demo data only.** Seed fictional data (see fire's `promo/demo-seed.js`, vigil's `promo/demo-seed.ts`). Never record a real account, inbox or portfolio.
