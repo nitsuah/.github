@@ -26,7 +26,7 @@ Videos stay local on purpose. GitHub runners can run ffmpeg, but brag renders ne
 2. Pages feature sections follow FEATURES.md categories, in the same order.
 3. `/brag` gets a spot brief per category, not the whole repo at once.
 
-A feature without a screenshot or spot shows up as a gap in `vigil showcase audit`. Close it, or mark it `"visual": "none"` when it has nothing to show (a privacy guarantee, a CLI flag).
+A feature without a screenshot or spot shows up as a gap in `vigil showcase audit`. Close it, or mark it `"visual": "none"` when it has nothing to show (a privacy guarantee, an internal-only flag; a CLI command whose output a user reads is visual). Cull first: a feature gets a visual only when a user can see it or do it. Implementation details, items of a list a parent check covers, tech stack, cross-category duplicates, process statements and unshipped claims are `none`. On vigil's first run that was 144 of 201 bullets. Report the coverage as visuals over *visual* features (36/57), not over all bullets.
 
 ## Video spots
 
