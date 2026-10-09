@@ -43,6 +43,12 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
    No `promo/spots.json` yet? Run `apply` instead of `audit`. `REPO` must be the worktree, and drop `:ro`, since it writes files. It scaffolds spots.json from FEATURES.md and adds the expand-kit tag to the Pages HTML. Review that diff before you go on.
 
    In a worktree, `.git` is a pointer file to a Windows path, so the container sees no history: the audit prints `spot-stale-unchecked` and labels the repo `target`. Check staleness yourself, per spot: `git log --since=<rendered> -p -- FEATURES.md` and look for changed lines that name one of the spot's `features`. An edit to some other feature doesn't make the spot stale.
+   **First run in a repo:** turn on "Allow GitHub Actions to create and approve pull requests". Without it, the visual-docs and journeys bots can't open their PRs. vigil flags it as `actions_pr_permission`. It needs repo admin, so print the command for the user rather than running it:
+
+   ```bash
+   gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
+   ```
+
 4. **Cull the feature list before mapping anything.** FEATURES.md usually over-reports (vigil: 201 bullets, 57 user-visible). A feature gets a visual only when a user can see it or do it: a screen, a button, a CLI or MCP response. Mark it `"visual": "none"` when it is:
    - an implementation detail (caching, TTLs, env vars, logging, parsers, DB batching, CSS tweaks, error plumbing),
    - one item of a list that a parent check already covers (each doc type, each community standard, each best practice),
