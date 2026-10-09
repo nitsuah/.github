@@ -1,0 +1,22 @@
+name: Journeys kit
+
+on:
+  pull_request:
+    paths: ['journeys/**', '.github/workflows/journeys*.yml']
+  push:
+    branches: [main]
+    paths: ['journeys/**']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: node --test journeys/
+      - run: node --check journeys/reporter.mjs && node --check journeys/metrics.mjs
