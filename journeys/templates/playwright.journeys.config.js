@@ -23,7 +23,9 @@ module.exports = {
     ],
     expect: {
         toHaveScreenshot: {
-            maxDiffPixelRatio: 0.01,
+            // Above canvas text-rendering noise (~650px on fire), well below a layout
+            // break; exact text and numbers are asserted with toHaveText instead.
+            maxDiffPixels: 1000,
             animations: 'disabled',
             caret: 'hide',
             scale: 'css',

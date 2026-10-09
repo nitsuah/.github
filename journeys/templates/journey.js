@@ -12,22 +12,34 @@
 const { test, expect } = require('@playwright/test');
 
 const slug = (s) =>
-    s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    s
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
 
 /**
  * One user-visible step of a journey.
  * opts.screenshot  false to skip the visual baseline for this step
  * opts.target      a Locator to snapshot instead of the whole viewport
  * opts.mask        Locators to paint over (live numbers, timestamps)
+ * opts.docs        a feature id: with DOCS_SCREENSHOTS=<dir> set, also save
+ *                  <dir>/<id>.png, so the journeys double as the visual-docs
+ *                  screenshots (docs/screenshots/<feature-id>.png)
  */
 async function step(page, title, fn, opts = {}) {
     return test.step(title, async () => {
         await fn();
-        if (opts.screenshot === false) return;
-        await expect(opts.target || page).toHaveScreenshot(`${slug(title)}.png`, {
-            mask: opts.mask,
-            ...opts.screenshotOptions,
-        });
+        const target = opts.target || page;
+        if (opts.screenshot !== false)
+            await expect(target).toHaveScreenshot(`${slug(title)}.png`, {
+                mask: opts.mask,
+                ...opts.screenshotOptions,
+            });
+        if (opts.docs && process.env.DOCS_SCREENSHOTS)
+            await target.screenshot({
+                path: `${process.env.DOCS_SCREENSHOTS}/${opts.docs}.png`,
+                animations: 'disabled',
+            });
     });
 }
 
