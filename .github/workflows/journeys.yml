@@ -1,0 +1,114 @@
+name: Journeys (reusable)
+
+# Runs a repo's Playwright journeys in Docker and files/dedups/closes
+# `bot:journey` issues with journeys/reporter.mjs. No AI anywhere in here.
+# Contract and caller template: journeys/STANDARD.md, journeys/templates/.
+#
+# Caller needs:  permissions: { contents: write, issues: write }
+#   contents: write is only for the bot/journeys branch (BUGS.md, metrics,
+#   failure screenshots). Nothing is ever pushed to the default branch.
+#
+# Issues are filed only on schedule/workflow_dispatch runs of the default
+# branch. PR runs just write the step summary.
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Runs the journeys and writes a Playwright JSON report to `report`.
+        required: true
+        type: string
+      setup:
+        type: string
+        default: npm ci --no-audit --no-fund
+      image:
+        description: Keep in step with @playwright/test in the caller's package.json.
+        type: string
+        default: mcr.microsoft.com/playwright:v1.63.0-jammy
+      report:
+        type: string
+        default: journeys-report/report.json
+      features:
+        description: spots.json whose feature ids the @feature tags map to (coverage).
+        type: string
+        default: promo/spots.json
+      green-runs:
+        description: Consecutive green nightly runs before an issue auto-closes.
+        type: number
+        default: 3
+      max-new-issues:
+        type: number
+        default: 5
+      repro:
+        description: Command a human/agent runs locally to reproduce (shown in issues).
+        type: string
+        default: ''
+      kit-ref:
+        description: Ref of nitsuah/.github to take reporter.mjs from.
+        type: string
+        default: main
+      timeout-minutes:
+        type: number
+        default: 30
+
+jobs:
+  journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      # The reporter authenticates with GITHUB_TOKEN explicitly; don't leave a
+      # write-capable token in git config for the caller's install/test code.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Fetch journey kit
+        uses: actions/checkout@v7
+        with:
+          repository: nitsuah/.github
+          ref: ${{ inputs.kit-ref }}
+          path: .journeys-kit
+          sparse-checkout: journeys
+          persist-credentials: false
+
+      - name: Install
+        run: ${{ inputs.setup }}
+
+      - name: Run journeys
+        id: run
+        continue-on-error: true
+        run: ${{ inputs.command }}
+        env:
+          CI: 'true'
+
+      - name: File issues (no AI)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'file' || 'summary' }}
+          REPORT: ${{ inputs.report }}
+          FEATURES: ${{ inputs.features }}
+          GREEN_RUNS: ${{ inputs.green-runs }}
+          MAX_NEW: ${{ inputs.max-new-issues }}
+          REPRO: ${{ inputs.repro }}
+        run: >-
+          node .journeys-kit/journeys/reporter.mjs
+          --mode "$MODE" --report "$REPORT" --features "$FEATURES"
+          --green-runs "$GREEN_RUNS" --max-new "$MAX_NEW" --repro "$REPRO"
+
+      - name: Upload report and traces
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: journeys-report
+          path: |
+            journeys-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Fail the run when a journey failed
+        if: steps.run.outcome == 'failure'
+        run: exit 1

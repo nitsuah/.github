@@ -59,6 +59,7 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 
 - Use mocked APIs, a frozen clock, a fixed viewport, and demo data only.
 - Name each screenshot after the feature id in spots.json (`docs/screenshots/<feature-id>.png`). The audit can then match them without anyone editing paths.
+- **If the repo has nightly journeys** ([journeys/STANDARD.md](https://github.com/nitsuah/.github/blob/main/journeys/STANDARD.md)), don't add a second suite. Tag journey steps `{ docs: '<feature id>' }`, add a `capture:screenshots` script (`DOCS_SCREENSHOTS=docs/screenshots … --ignore-snapshots`), and copy fire's `visual-docs.yml`. The journeys already have the seed, mocks and frozen clock.
 - A system with several moving parts (services, MCP, cron, an extension talking to a backend) gets a `docs/diagrams/<name>.mmd`. A diagram explains a flow faster than a video does.
 
 ## Spots (video, local only)
@@ -88,6 +89,8 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
    - [ ] `share-copy.txt` is specific to this spot. No "excited to share".
    - [ ] The outro URL is the current deployment or Pages URL from spots.json.
    - [ ] Spots don't repeat each other: in a same-timestamp frame grid across all spots, no two rows match for more than ~3 s.
+   - [ ] Numbers agree across scenes: the same net worth, total or count wherever it appears (UI vs MCP/CLI output). A mismatch is a product bug: file it, don't hide it in the edit (fire#178).
+   - [ ] What the seed should show actually renders (history charts, lists). An API seed can drop server-owned fields (fire#174).
 4. **Record it in spots.json**: `id`, `seconds`, `format`, `tool`, `features`, `rendered` (today), `published` (path once published). Also set each covered feature's `spots[]`.
 
 ## Reels
