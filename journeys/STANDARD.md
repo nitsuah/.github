@@ -78,9 +78,9 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
    - mocks every third-party call the UI makes (prices, OAuth status, AI APIs),
    - pins the clock (`page.clock.setFixedTime`) to the seed's "today",
    - turns off canvas/JS animation libraries (fire: an init script that sets `Chart.defaults.animation = false`; `animations: 'disabled'` only stops CSS),
-   - waits for `networkidle` and `document.fonts.ready` after load and after each tab switch, then redraws canvas charts (text drawn before web fonts load keeps the fallback font), and lets debounced saves land in teardown before the next journey reseeds,
+   - waits for the network to go quiet and `document.fonts.ready` after load and after each tab switch, then redraws canvas charts (text drawn before web fonts load keeps the fallback font), and lets debounced saves land in teardown before the next journey reseeds. `waitForLoadState('networkidle')` only works once: after the first idle it resolves at once, so fetches the app starts later (prefetch timers, polling) slip past it. When the page fetches after load, count in-flight `/api/` requests in the fixture instead (vigil's `e2e/journeys/vigil.ts` `settle()`) and wait for the data to be visible (vigil waits for every row's docs icon),
    - masks regions the server stamps with the real date.
-3. Copy `templates/playwright.journeys.config.js` → `config/` (or the repo root) and point it at the repo's base config. Add `"test:journeys"` to package.json and `journeys-report/` to `.gitignore` and the eslint ignores.
+3. Copy `templates/playwright.journeys.config.js` → `config/` (or the repo root) and point it at the repo's base config. Its `maxDiffPixels` starts at 0: set it from this app's measured noise during the soak (step 5; see the tolerance rule below), never by copying another repo's number. Add `"test:journeys"` to package.json and `journeys-report/` to `.gitignore` and the eslint ignores.
 4. Copy `templates/journeys.yml` → `.github/workflows/journeys.yml`. Set `image` to the Playwright version in package.json.
    - If the repo already has a `playwright-nightly.yml` (ats-fill, nitsuah-io), **replace it** with the caller rather than running both.
 5. Write the journeys (see below), generate baselines in Docker, and soak them: `CI=true … --retries 0 --repeat-each 3`, three times, 0 failures. Don't merge a journey that fails the soak.
@@ -95,7 +95,10 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
 - Phone layouts get their own journey with `test.use({ viewport: { width: 390, height: 844 }, isMobile: true })`.
 - Prefer ids and roles over CSS paths. A `has:` locator is evaluated *inside* the outer element, so use `hasText` when you mean "the card containing this text".
 - Baselines are **Linux, Docker only.** Generate them with the Playwright image, never on Windows/macOS.
-- **Tolerance: `maxDiffPixels: 1000`, never a ratio.** `maxDiffPixelRatio: 0.01` allows ~13k px at 1440×900, so fire's renamed demo wallet (6,029 px) passed unnoticed. Exact zero failed on ~650 px of canvas emoji rendering noise. Keep it above the measured noise and well below a layout change, and let `toHaveText` pin exact text and numbers.
+- **Tolerance: an absolute `maxDiffPixels` set from measured noise, never a ratio.** `maxDiffPixelRatio: 0.01` allows ~13k px at 1440×900, so fire's renamed demo wallet (6,029 px) passed unnoticed. Measure before choosing: soak at `maxDiffPixels: 0` (`--repeat-each 3`) and look at the largest diff.
+  - **Canvas apps** (fire: Chart.js, emoji drawn on canvas): ~650 px of rendering noise, so **1000**.
+  - **DOM-only apps** (vigil): 0 px of noise across 18 runs, so **20**. One changed letter in dim gray text is only 66 px at the default per-pixel `threshold` (0.2), and it passed at 100 and at 1000.
+  - Prove sensitivity: change one visible, unasserted string and confirm the step fails. Let `toHaveText` pin exact text and numbers.
 - **Journeys double as the visual-docs screenshots.** Add `{ docs: '<spots.json feature id>' }` to a step, and with `DOCS_SCREENSHOTS=docs/screenshots` set the step also saves `docs/screenshots/<id>.png` (unmasked), which vigil's `showcase apply` links by id. A `capture:screenshots` npm script (`--ignore-snapshots`) plus a `visual-docs.yml` that opens a PR on `bot/visual-docs` (fire's is the reference) replaces a separate screenshot suite.
 
 ### Baselines and fix PRs

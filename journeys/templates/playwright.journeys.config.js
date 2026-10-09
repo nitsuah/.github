@@ -23,9 +23,11 @@ module.exports = {
     ],
     expect: {
         toHaveScreenshot: {
-            // Above canvas text-rendering noise (~650px on fire), well below a layout
-            // break; exact text and numbers are asserted with toHaveText instead.
-            maxDiffPixels: 1000,
+            // Starts at 0 on purpose: soak at 0 (`--repeat-each 3`), read the largest
+            // diff, then set this per app: ~1000 for canvas charts (fire), ~20 for
+            // DOM-only apps (vigil). Exact text and numbers are asserted with
+            // toHaveText instead. See STANDARD.md § Writing a journey.
+            maxDiffPixels: 0,
             animations: 'disabled',
             caret: 'hide',
             scale: 'css',
