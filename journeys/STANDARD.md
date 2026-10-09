@@ -53,7 +53,7 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
 |---|---|---|
 | `bot:journey` | reporter.mjs | Nightly failure. Carries `<!-- journey-fp -->` and `<!-- journey-meta -->` markers. Don't edit those. |
 | `bot:review` | the one-time AI review pass | Distinct finding from an agent using the product, site or promo. Title `[area/path] …`. |
-| `area:<app|site|promo|docs|mcp|api>` | both | Grouping in BUGS.md. Journeys default to `area:app`; tag `@area:site` to override. |
+| `area:<app\|site\|promo\|docs\|mcp\|api>` | both | Grouping in BUGS.md. Journeys default to `area:app`; tag `@area:site` to override. |
 | `bug` | both | Standard. |
 
 ## Issue lifecycle (all no-AI)
@@ -107,7 +107,7 @@ A fix that changes the UI fails its own journey's visual step. That's intended: 
 Fix routines (stash `agent/prompts/MINI.md`, `ENG.md`) take open `bot:journey` issues before other backlog. Each issue is self-contained: journey, step, error, screenshots, repro command. The routine:
 
 1. Reproduces with the issue's repro command (Docker).
-2. Fixes it, updates baselines if the UI changed, and opens a PR that says `Fixes #N`.
+2. Fixes it, updates baselines if the UI changed, and opens a PR that says `Refs #N`.
 3. **Doesn't close the issue on merge.** Use `Refs #N`, not `Fixes`, for `bot:journey` issues, so the nightly closes it after N green runs. Otherwise a fix that doesn't hold gets marked done by a human. (`bot:review` issues close normally with `Fixes #N`.)
 
 ## Metrics (monthly RSI)

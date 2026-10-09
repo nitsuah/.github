@@ -226,7 +226,7 @@ if (opt.mode === 'file') {
         } else if (a.kind === 'update' || a.kind === 'reopen') {
             await gh('PATCH', `/repos/${repo}/issues/${n}`, {
                 body: issueBody(a.f, a.meta, ctxFor(a.f.fp)),
-                ...(a.kind === 'reopen' && { state: 'open' }),
+                ...(a.kind === 'reopen' && { state: 'open', state_reason: 'reopened' }),
             });
             if (a.kind === 'reopen')
                 await gh('POST', `/repos/${repo}/issues/${n}/comments`, {

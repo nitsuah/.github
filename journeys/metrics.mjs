@@ -68,7 +68,11 @@ for (const repo of opt.repos.split(',').map((s) => s.trim()).filter(Boolean)) {
     const closed = iss.filter((i) => inMonth(i.closed_at));
     const everClosed = iss.filter((i) => i.state === 'closed' || (readMarker(i.body || '', META_MARK)?.reopens || 0) > 0);
     const reopened = iss.filter((i) => (readMarker(i.body || '', META_MARK)?.reopens || 0) > 0);
-    const ttf = closed.map((i) => (new Date(i.closed_at) - new Date(i.created_at)) / 864e5);
+    // Only issues the nightly closed (a green streak is recorded); hand-closed
+    // ones (deleted journeys) would skew time-to-fix.
+    const ttf = closed
+        .filter((i) => (readMarker(i.body || '', META_MARK)?.greens || 0) > 0)
+        .map((i) => (new Date(i.closed_at) - new Date(i.created_at)) / 864e5);
     const tests = runs.reduce((a, r) => a + r.total, 0);
     const flaky = runs.reduce((a, r) => a + r.flaky, 0);
     const last = runs[runs.length - 1];

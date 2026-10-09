@@ -137,6 +137,10 @@ test('plan: create, dedup, reopen, green count and close', () => {
     assert.deepEqual(p.actions.map((a) => [a.kind, a.meta.greens]), [['green', 2]]);
     p = plan({ failures: [], records: recs, issues: [{ ...g, meta: { ...g.meta, greens: 2 } }], greenRuns: 3, maxNew: 5, today });
     assert.equal(p.actions[0].kind, 'close');
+    // the same journey failing with a different fingerprint resets the streak
+    const other = { ...f, fp: 'dddddddddddd', journeyId: passingId };
+    p = plan({ failures: [other], records: recs, issues: [g], greenRuns: 3, maxNew: 5, today });
+    assert.deepEqual(p.actions.filter((a) => a.issue === g).map((a) => [a.kind, a.meta.greens]), [['green', 0]]);
     // journey that didn't run (or was flaky) is left alone
     const gone = { ...g, meta: { journey: 'deleted.spec.js › x [chromium]', greens: 2 } };
     assert.equal(plan({ failures: [], records: recs, issues: [gone], greenRuns: 3, maxNew: 5, today }).actions.length, 0);

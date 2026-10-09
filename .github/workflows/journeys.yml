@@ -58,7 +58,11 @@ jobs:
     container:
       image: ${{ inputs.image }}
     steps:
+      # The reporter authenticates with GITHUB_TOKEN explicitly; don't leave a
+      # write-capable token in git config for the caller's install/test code.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Fetch journey kit
         uses: actions/checkout@v7
@@ -67,6 +71,7 @@ jobs:
           ref: ${{ inputs.kit-ref }}
           path: .journeys-kit
           sparse-checkout: journeys
+          persist-credentials: false
 
       - name: Install
         run: ${{ inputs.setup }}

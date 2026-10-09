@@ -161,7 +161,7 @@ export function issueBody(f, meta, ctx) {
         `Trace: download the \`journeys-report\` artifact from [the run](${ctx.runUrl}), then \`npx playwright show-trace <trace.zip>\` (or drop it on trace.playwright.dev).`,
         '',
         '---',
-        `Filed by the nightly journey run, with no AI involved. Fix it in a PR that says \`Fixes #<this>\`. Later nightlies verify the fix: this issue closes after ${ctx.greenRuns} consecutive green runs of this journey, and it reopens if the same fingerprint comes back.`,
+        `Filed by the nightly journey run, with no AI involved. Fix it in a PR that says \`Refs #<this>\` (not \`Fixes\`, which would close it on merge). Later nightlies verify the fix: this issue closes after ${ctx.greenRuns} consecutive green runs of this journey, and it reopens if the same fingerprint comes back.`,
         `<!-- ${FP_MARK}: ${f.fp} -->`,
         `<!-- ${META_MARK} ${JSON.stringify(meta)} -->`,
     );
@@ -207,8 +207,15 @@ export function plan({ failures, records, issues, greenRuns, maxNew, today }) {
         };
         actions.push({ kind: existing.state === 'closed' ? 'reopen' : 'update', f, issue: existing, meta });
     }
+    // A journey that failed this run (with any fingerprint) breaks every
+    // open issue's green streak: the close rule is *consecutive* green runs.
+    const failingIds = new Set(failures.map((f) => f.journeyId));
     for (const i of issues) {
         if (i.state !== 'open' || seen.has(i.fp) || !i.meta?.journey) continue;
+        if (failingIds.has(i.meta.journey)) {
+            if (i.meta.greens) actions.push({ kind: 'green', issue: i, meta: { ...i.meta, greens: 0 } });
+            continue;
+        }
         if (!passed.has(i.meta.journey)) continue; // didn't run, or failed differently
         const greens = (i.meta.greens || 0) + 1;
         const meta = { ...i.meta, greens };
