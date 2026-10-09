@@ -28,7 +28,7 @@ Files in this folder:
 |---|---|
 | `reporter.mjs` | Playwright JSON report → issues, BUGS.md, metrics. No deps, Node 18+. |
 | `metrics.mjs` | Monthly table: flaky rate, reopen rate, time-to-fix, coverage. No deps. |
-| `lib.mjs` / `lib.test.mjs` | Pure logic (fingerprints, plan, BUGS.md). `node --test journeys/` |
+| `lib.mjs` / `lib.test.mjs` | Pure logic (fingerprints, plan, BUGS.md). `node --test journeys/*.test.mjs` |
 | `templates/journey.js` | The `step()` helper each repo vendors into `tests/journeys/journey.js`. |
 | `templates/journeys.yml` | Caller workflow for a repo. |
 | `templates/playwright.journeys.config.js` | Journeys config that extends a repo's Playwright config. |

@@ -1,4 +1,4 @@
-// node --test journeys/   (no deps)
+// node --test journeys/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
