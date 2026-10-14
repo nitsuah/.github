@@ -52,7 +52,7 @@ A feature without a screenshot or spot shows up as a gap in `vigil showcase audi
   "spots": [
     { "id": "brag-22s", "seconds": 22, "format": "landscape", "tool": "promo/build.sh",
       "features": ["dashboard", "projections"], "published": "site/assets/fire-tracker.mp4",
-      "rendered": "2026-09-27" }
+      "rendered": "2026-09-27", "locked": true }        // owner-approved: never re-rendered or replaced
   ],
   "reels": [ { "id": "hero", "spots": ["brag-22s", "chaos-24s"], "published": null } ],
   "brand": {
@@ -64,6 +64,23 @@ A feature without a screenshot or spot shows up as a gap in `vigil showcase audi
 ```
 
 The template is [`templates/spots.json`](./templates/spots.json).
+
+### Locked spots
+
+`"locked": true` on a spot or reel marks it owner-approved. Automation may read it (a vertical cut, a reel) but must never re-render, re-encode, replace, demote or delete it. A locked spot whose features changed is reported `stale (locked)` instead of re-rendered. Only the owner unlocks.
+
+Repos with a locked spot add the reusable check. It fails a PR that changes, deletes or renames a locked spot's `promo/<id>/` sources, its `published` file, or its poster. Posters are matched next to the published file, by its name or the spot id (`brag.jpg`, `brag-22s.jpg`). Set `"poster"` on the spot if yours lives anywhere else.
+
+```yaml
+# .github/workflows/showcase-locked.yml
+name: showcase-locked
+on: pull_request
+jobs:
+  locked:
+    uses: nitsuah/.github/.github/workflows/showcase-locked.yml@main
+```
+
+For partial updates, `/promo <repo> fix <cells>` clears only the named showcase-board cells and leaves every spot alone.
 
 ## GitHub Pages contract
 

@@ -1,0 +1,73 @@
+# Reusable: fail a PR that changes a locked promo spot (see showcase/STANDARD.md, "Locked spots").
+# Locks are read from the BASE branch's promo/spots.json, so a PR can't unlock and edit in one go.
+# To unlock deliberately, the owner adds the `showcase-unlock` label.
+name: showcase-locked
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  locked:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'showcase-unlock') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check locked spots are untouched
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, subprocess, sys
+          base, head = os.environ["BASE"], os.environ["HEAD"]
+          def git(*a):
+              return subprocess.run(["git", *a], capture_output=True, text=True).stdout
+          raw = git("show", f"{base}:promo/spots.json")
+          if not raw:
+              print("No promo/spots.json on the base branch; nothing is locked.")
+              sys.exit(0)
+          d = json.loads(raw)
+          locked = [s for s in d.get("spots", []) + d.get("reels", []) if s.get("locked")]
+          if not locked:
+              print("No locked spots.")
+              sys.exit(0)
+          # --no-renames: a file moved out of a locked folder shows up as a deletion of its old path.
+          changed = git("diff", "--no-renames", "--name-only", f"{base}...{head}").split()
+          bad = []
+          exts = (".jpg", ".webp", ".png", "-web.mp4")
+          for s in locked:
+              sid = s["id"]
+              guard = [f"promo/{sid}/"]
+              if s.get("poster"):  # explicit poster path wins; the names below cover the usual conventions
+                  guard.append(s["poster"])
+              p = s.get("published")
+              if p:
+                  stem, folder = p.rsplit(".", 1)[0], p.rsplit("/", 1)[0] + "/" if "/" in p else ""
+                  guard.append(p)
+                  guard += [stem + e for e in exts]               # site/brag.mp4 -> site/brag.jpg
+                  guard += [folder + sid + e for e in exts]       # site/assets/brag-22s.jpg
+                  guard.append(folder + sid + ".mp4")
+              hits = [c for c in changed if any(c == g or (g.endswith("/") and c.startswith(g)) for g in guard)]
+              bad += [f"{sid}: {h}" for h in hits]
+          # Dropping a lock or deleting a locked entry counts as a change too.
+          head_raw = git("show", f"{head}:promo/spots.json")
+          head_ids = {}
+          if head_raw:
+              h = json.loads(head_raw)
+              head_ids = {s["id"]: s for s in h.get("spots", []) + h.get("reels", [])}
+          for s in locked:
+              hs = head_ids.get(s["id"])
+              if not hs or not hs.get("locked") or hs.get("published") != s.get("published"):
+                  bad.append(f"{s['id']}: spots.json entry unlocked, removed or repointed")
+          if bad:
+              print("Locked spots changed (add the 'showcase-unlock' label if this is deliberate):")
+              print("\n".join(f"  - {b}" for b in bad))
+              sys.exit(1)
+          print(f"OK: {len(locked)} locked spot(s) untouched: " + ", ".join(s["id"] for s in locked))
+          EOF

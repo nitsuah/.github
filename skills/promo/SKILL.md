@@ -18,6 +18,7 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
 |---|---|
 | `audit` | Read-only gap report: features without visuals, stale spots, Pages drift, brand drift |
 | `refresh` | audit → screenshots/diagrams → spots for new or changed features → Pages → brand check → RSI log |
+| `fix <cells>` | **Surgical.** Clear only the named showcase-board cells (`screenshots,diagrams,journeys,linked,vertical,videos`; `red` = every missing/partial cell). Nothing else changes. See [Surgical fixes](#surgical-fixes-fix-cells) |
 | `spot <feature or category>` | One 21 s spot for one feature group, via /brag or /brag-slim |
 | `reel [id]` | Concatenate spots into a longer cut (hero / YouTube). No new rendering |
 | `vert <spot>` | Vertical, narrated version of a spot for Shorts, Reels and TikTok |
@@ -67,6 +68,36 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 - Name each screenshot after the feature id in spots.json (`docs/screenshots/<feature-id>.png`). The audit can then match them without anyone editing paths.
 - **If the repo has nightly journeys** ([journeys/STANDARD.md](https://github.com/nitsuah/.github/blob/main/journeys/STANDARD.md)), don't add a second suite. Tag journey steps `{ docs: '<feature id>' }`, add a `capture:screenshots` script (`DOCS_SCREENSHOTS=docs/screenshots … --ignore-snapshots`), and copy fire's `visual-docs.yml`. The journeys already have the seed, mocks and frozen clock.
 - A system with several moving parts (services, MCP, cron, an extension talking to a backend) gets a `docs/diagrams/<name>.mmd`. A diagram explains a flow faster than a video does.
+
+## Locked spots
+
+A spot or reel with `"locked": true` in spots.json is one the owner is happy with. Every mode, `refresh` included, must leave it alone:
+
+- **Never** re-render, re-encode, trim, rename or delete it, or edit its `promo/<spot>/` sources or its published `.mp4`/poster.
+- **Never** demote it: if it is the Pages hero or a feature section's video, it stays there.
+- **May** read it: `vert <spot>` writes a separate `<spot>-vert/`, and a reel may include it as is.
+- A locked spot whose features changed is reported as `stale (locked)` in the audit and the PR body, not re-rendered. Unlocking is the owner's edit, never the agent's.
+
+The `showcase-locked` check (`.github/workflows/showcase-locked.yml` here, reusable) fails a PR that changes the bytes of a locked spot's sources, `published` file or poster. Add the caller to a repo when you lock its first spot.
+
+## Surgical fixes (`fix <cells>`)
+
+Use it when a repo's showcase is mostly right and only some board cells are red. The cells are the columns of the showcase board (`stash/agent/scripts/visual_board.py`). Each cell maps to the narrowest action, and nothing outside that action's files changes:
+
+| Cell | Action | Files it may touch |
+|---|---|---|
+| `screenshots` | Adopt the CI recipe (see below), journey-tagged when the repo has journeys | `docs/screenshots/`, the visual-docs workflow and capture script, the README between its screenshot markers |
+| `diagrams` | `docs/diagrams/<name>.mmd` and the CI render step | `docs/diagrams/`, the workflow, the README between its diagram markers |
+| `journeys` | Run `/journeys` (review pass + nightly) | tests, the journeys caller workflow, its config |
+| `linked` | Map existing screenshots and spots to features | `promo/spots.json` (`spots[]`/`screenshots[]` per feature) only |
+| `vertical` | `vert <spot>` from the best existing spot (prefer a locked one) | `promo/<spot>-vert/`, spots.json, the Pages vertical slot |
+| `videos` | Publish rendered but unpublished spots | the Pages assets folder, spots.json `published` |
+
+Rules:
+- Skip the step 2 backbone reading beyond FEATURES.md and spots.json, and skip the full audit; read the cells from the latest `visual-board.json`, or re-run `visual_board.py` for that repo.
+- No new spot, hero, reel, logo or Pages redesign unless the user names it. If a cell can't be cleared without one, stop and say so.
+- One repo per PR. The PR body lists cells before → after, and the PR passes `showcase-locked`.
+- `linked` and `videos` are mechanical: hand them to a haiku subagent. `vertical` narration and diagram content need judgment.
 
 ## Spots (video, local only)
 
