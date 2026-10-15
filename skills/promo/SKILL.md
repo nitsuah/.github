@@ -56,7 +56,9 @@ description: Keep a repo's screenshots, videos, diagrams, GitHub Pages site and 
    - tech stack or deployment,
    - a duplicate of a feature in another category (AI/market-trend recaps),
    - a process or marketing statement ("quarterly review"),
-   - not shipped, or claimed but missing in code (grep for it).
+   - not shipped, or claimed but missing in code (grep for it),
+   - a test, mock or a11y-compliance claim ("validated by tests", axe, WCAG AA, chrome mock): the tests are process; the screen they protect is the visual,
+   - agent config: a Claude skill file, model gateway or routing config whose effect a user only sees through another feature.
 
    Don't delete FEATURES.md lines yourself. List proposed trims in the PR for the user to confirm. If more than about 40% are `none`, say FEATURES.md over-reports.
 
@@ -67,7 +69,17 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 - Use mocked APIs, a frozen clock, a fixed viewport, and demo data only.
 - Name each screenshot after the feature id in spots.json (`docs/screenshots/<feature-id>.png`). The audit can then match them without anyone editing paths.
 - **If the repo has nightly journeys** ([journeys/STANDARD.md](https://github.com/nitsuah/.github/blob/main/journeys/STANDARD.md)), don't add a second suite. Tag journey steps `{ docs: '<feature id>' }`, add a `capture:screenshots` script (`DOCS_SCREENSHOTS=docs/screenshots … --ignore-snapshots`), and copy fire's `visual-docs.yml`. The journeys already have the seed, mocks and frozen clock.
-- A system with several moving parts (services, MCP, cron, an extension talking to a backend) gets a `docs/diagrams/<name>.mmd`. A diagram explains a flow faster than a video does. Copy vhs: `docs/diagrams/{architecture,capture-flow,job-lifecycle}.mmd`, `mermaid.config.json` (default theme, `htmlLabels: false`) and the render step in its `visual-docs.yml`. Draw what the code does (read the entry points, compose files, MCP tool list), one architecture diagram plus one or two flows; never a generic boxes-and-arrows guess. Add the render step to an existing visual-docs or screenshot workflow rather than a second workflow.
+- A system with several moving parts (services, MCP, cron, an extension talking to a backend) gets a `docs/diagrams/<name>.mmd`. A diagram explains a flow faster than a video does. Copy vhs: `docs/diagrams/{architecture,capture-flow,job-lifecycle}.mmd`, `mermaid.config.json` (default theme, `htmlLabels: false`) and the render step in its `visual-docs.yml`. Draw what the code does (read the entry points, compose files, MCP tool list), one architecture diagram plus one or two flows; never a generic boxes-and-arrows guess. Add the render step to an existing visual-docs or screenshot workflow rather than a second workflow (ats-fill: inside ci.yml's `screenshot-gallery` job, with its publish script also adding `docs/diagrams/*.svg`).
+  - **Validate locally** with this exact command from the repo root (Git Bash on Windows; no puppeteer config needed):
+    ```bash
+    MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W)/docs/diagrams:/data" minlag/mermaid-cli:11.4.2 \
+      -c /data/mermaid.config.json -i /data/<name>.mmd -o /data/<name>.svg
+    ```
+    Without `MSYS_NO_PATHCONV=1` and `pwd -W`, Git Bash mangles the mount and a file mount silently becomes a directory.
+  - **Commit the first SVGs** so the README embeds work before the bot PR lands, and end each with a newline: repos running pre-commit's `end-of-file-fixer` fail CI otherwise. Put `echo >> "${f%.mmd}.svg"` after the `mmdc` line in the workflow too, or every bot PR fails (motor-pool#95).
+  - vigil's workflow template hard-codes `branches: [main]`: change it for `master` repos. Its `visual-docs-readme.mjs` lists every screenshot too; in a repo that already has a hand-written screenshot gallery, embed the diagram SVGs between the markers by hand instead of running the script, or the gallery appears twice.
+  - A script copied from another repo must pass this repo's formatter and linter: run its own prettier version (`npx -y prettier@<devDependencies version> --write <file>` in `node:22-alpine`) before pushing (fire#197 failed lint on vigil's script).
+  - Working-tree files are often CRLF (`core.autocrlf=true`) and the host has no Python or jq: edit with node or the Edit tool, preserve line endings, and validate JSON with `node -e "JSON.parse(...)"`.
 
 ### No frontend: generated visuals
 
@@ -81,7 +93,7 @@ A repo with nothing to screenshot (a vault, prompt library, CLI, MCP server, har
 | CLI | Terminal capture of a fixed fixture run (HTML → PNG in Chromium) | — |
 | MCP server | A tool call and its response, rendered as a chat turn from a fixture | — |
 
-Rules: deterministic (fixed seed, frame count, clock), demo-safe (check it shows no private note titles, names or accounts; if the real data is private, render from a fixture), output to `docs/screenshots/<feature-id>.<png|gif|webp>`, regenerated by the visual-docs workflow and opened as a bot PR. When a FEATURES.md category has no generator yet, name the one it would need in the PR (a new script, or an existing skill such as `/brag-slim` compose-only stills) rather than leave the category blank. Spots for these repos use the compose-only engine (see Spots).
+Rules: the generator replaces the Playwright capture step in the visual-docs workflow; trigger it on the paths that change its picture, never on daily-note folders (stash: `agent/prompts|routines|projects|topics` plus a weekly cron, or every routine note would open a render PR); moving an already-committed asset into `docs/screenshots/` is a `git mv` plus a Pages-workflow copy step so the site never breaks; deterministic (fixed seed, frame count, clock), demo-safe (check it shows no private note titles, names or accounts; if the real data is private, render from a fixture), output to `docs/screenshots/<feature-id>.<png|gif|webp>`, regenerated by the visual-docs workflow and opened as a bot PR. When a FEATURES.md category has no generator yet, name the one it would need in the PR (a new script, or an existing skill such as `/brag-slim` compose-only stills) rather than leave the category blank. Spots for these repos use the compose-only engine (see Spots).
 
 ## Locked spots
 
@@ -129,13 +141,15 @@ The board reads the default branch only, so a cell turns green when the PR merge
 ### Linking rule (`linked`), in order
 
 For each feature in spots.json:
-1. A file on the default branch shows it (screenshot named for its id, a diagram, a Pages asset, a spot listing it in `features`)? Add the repo-relative path to `screenshots[]` or the spot id to `spots[]`. Check the path exists with `git ls-tree`.
+0. Get the list: the board JSON's row for the repo carries `unlinked` (visible feature ids with nothing linked). Work only on those. A file named `docs/screenshots/<id>.png` does **not** link itself: the board reads only `screenshots[]`/`spots[]`.
+1. A file on the default branch shows it (screenshot named for its id, a diagram, a Pages asset, a spot listing it in `features`)? Add the repo-relative path to `screenshots[]` or the spot id to `spots[]`. Check the path exists with `git ls-tree`, and open the image to confirm the feature is visibly on it. A partial view counts when the feature's control or output is clearly on screen (a Replay button for replay mode); a page that merely hosts it doesn't. Link a spot only if it is published or its `features[]` already lists the feature; add the id to the spot's `features[]` as well. A spot with `features: []` gets its list filled from its `spot.json` scenes first.
 2. Not user-visible per the cull list in "Always" step 4? Set `"visual": "none"`.
-3. Visible but nothing shows it? Leave it unlinked and list it under **Needs capture** in the PR body. Never mark a visible feature `none` to raise the score: the board's ratio is only honest if `none` means "nothing to show". A feature you can't capture because it doesn't render is a product bug: file it.
+3. Visible but nothing shows it? Leave it unlinked, list it under **Needs capture** in the PR body, and add one TASKS.md line `Capture for promo: <ids>` (grouped by the screen state each needs: "open Filters panel", "scrolled Settings"). That line is the input to the next `fix screenshots` run, which adds those captures to the visual-docs suite. `linked` staying partial after a links-only pass is the expected result, not a failure. Never mark a visible feature `none` to raise the score: the board's ratio is only honest if `none` means "nothing to show". A feature you can't capture because it doesn't render is a product bug: file it.
 
 ### Running fix as a wave (several repos at once)
 
 A coordinator may hand `fix` to several cheaper-model subagents in parallel, one repo each. Then:
+- The coordinator's brief names, per repo: the local folder (check `ls ~/code`, repos get renamed), the default branch, the CHANGELOG path (root or `docs/`), the `unlinked` ids from the board JSON, and any spots on hold.
 - Each agent returns its RSI entry in its final report instead of editing `PROMO.md`; the coordinator files them in one stash PR. Parallel edits to one log file conflict.
 - Docker on the host is shared and small. Agents don't run local renders, Playwright suites or dev servers; CI is the check. Renders (`vertical`, `videos`) go one repo at a time, in their own wave.
 - The coordinator re-runs `visual_board.py` after the PRs merge and compares each repo's cells with what its PR body predicted. A cell that didn't move is a detector gap or a wrong prediction: fix whichever it is and note it in the RSI log.
