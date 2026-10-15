@@ -35,6 +35,8 @@ module.exports = {
     },
     use: {
         ...(base.use || {}),
+        // If the base config has projects using devices[...], their viewport wins over this one:
+        // set it in projects[].use instead (skyview, 2026-10-14).
         viewport: { width: 1440, height: 900 },
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure',
