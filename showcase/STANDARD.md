@@ -16,6 +16,8 @@ Index of everything this covers: the [profile README](../profile/README.md) (one
 | **Diagrams** | CI: same workflow renders `docs/diagrams/*.mmd` with mermaid-cli | `docs/diagrams/*.{mmd,svg}` | README `visual-docs` block, Pages "how it works" | every push that changes a `.mmd` |
 | **Videos** | **Local only**: `/promo` → `/brag` or `/brag-slim`, or the repo's `promo/build.sh` (ffmpeg + Chromium in Docker) | sources in `promo/<spot>/`, renders in `promo/out/` (gitignored), published copy in the Pages assets folder | Pages hero + feature sections, README link | after a big feature lands. `promo/spots.json` records what each spot covers and when it was rendered |
 
+**No frontend** (a vault, prompt library, CLI, MCP server or harness): set `"frontend": false` in spots.json. Screenshots then mean **generated visuals**: a script that CI runs to draw something true about the repo from its own data (stash's `vault-graph-gif.js` animates the Obsidian graph; an infographic of a prompt library or routine schedule; a terminal or MCP response captured from a fixed fixture). Write them to `docs/screenshots/<feature-id>.<png|gif|webp>` like any screenshot. The showcase board also counts the stills and GIFs in `pagesDir` for these repos.
+
 Videos stay local on purpose. GitHub runners can run ffmpeg, but brag renders need a model in the loop and minutes of headless Chromium. What CI *can* check is drift: vigil flags a spot whose features changed after `rendered`.
 
 ## FEATURES.md is the backbone
@@ -44,6 +46,7 @@ A feature without a screenshot or spot shows up as a gap in `vigil showcase audi
   "live": "https://lifefire.netlify.app/",          // deployed app (▶ LIVE), or null
   "page": "https://nitsuah.github.io/fire/",        // Pages site (▣ PAGE), or null
   "pagesDir": "site",                               // folder the Pages workflow uploads
+  "frontend": true,                                 // false = no UI; screenshots are generated visuals
   "features": [
     { "id": "projections", "title": "Scenario projections", "category": "Planning",
       "screenshots": ["site/assets/proj-base.webp"], "spots": ["brag-22s"] },
