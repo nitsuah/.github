@@ -70,14 +70,17 @@ Screenshots and diagrams are CI's job. If the repo has no `.github/workflows/vis
 - Name each screenshot after the feature id in spots.json (`docs/screenshots/<feature-id>.png`). The audit can then match them without anyone editing paths.
 - **If the repo has nightly journeys** ([journeys/STANDARD.md](https://github.com/nitsuah/.github/blob/main/journeys/STANDARD.md)), don't add a second suite. Tag journey steps `{ docs: '<feature id>' }`, add a `capture:screenshots` script (`DOCS_SCREENSHOTS=docs/screenshots … --ignore-snapshots`), and copy fire's `visual-docs.yml`. The journeys already have the seed, mocks and frozen clock.
 - A system with several moving parts (services, MCP, cron, an extension talking to a backend) gets a `docs/diagrams/<name>.mmd`. A diagram explains a flow faster than a video does. Copy vhs: `docs/diagrams/{architecture,capture-flow,job-lifecycle}.mmd`, `mermaid.config.json` (default theme, `htmlLabels: false`) and the render step in its `visual-docs.yml`. Draw what the code does (read the entry points, compose files, MCP tool list), one architecture diagram plus one or two flows; never a generic boxes-and-arrows guess. Add the render step to an existing visual-docs or screenshot workflow rather than a second workflow (ats-fill: inside ci.yml's `screenshot-gallery` job, with its publish script also adding `docs/diagrams/*.svg`).
-  - **Validate locally** with this exact command from the repo root (Git Bash on Windows; no puppeteer config needed):
+  - **Validate locally** with this exact command from the repo root (Git Bash on Windows; no puppeteer config needed; the digest is 11.4.2):
+
     ```bash
-    MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W)/docs/diagrams:/data" minlag/mermaid-cli:11.4.2 \
+    MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W)/docs/diagrams:/data" \
+      minlag/mermaid-cli@sha256:99c983b3ab4e14033f2880bc1b9de17e5090b4515dabd63fe9cf8c0ae6130956 \
       -c /data/mermaid.config.json -i /data/<name>.mmd -o /data/<name>.svg
     ```
+
     Without `MSYS_NO_PATHCONV=1` and `pwd -W`, Git Bash mangles the mount and a file mount silently becomes a directory.
   - **Commit the first SVGs** so the README embeds work before the bot PR lands, and end each with a newline: repos running pre-commit's `end-of-file-fixer` fail CI otherwise. Put `echo >> "${f%.mmd}.svg"` after the `mmdc` line in the workflow too, or every bot PR fails (motor-pool#95).
-  - vigil's workflow template hard-codes `branches: [main]`: change it for `master` repos. Its `visual-docs-readme.mjs` lists every screenshot too; in a repo that already has a hand-written screenshot gallery, embed the diagram SVGs between the markers by hand instead of running the script, or the gallery appears twice.
+  - vigil's workflow template hard-codes `branches: [main]`: set it to the repo's actual default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`; motor-pool is `master`). Its `visual-docs-readme.mjs` lists every screenshot too; in a repo that already has a hand-written screenshot gallery, embed the diagram SVGs between the markers by hand instead of running the script, or the gallery appears twice.
   - A script copied from another repo must pass this repo's formatter and linter: run its own prettier version (`npx -y prettier@<devDependencies version> --write <file>` in `node:22-alpine`) before pushing (fire#197 failed lint on vigil's script).
   - Working-tree files are often CRLF (`core.autocrlf=true`) and the host has no Python or jq: edit with node or the Edit tool, preserve line endings, and validate JSON with `node -e "JSON.parse(...)"`.
 
