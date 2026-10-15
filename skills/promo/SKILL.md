@@ -219,7 +219,7 @@ Check the vertical's frames, not just its duration:
 - **Nothing clipped at 1080 px.** A landscape screenshot dropped into a 1000 px window keeps its right edge off screen: fire's first `brag-22s-vert` cut the spend rate to "$44,640.(" and the allocation legend. Scale the image so the content you show fits the width (measure its bounds in the source PNG), then look at the poster again.
 - **No dead bottom third.** Captions sitting mid-frame over an empty lower half read as unfinished (skyview `hero-30s-vert`). Move captions or the shot down, or scale the shot up.
 - Reuse narration and music: `"synth": "<base spot>"` borrows its `synth.py`, `"narration"` mixes committed `vo/*.wav` (stash `promo/tts/`, vigil's `vigil-promo-tts` image). Commit the voice lines so a re-render needs no TTS.
-- `build.sh --publish` may have no target for a `-vert` spot: copy `-web.mp4` and the poster into `pagesDir` yourself and set `published`.
+- `build.sh --publish` may have no target for a `-vert` spot. Then do every step of [Publish to Pages](#publish-to-pages) by hand: copy `-web.mp4` and the poster into `pagesDir`, put it in the page's vertical slot and any feature section it leads (and OG/Twitter tags if it's the hero), set `published`, and add the spot id to each covered feature's `spots[]`.
 
 Add it to spots.json with `"format": "vertical"`. Publishing to YouTube Shorts, Reels or TikTok is the user's action. Hand them the file and the share copy. Don't post.
 
