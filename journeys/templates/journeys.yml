@@ -3,6 +3,10 @@ name: Journeys
 # Nightly "AI user" journeys (tests/journeys). Failures become deduplicated
 # `bot:journey` issues with no AI involved. Contract:
 # https://github.com/nitsuah/.github/blob/main/journeys/STANDARD.md
+#
+# Replace every KIT_SHA with the current nitsuah/.github main commit
+# (`git ls-remote https://github.com/nitsuah/.github main`). The workflow ref and
+# kit-ref must stay the same commit; bump them together.
 
 on:
   schedule:
@@ -15,22 +19,44 @@ on:
       - 'config/playwright.journeys.config.js'
       - '.github/workflows/journeys.yml'
 
-permissions:
-  contents: write # bot/journeys branch only (BUGS.md, metrics, failure screenshots)
-  issues: write
+permissions: {}
 
 concurrency:
   group: journeys-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  journeys:
-    uses: nitsuah/.github/.github/workflows/journeys.yml@main
+  # Pull requests run repo code (npm ci, the journeys) and the shared workflow
+  # only prints a summary there, so they get a read-only token.
+  journeys-pr:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      issues: read
+    uses: nitsuah/.github/.github/workflows/journeys.yml@KIT_SHA
     with:
       # Keep in step with @playwright/test in package.json.
       image: mcr.microsoft.com/playwright:v1.63.0-jammy
       command: npm run test:journeys
       features: promo/spots.json
+      kit-ref: KIT_SHA
+      repro: |
+        docker run --rm -v "$PWD:/w" -w /w -e CI=true mcr.microsoft.com/playwright:v1.63.0-jammy \
+          sh -c "npm ci && npm run test:journeys"
+
+  # Nightly and manual runs file and close bot:journey issues and update the
+  # bot/journeys branch (BUGS.md, metrics, failure screenshots).
+  journeys:
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write # bot/journeys branch only
+      issues: write
+    uses: nitsuah/.github/.github/workflows/journeys.yml@KIT_SHA
+    with:
+      image: mcr.microsoft.com/playwright:v1.63.0-jammy
+      command: npm run test:journeys
+      features: promo/spots.json
+      kit-ref: KIT_SHA
       repro: |
         docker run --rm -v "$PWD:/w" -w /w -e CI=true mcr.microsoft.com/playwright:v1.63.0-jammy \
           sh -c "npm ci && npm run test:journeys"

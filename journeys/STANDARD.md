@@ -89,7 +89,7 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
    - Set the viewport inside `projects[].use`, not top-level `use`: a project's `devices['Desktop Chrome']` silently overrides it with 1280×720.
    - `"type": "module"` repos (skyview): the templates are CommonJS; port them to `journey.ts` / `playwright.journeys.config.ts`.
    - No Playwright yet (motor-pool): add `@playwright/test` pinned to the journeys image's version, and keep any other e2e Docker image on the same version (ats-fill had 1.62.1 vs 1.64.0).
-4. Copy `templates/journeys.yml` → `.github/workflows/journeys.yml`. Set `image` to the Playwright version in package.json.
+4. Copy `templates/journeys.yml` → `.github/workflows/journeys.yml`. Set `image` to the Playwright version in package.json, and replace `KIT_SHA` with the current `nitsuah/.github` main commit (the workflow ref and `kit-ref` stay equal). Pull requests get a read-only job and only nightly or manual runs get write permissions: a PR run executes repo code (`npm ci`, the journeys) next to `GITHUB_TOKEN`, and the shared workflow writes only in `file` mode (skyview#191 review).
    - If the repo already has a `playwright-nightly.yml` (ats-fill, nitsuah-io), **replace it** with the caller rather than running both.
 5. Write the journeys (see below), generate baselines in Docker, and soak them: `CI=true … --retries 0 --repeat-each 3`, three times, 0 failures. Don't merge a journey that fails the soak.
 6. In the same PR: README Testing line, CHANGELOG, TASKS/ROADMAP rollout item, FEATURES.md Testing bullet. Then trigger the workflow once by hand (`gh workflow run journeys.yml`) and check the summary.
