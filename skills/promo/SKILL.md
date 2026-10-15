@@ -192,7 +192,7 @@ A coordinator may hand `fix` to several cheaper-model subagents in parallel, one
    - [ ] `share-copy.txt` is specific to this spot. No "excited to share".
    - [ ] The outro URL is the current deployment or Pages URL from spots.json.
    - [ ] Spots don't repeat each other: in a same-timestamp frame grid across all spots, no two rows match for more than ~3 s.
-   - [ ] A title or number that differs between two screens of the product (the landing page says "Senior Platform & AI Engineer", the resume "Senior Systems Engineer") is a product bug: file it and keep the narration off the disputed value.
+   - [ ] When two screens show the same field (the same person's title, the same total for the same period) with different values (the landing page says "Senior Platform & AI Engineer", the resume "Senior Systems Engineer") it is a product bug: file it and keep the narration off the disputed value. Different fields, time ranges or deliberately context-specific titles are not a mismatch.
    - [ ] Numbers agree across scenes: the same net worth, total or count wherever it appears (UI vs MCP/CLI output). A mismatch is a product bug: file it, don't hide it in the edit (fire#178).
    - [ ] What the seed should show actually renders (history charts, lists). An API seed can drop server-owned fields (fire#174).
    - [ ] A new cut never inherits claims from an older spot: re-derive tool counts, commands and output from the code. bb-mcp's landscape spot said 34 tools (there are 40), showed CLI verbs that don't exist, and ended on `npm i -g bb-mcp`, which installs someone else's package (bb-mcp#149, #150). Check any install command with `npm view <name> repository.url`.
