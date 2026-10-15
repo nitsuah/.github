@@ -188,6 +188,8 @@ A coordinator may hand `fix` to several cheaper-model subagents in parallel, one
    - [ ] Spots don't repeat each other: in a same-timestamp frame grid across all spots, no two rows match for more than ~3 s.
    - [ ] Numbers agree across scenes: the same net worth, total or count wherever it appears (UI vs MCP/CLI output). A mismatch is a product bug: file it, don't hide it in the edit (fire#178).
    - [ ] What the seed should show actually renders (history charts, lists). An API seed can drop server-owned fields (fire#174).
+   - [ ] Every claim about how the product behaves ("not scored", "never", "free", "automatic") is checked against the code, both in the on-screen copy and in `share-copy.txt`. The captured UI counts as a claim too: captures come from a demo fixture, and a stale fixture produces a false screenshot. vigil's `visual-17s` said Visual Docs was "not scored" and its practices card showed "(not scored)" because the capture fixture still flagged it informational; it had been scored for a week (vigil#291, #292).
+   - [ ] After the render, `git status`: a `--recapture` or build can rewrite the Pages screenshots as a side effect. Keep only the files the spot needs and the ones you meant to fix.
 4. **Record it in spots.json**: `id`, `seconds`, `format`, `tool`, `features`, `rendered` (today), `published` (path once published). Also set each covered feature's `spots[]`.
 
 ## Reels
@@ -212,6 +214,12 @@ Chain `xfade` for three or more spots (vigil's `promo/reel.sh <id>` builds the c
 - 1080×1920, ≤ 30 s,
 - captions burned in,
 - the narration script derived from the spot's share copy and features.
+
+Check the vertical's frames, not just its duration:
+- **Nothing clipped at 1080 px.** A landscape screenshot dropped into a 1000 px window keeps its right edge off screen: fire's first `brag-22s-vert` cut the spend rate to "$44,640.(" and the allocation legend. Scale the image so the content you show fits the width (measure its bounds in the source PNG), then look at the poster again.
+- **No dead bottom third.** Captions sitting mid-frame over an empty lower half read as unfinished (skyview `hero-30s-vert`). Move captions or the shot down, or scale the shot up.
+- Reuse narration and music: `"synth": "<base spot>"` borrows its `synth.py`, `"narration"` mixes committed `vo/*.wav` (stash `promo/tts/`, vigil's `vigil-promo-tts` image). Commit the voice lines so a re-render needs no TTS.
+- `build.sh --publish` may have no target for a `-vert` spot. Then do every step of [Publish to Pages](#publish-to-pages) by hand: copy `-web.mp4` and the poster into `pagesDir`, put it in the page's vertical slot and any feature section it leads (and OG/Twitter tags if it's the hero), set `published`, and add the spot id to each covered feature's `spots[]`.
 
 Add it to spots.json with `"format": "vertical"`. Publishing to YouTube Shorts, Reels or TikTok is the user's action. Hand them the file and the share copy. Don't post.
 
