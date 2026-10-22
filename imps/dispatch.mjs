@@ -91,8 +91,8 @@ const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(n
 
 // ── an imp, end to end ────────────────────────────────────────────────────
 const IMP = join(HERE, 'imp.mjs');
-const node = (args) => new Promise((done) => {
-    const p = spawn(process.execPath, [IMP, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+const node = (args, script) => new Promise((done) => {
+    const p = spawn(process.execPath, script ? [join(HERE, script), ...args.slice(1)] : [IMP, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
@@ -120,7 +120,10 @@ async function work(issue) {
         if (url) {
             relabel(repo, number, 'imp:pr', ['imp:working']);
             comment(repo, number, `An imp opened a draft PR: ${url} (run \`${id}\`: ${stats}). It stays a draft until a human marks it ready.`);
-            return log({ event: 'pr', repo, number, id, url });
+            // One read-only review through 9router, posted as a COMMENT. A failed
+            // review never blocks the PR; it's logged and the human reviews anyway.
+            const rv = await node(['review', id], 'review.mjs');
+            return log({ event: 'pr', repo, number, id, url, review: (rv.out.match(/posted (w+)/) || [])[1] || 'failed' });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
         comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);

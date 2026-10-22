@@ -1,0 +1,98 @@
+// Shared plumbing for imp.mjs and review.mjs: the ledger, git/process
+// helpers, the clean environment and the headless `claude -p` launcher.
+// Everything that talks to a model goes through runClaude, so both workers
+// get the same guardrails (clean env, 9router only, no shell splitting).
+import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { summarizeRun } from './lib.mjs';
+
+export const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
+export const LEDGER = join(HOME, 'runs.jsonl');
+export const CODE = process.env.IMPS_CODE || join(homedir(), 'code');
+mkdirSync(join(HOME, 'runs'), { recursive: true });
+
+// ── ledger ────────────────────────────────────────────────────────────────
+export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
+// Atomic: a crash mid-write must not truncate the run history.
+export const save = (all) => {
+    const tmp = `${LEDGER}.${process.pid}.tmp`;
+    writeFileSync(tmp, all.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    renameSync(tmp, LEDGER);
+};
+export function update(id, patch) {
+    const all = rows();
+    const r = all.find((x) => x.id === id);
+    if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
+    Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
+    save(all);
+    return r;
+}
+
+// ── processes ─────────────────────────────────────────────────────────────
+export const sh = (bin, args, opts = {}) => {
+    const r = spawnSync(bin, args, { encoding: 'utf8', ...opts });
+    return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+};
+export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
+
+export function cleanEnv() {
+    const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
+    const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME',
+        'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'ProgramFiles', 'ProgramData', 'HOMEDRIVE', 'HOMEPATH', 'DOCKER_HOST'];
+    const env = Object.fromEntries(keep.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+    // Nothing from the dispatching session leaks in: no Claude/GitHub tokens.
+    env.ANTHROPIC_BASE_URL = s.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1';
+    env.ANTHROPIC_API_KEY = s.NINEROUTER_KEY || s.ANTHROPIC_API_KEY;
+    return env;
+}
+
+// One headless `claude -p` run. Streams the transcript to `transcript`,
+// prints tool calls, enforces the wall-clock limit, and returns the summary.
+// Never useful to a worker, and each is a way out of the worktree.
+const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'NotebookEdit', 'Monitor', 'CronCreate', 'ScheduleWakeup', 'SendMessage', 'PushNotification'];
+
+export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, transcript, permissionMode = 'acceptEdits' }) {
+    const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
+        '--setting-sources', 'project', '--allowedTools', tools.join(' '),
+        '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
+        '--output-format', 'stream-json', '--verbose'];
+    // Spawn the binary itself: a shell (the npm .cmd shim) splits multi-word args.
+    const bin = process.platform === 'win32'
+        ? join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
+        : 'claude';
+    const out = createWriteStream(transcript);
+    const events = [];
+    const t0 = Date.now();
+    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = '';
+    child.stdout.on('data', (d) => {
+        buf += d;
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i);
+            buf = buf.slice(i + 1);
+            let ev;
+            try { ev = JSON.parse(line); } catch { continue; }
+            ev._ts = Date.now();
+            events.push(ev);
+            out.write(JSON.stringify(ev) + '\n');
+            if (ev.type === 'assistant')
+                for (const c of ev.message?.content || [])
+                    if (c.type === 'tool_use') console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
+        }
+    });
+    child.stderr.on('data', () => {});
+    const timer = setTimeout(() => child.kill('SIGTERM'), Number(minutes) * 60_000);
+    // `close`, not `exit`: stdout can still hold the final result event at exit.
+    const code = await new Promise((done) => {
+        child.once('error', (e) => { console.error(`spawn failed: ${e.message}`); done(null); });
+        child.once('close', done);
+    });
+    clearTimeout(timer);
+    await new Promise((done) => out.end(done));
+    const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
+    if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
+    return metrics;
+}
