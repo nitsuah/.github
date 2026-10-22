@@ -2,7 +2,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
+
+test('latestDecisiveReviews ignores COMMENTED, like GitHub reviewDecision', () => {
+    const latest = latestDecisiveReviews([
+        { author: { login: 'coderabbitai' }, state: 'CHANGES_REQUESTED' },
+        { author: { login: 'nitsuah' }, state: 'COMMENTED' },
+        { author: { login: 'coderabbitai' }, state: 'COMMENTED' },
+    ]);
+    assert.deepEqual(latest, { coderabbitai: 'CHANGES_REQUESTED' });
+    assert.equal(shouldAskCodeRabbitApprove({ reviewDecision: 'CHANGES_REQUESTED', latestBy: latest, threads: [{ isResolved: true }], checks: [{ name: 'test', state: 'SUCCESS' }] }), true);
+});
 
 test('feedbackItems keeps real feedback and drops the noise', () => {
     const items = feedbackItems({

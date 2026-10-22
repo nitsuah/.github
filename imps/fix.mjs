@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions } from './lib.mjs';
+import { feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,8 +63,7 @@ const since = r.fixes?.length ? r.fixes[r.fixes.length - 1].at : r.gate?.at || n
 const items = feedbackItems({ threads, comments, checks, impReview: r.review, since });
 
 // ── 2. nothing to do / stale CodeRabbit block / limits ───────────────────
-const latestBy = {};
-for (const rv of pr.reviews || []) latestBy[rv.author.login] = rv.state;
+const latestBy = latestDecisiveReviews(pr.reviews);
 if (!items.length) {
     if (shouldAskCodeRabbitApprove({ reviewDecision: pr.reviewDecision, latestBy, threads, checks, askedAt: r.crApproveAskedAt })) {
         if (!dry) sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', '@coderabbitai approve']);

@@ -220,6 +220,15 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
 // CodeRabbit keeps its old CHANGES_REQUESTED after the fixes land (and often
 // can't re-review because of the free-tier limit). When CI is green and every
 // thread is resolved, one `@coderabbitai approve` clears it.
+// Each reviewer's latest *decisive* review, the way GitHub computes
+// reviewDecision: COMMENTED reviews don't replace an earlier CHANGES_REQUESTED.
+export function latestDecisiveReviews(reviews = []) {
+    const out = {};
+    for (const rv of reviews)
+        if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(rv.state)) out[rv.author?.login || rv.author] = rv.state;
+    return out;
+}
+
 export function shouldAskCodeRabbitApprove({ reviewDecision, latestBy = {}, threads = [], checks = [], askedAt = null }) {
     if (askedAt || reviewDecision !== 'CHANGES_REQUESTED') return false;
     const blockers = Object.entries(latestBy).filter(([, s]) => s === 'CHANGES_REQUESTED').map(([who]) => norm(who));
