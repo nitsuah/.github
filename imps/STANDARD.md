@@ -97,6 +97,11 @@ After every few runs, and weekly once imps are routine:
 
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
 
+## Brief checklist (from CI misses)
+
+- **TypeScript repos:** include `tsc --noEmit` in the brief's `test:`. vitest doesn't type-check, so vigil#320 passed the gate and then failed CI's `test` and `docker-smoke`.
+- **UI changes in a repo with journeys:** a visual change moves the screenshot baselines (vhs#87: the phone shelf shifted ~45 px, a 15% diff). Regenerate the affected baselines in the caller's Playwright image (`npx playwright test --update-snapshots <spec>`), look at the image, and commit them as a runner commit. Until the runner does this itself, the reviewer does it before marking the PR ready.
+
 ## Known gaps (next)
 
 - **Baseline tests.** The gate fails on any failing test. It should also run the test command on `baseSha` and only count failures that are new. fire's server fail-fast tests time out locally while main's CI is green.
