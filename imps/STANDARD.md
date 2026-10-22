@@ -134,7 +134,7 @@ Every round is appended to the run's `fixes[]` in the ledger: items, decisions w
 
 First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority regex matched `P20` as P2). The imp decided **fix**: a 2-line regex change, 7 turns, 1.4 min, one model. The gate passed, it pushed `a8659a1`, replied, and resolved the thread. The first attempt was voided by a runner bug (the trailer check on a hypervisor commit), fixed in the same PR.
 
-**Not wired into the hourly dispatcher yet.** Running fix rounds unattended means the loop pushes to PRs with no person involved, so turning that on is a deliberate choice for the owner. Until then, run it by hand, or from the hypervisor session when an Auto-fix event arrives on an imp PR.
+**The hourly dispatcher sweeps open imp PRs before it picks new issues** (approved by the owner 2026-10-22). It runs `fix.mjs` on each open `imp` PR that isn't labelled `imp:needs-human`. Pushes go only to the imp's own PR branch; there are 2 rounds at most; a conflict or a failed gate means `imp:needs-human`. A clean PR costs only `gh` calls, and each result is logged as a `fix-sweep` event in `dispatch.jsonl`. The hypervisor still gets Auto-fix events, and can override a decision or run `fix.mjs` by hand.
 
 ## Brief checklist (from CI misses)
 

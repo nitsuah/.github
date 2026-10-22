@@ -140,6 +140,21 @@ if (!(await routerUp())) {
     process.exit(0);
 }
 
+// Sweep the open imp PRs first (owner-approved 2026-10-22): answer review
+// feedback and red CI with a 9router fix round. fix.mjs pushes only to the
+// imp's own PR branch, stops after 2 rounds or on a conflict, and labels
+// imp:needs-human. A PR with nothing to act on costs only gh calls.
+const openImp = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels'])
+    .filter((p) => !p.labels.some((l) => l.name === 'imp:needs-human'));
+const ledger = readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+for (const p of openImp) {
+    const row = ledger.find((r) => r.pr === p.url);
+    if (!row) continue; // opened from another machine's ledger
+    const f = await node(['fix', row.id, ...(dry ? ['--dry-run'] : [])], 'fix.mjs');
+    const last = f.out.trim().split('\n').reverse().find((l) => l.startsWith('{"id"'));
+    log({ event: 'fix-sweep', pr: p.url, id: row.id, result: last ? JSON.parse(last).event : `exit ${f.code}` });
+}
+
 const queued = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
