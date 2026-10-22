@@ -122,6 +122,15 @@ test('pickIssues: one per repo, skips repos with an imp PR, quiet repos first, r
     assert.equal(pickIssues({ candidates, repos, max: 1 }).length, 1);
 });
 
+test('pickIssues: perRepo allows several per repo, counting open imp PRs', () => {
+    const c = (repo, number, labels, createdAt) => ({ repo, number, labels, createdAt });
+    const candidates = [c('fire', 1, ['bug'], '2026-10-01'), c('fire', 2, ['bug'], '2026-10-02'), c('fire', 3, ['bug'], '2026-10-03'), c('vhs', 4, ['bug'], '2026-10-04')];
+    const repos = { fire: { impPRs: 0, lastCommitHours: 30 }, vhs: { impPRs: 1, lastCommitHours: 30 } };
+    const ids = (o) => pickIssues({ candidates, repos, max: 5, wip: 8, ...o }).map((i) => i.number).sort();
+    assert.deepEqual(ids({ perRepo: 2 }), [1, 2, 4]); // fire gets two, vhs has one open so one more
+    assert.deepEqual(ids({}), [1]); // default 1: vhs is full, fire gets one
+});
+
 test('briefFromComments takes the newest marked comment and strips a code fence', () => {
     const body = `${BRIEF_MARK}\n\`\`\`markdown\n---\nrepo: fire\nissue: 1\n---\nfix it\n\`\`\``;
     assert.equal(briefFromComments([{ body: 'hi' }, { body: `${BRIEF_MARK}\nold` }, { body }]), '---\nrepo: fire\nissue: 1\n---\nfix it\n');

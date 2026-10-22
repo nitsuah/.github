@@ -2,7 +2,7 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 8] [--concurrency 3] [--owner nitsuah] [--dry-run]
+//   node dispatch.mjs [--max 5] [--wip 8] [--per-repo 2] [--concurrency 3] [--owner nitsuah] [--dry-run]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage writes them). Each issue moves to
@@ -22,6 +22,7 @@ const { values: o } = parseArgs({
     options: {
         max: { type: 'string', default: '5' },
         wip: { type: 'string', default: '8' },
+        'per-repo': { type: 'string', default: '2' },
         concurrency: { type: 'string', default: '3' },
         'daily-cap': { type: 'string', default: '15' },
         owner: { type: 'string', default: 'nitsuah' },
@@ -178,7 +179,7 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
-for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), dailyCap: Number(o['daily-cap']), ...budget })) {
+for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo: Number(o['per-repo']), dailyCap: Number(o['daily-cap']), ...budget })) {
     const brief = briefFromComments(ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
@@ -191,7 +192,7 @@ for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip:
 log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
 if (dry || !picked.length) process.exit(0);
 
-// Run up to `concurrency` imps at once (one per repo, so no worktree clashes).
+// Run up to `concurrency` imps at once (worktrees and branches are per run, so same-repo imps don't clash).
 const pool = [...picked];
 await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
     while (pool.length) {

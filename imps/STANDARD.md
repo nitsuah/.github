@@ -51,7 +51,7 @@ GitHub issues are the queue; labels are the state.
 
 **`dispatch.mjs`** runs hourly with no LLM of its own:
 1. It skips the cycle if the previous one is still running, or if 9router doesn't answer a `MAX` probe.
-2. It picks up to `--max 5` `imp:ready` issues: **one per repo**, never in a repo that already has an `imp` PR open, and never past `--wip 8` open imp PRs in total. Your review is the bottleneck, so the dispatcher stops when the review pile is full.
+2. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 2` per repo (counting its open imp PRs)**, and never past `--wip 8` open imp PRs in total. Your review is the bottleneck, so the dispatcher stops when the review pile is full.
 3. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
 4. It runs `--concurrency 3` imps at once through `imp.mjs run → gate → pr`, then relabels and comments the result on the issue.
 
@@ -67,8 +67,8 @@ Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-ru
 | --- | --- | --- |
 | Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })`. Enforced by the runner, because this CLI ignores `--max-turns`. Runs end `killed-max-turns` |
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
-| Imps per cycle | 5, one per repo, at most 3 at once | `dispatch.mjs --max/--concurrency` |
-| Open imp PRs | 8 in total, 1 per repo | `--wip`, `pickIssues` |
+| Imps per cycle | 5, up to 2 per repo, at most 3 at once | `dispatch.mjs --max/--concurrency` |
+| Open imp PRs | 8 in total, 2 per repo | `--wip`, `--per-repo`, `pickIssues` |
 | Imp runs per 24 h | 15 | `--daily-cap`, `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
