@@ -20,7 +20,7 @@ let code = 0;
 for (const [name, cmd] of [['test', meta.test], ['lint', meta.lint]]) {
     if (!cmd) continue;
     console.log(`── ${name}: ${cmd}`);
-    const r = spawnSync(cmd, { cwd: run.worktree, shell: true, stdio: 'inherit', env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+    const r = spawnSync(cmd, { cwd: run.worktree, shell: true, stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
     console.log(`── ${name} exit ${r.status}`);
     if (r.status !== 0) code = r.status ?? 1;
 }

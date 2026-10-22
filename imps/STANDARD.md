@@ -57,7 +57,7 @@ GitHub issues are the queue; labels are the state.
 
 Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-run` prints the picks and changes nothing.
 
-**Scheduling (Windows).** The Task Scheduler task `imps-dispatch` runs `~/.imps/hourly.cmd` at :07 every hour. The wrapper first resets a dedicated checkout (`~/code/imps-runner`) to `origin/main`, so **only merged, reviewed kit code runs unattended**. Output goes to `~/.imps/hourly.log`. When this moves into motor-pool (IMPS-PLAN PR 3), the same loop becomes the `imp-runner` service, and a second runner on the desktop just claims from the same labels.
+**Scheduling (Windows).** The Task Scheduler task `imps-dispatch` runs `~/.imps/hourly.cmd` at :07 every hour. It launches through `conhost.exe --headless cmd.exe /d /c "…\hourly.cmd"`, so no console window appears (the same pattern as `Sync 9router fork`). Every process the kit spawns also passes `windowsHide: true`. The wrapper first resets a dedicated checkout (`~/code/imps-runner`) to `origin/main`, so **only merged, reviewed kit code runs unattended**. Output goes to `~/.imps/hourly.log`. When this moves into motor-pool (IMPS-PLAN PR 3), the same loop becomes the `imp-runner` service, and a second runner on the desktop just claims from the same labels.
 
 **Triage stays with the hypervisor.** Opus reads new issues once a day and either posts a brief and adds `imp:ready`, or labels the issue for a human. It also re-briefs `imp:failed` issues, using the gate reasons and the PREAMBLE lessons. The hourly loop never calls a paid model.
 

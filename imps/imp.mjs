@@ -80,7 +80,7 @@ async function run() {
 function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
-    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: true, stdio: 'inherit', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
+    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: true, stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
     // Formatting is mechanical, so the runner does it, not the model: run the
     // repo's formatter and commit any change as a separate runner commit.
     let formatted = false;

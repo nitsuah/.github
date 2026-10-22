@@ -37,7 +37,7 @@ const log = (ev) => {
     if (!dry) appendFileSync(LOG, JSON.stringify(line) + '\n');
 };
 const gh = (args) => {
-    const r = spawnSync('gh', args, { encoding: 'utf8' });
+    const r = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
     if (r.status) throw new Error(`gh ${args.slice(0, 3).join(' ')}: ${(r.stderr || '').trim()}`);
     return r.stdout.trim();
 };
@@ -83,7 +83,7 @@ function relabel(repo, number, add, remove = []) {
     const slug = `${o.owner}/${repo}`;
     for (const l of [add, ...remove]) {
         if (ensured.has(`${slug}:${l}`)) continue;
-        spawnSync('gh', ['label', 'create', l, '-R', slug, '-c', LABELS[l][0], '-d', LABELS[l][1], '--force'], { encoding: 'utf8' });
+        spawnSync('gh', ['label', 'create', l, '-R', slug, '-c', LABELS[l][0], '-d', LABELS[l][1], '--force'], { encoding: 'utf8', windowsHide: true });
         ensured.add(`${slug}:${l}`);
     }
     gh(['issue', 'edit', String(number), '-R', slug, '--add-label', add, ...remove.flatMap((l) => ['--remove-label', l])]);
@@ -93,7 +93,7 @@ const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(n
 // ── an imp, end to end ────────────────────────────────────────────────────
 const IMP = join(HERE, 'imp.mjs');
 const node = (args, script) => new Promise((done) => {
-    const p = spawn(process.execPath, script ? [join(HERE, script), ...args.slice(1)] : [IMP, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(process.execPath, script ? [join(HERE, script), ...args.slice(1)] : [IMP, ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
