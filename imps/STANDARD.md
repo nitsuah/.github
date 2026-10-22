@@ -65,7 +65,7 @@ Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-ru
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| Turn cap per model run | imp 40, fix round 25, reviewer 15 | `runClaude({ maxTurns })`. Enforced by the runner, because this CLI ignores `--max-turns`. Runs end `killed-max-turns` |
+| Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })`. Enforced by the runner, because this CLI ignores `--max-turns`. Runs end `killed-max-turns` |
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
 | Imps per cycle | 5, one per repo, at most 3 at once | `dispatch.mjs --max/--concurrency` |
 | Open imp PRs | 8 in total, 1 per repo | `--wip`, `pickIssues` |
