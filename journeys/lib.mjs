@@ -40,6 +40,17 @@ export function errorClass(message = '', status = 'failed') {
     );
 }
 
+// The run environment is broken (no browser binary, missing system deps), not
+// the product. Every journey fails the same way, so these become one infra
+// issue for the repo instead of one issue per journey.
+const INFRA = [
+    /browserType\.launch/,
+    /Executable doesn't exist at/,
+    /Host system is missing dependencies/,
+    /Please update docker image/,
+];
+export const isInfraError = (message = '') => INFRA.some((re) => re.test(stripAnsi(message)));
+
 export function fingerprint({ repo, file, journey, step, errClass }) {
     return createHash('sha1')
         .update([repo, file, journey, step, errClass].join('|'))
