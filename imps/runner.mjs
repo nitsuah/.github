@@ -44,7 +44,7 @@ export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
 export function cleanEnv() {
     const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
     const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME',
-        'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'ProgramFiles', 'ProgramData', 'HOMEDRIVE', 'HOMEPATH', 'DOCKER_HOST'];
+        'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'ProgramFiles', 'ProgramData', 'HOMEDRIVE', 'HOMEPATH', 'DOCKER_HOST', 'IMPS_HOME'];
     const env = Object.fromEntries(keep.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
     // Nothing from the dispatching session leaks in: no Claude/GitHub tokens.
     env.ANTHROPIC_BASE_URL = s.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1';
@@ -112,9 +112,21 @@ export function loadBrief(path, wt) {
     const limits = [
         meta.allow && `- You may only change files under: ${meta.allow}. Anything else fails the gate.`,
         `- The whole diff must stay under ${meta.maxLines || 80} changed lines.`,
+        (meta.test || meta.lint) && `- Run the tests and lint with exactly \`${RUNTEST}\` (no arguments, one command on its own). It runs this brief's test and lint commands for you. Never run the brief's docker/npm/npx commands yourself; they're denied.`,
     ].filter(Boolean).join('\n');
     const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
 }
 
+
+// The one test command imps may run (no arguments; runtest.mjs runs the
+// brief's test and lint). Forward slashes so the permission rule and the
+// command the model types are the same string.
+export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`;
+
+// What an imp may do in its worktree: edit, read-only and commit git, and
+// RUNTEST. Never a general docker/npm/node permission (they could mount
+// ~/.ssh or the Docker socket), and nothing that pushes.
+export const IMP_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)',
+    'Bash(git commit:*)', 'Bash(git log:*)', 'Bash(git checkout -- :*)', `Bash(${RUNTEST})`];

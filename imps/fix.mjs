@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
-import { HOME, rows, update, sh, git, runClaude, loadBrief } from './runner.mjs';
+import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -95,8 +95,7 @@ const before = git(r.worktree, 'rev-parse', 'HEAD').out;
 const { meta: bm, prompt: base } = loadBrief(r.brief, r.worktree);
 const list = items.map((i) => `### ${i.id} · ${i.kind} · ${i.author}${i.path ? ` · \`${i.path}${i.line ? `:${i.line}` : ''}\`` : ''}\n\n${i.text}`).join('\n\n');
 const prompt = `${base}\n\n---\n\n${readFileSync(join(HERE, 'FIX.md'), 'utf8').replaceAll('<#PR>', `#${number}`)}\n\n## Feedback items (round ${round}, PR ${r.pr})\n\n${list}`;
-const tools = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)',
-    'Bash(git commit:*)', 'Bash(git log:*)', 'Bash(git checkout -- :*)', ...[bm.test, bm.lint].filter(Boolean).map((c) => `Bash(${c})`)];
+const tools = IMP_TOOLS;
 const metrics = await runClaude({
     cwd: r.worktree, prompt, model: r.model || 'MAX', tools, minutes: o.minutes, budget: 10,
     transcript: join(HOME, 'runs', `${id}.fix${round}.jsonl`),

@@ -23,7 +23,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
 
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -69,11 +69,7 @@ async function run() {
     appendFileSync(LEDGER, JSON.stringify(row) + '\n');
     console.log(`${id}  ${wt}`);
 
-    const tools = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)',
-        'Bash(git commit:*)', 'Bash(git log:*)', 'Bash(git checkout -- :*)',
-        // Only the brief's own commands, exactly: a bare `docker run:*` would let
-        // the imp mount ~/.ssh, ~/.claude or the Docker socket.
-        ...[bm.test, bm.lint].filter(Boolean).map((c) => `Bash(${c})`)];
+    const tools = IMP_TOOLS;
     const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
