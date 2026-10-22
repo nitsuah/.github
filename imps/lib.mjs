@@ -81,7 +81,8 @@ export function errorKind(text = '') {
     return 'other';
 }
 
-const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i, /package-lock\.json$/];
+const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
+    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/];
 
 // The pre-push gate. Deterministic: numstat lines from
 // `git diff --numstat <base>..HEAD`, commit messages, and the test exit code.
@@ -103,7 +104,8 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
         if (DENY.some((re) => re.test(f.path))) reasons.push(`denied path ${f.path}`);
         if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
-    if (lines > maxLines) reasons.push(`diff ${lines} lines > ${maxLines}`);
+    // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
+    if (!(lines <= maxLines)) reasons.push(`diff ${lines} lines > ${maxLines}`);
     if (commits.length && !commits.every((c) => /Co-Authored-By: .*imp/i.test(c))) reasons.push('commit missing imp trailer');
     if (testExit !== 0) reasons.push(testExit == null ? 'tests not run' : `tests exit ${testExit}`);
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };

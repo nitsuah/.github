@@ -64,6 +64,9 @@ test('gate fails on size, scope, deny paths, trailer and tests', () => {
     assert.ok(g.reasons.includes('commit missing imp trailer'));
     assert.ok(g.reasons.includes('tests exit 1'));
     assert.deepEqual(gate({ numstat: '', commits: [], testExit: null }).reasons, ['no commits', 'tests not run']);
+    assert.ok(gate({ numstat: '1\t0\tyarn.lock\n1\t0\tsub/pnpm-lock.yaml', commits: [ok], testExit: 0 }).reasons.includes('denied path yarn.lock'));
+    assert.ok(gate({ numstat: '1\t0\tsub/pnpm-lock.yaml', commits: [ok], testExit: 0 }).reasons.includes('denied path sub/pnpm-lock.yaml'));
+    assert.ok(gate({ numstat: '1\t0\ta.js', commits: [ok], testExit: 0, maxLines: NaN }).reasons.includes('diff 1 lines > NaN'));
     // A runner formatter commit counts for scope, not for the size budget.
     const f = gate({ numstat: '30\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', sizeNumstat: '26\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', commits: [ok], testExit: 0, maxLines: 40, allow: ['app/lib/'] });
     assert.equal(f.pass, true, f.reasons.join());

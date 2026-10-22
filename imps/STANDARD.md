@@ -22,19 +22,19 @@ Front matter, then the issue-specific body. `PREAMBLE.md` is prepended to every 
 
 ```markdown
 ---
-repo: fire                       # folder under ~/code
+repo: fire
 issue: 166
 test: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 sh -c "npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run --config config/vitest.config.ts"
 format: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs --fix app/lib
 lint: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs app/lib
-maxLines: 40                     # gate: the imp's added+deleted lines (runner formatting excluded)
-allow: app/lib/, docs/CHANGELOG.md   # gate: path prefixes the diff may touch
+maxLines: 40
+allow: app/lib/, docs/CHANGELOG.md
 ---
 ## Issue nitsuah/fire#166
 <the problem, where it is, what done looks like, and repo facts the imp would otherwise burn turns discovering>
 ```
 
-`{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted.
+Front matter values are taken verbatim, so don't add trailing `#` comments. `repo` is the folder under `~/code`. `maxLines` is the imp's added+deleted lines (runner formatting excluded). `allow` is the path prefixes the diff may touch. `{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted.
 
 ## Guardrails
 
