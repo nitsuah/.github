@@ -36,7 +36,7 @@ export function update(id, patch) {
 
 // ── processes ─────────────────────────────────────────────────────────────
 export const sh = (bin, args, opts = {}) => {
-    const r = spawnSync(bin, args, { encoding: 'utf8', ...opts });
+    const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, ...opts });
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
@@ -73,7 +73,7 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     const out = createWriteStream(transcript);
     const events = [];
     const t0 = Date.now();
-    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let buf = '';
     let toolTurns = 0;
     let capped = false;

@@ -107,7 +107,7 @@ const committed = git(r.worktree, 'rev-parse', 'HEAD').out !== before;
 let gatePass = true;
 let reasons = [];
 if (committed) {
-    spawnSync(process.execPath, [join(HERE, 'imp.mjs'), 'gate', id, '--slack', o.slack], { stdio: 'inherit' });
+    spawnSync(process.execPath, [join(HERE, 'imp.mjs'), 'gate', id, '--slack', o.slack], { stdio: 'inherit', windowsHide: true });
     const g = rows().find((x) => x.id === id).gate;
     gatePass = !!g?.pass;
     reasons = g?.reasons || [];
