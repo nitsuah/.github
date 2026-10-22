@@ -18,6 +18,9 @@ on:
       - 'tests/journeys/**'
       - 'config/playwright.journeys.config.js'
       - '.github/workflows/journeys.yml'
+      # A Dependabot bump of @playwright/test runs the journeys, so a stale
+      # `image` fails that PR instead of the nightly.
+      - 'package-lock.json'
 
 permissions: {}
 

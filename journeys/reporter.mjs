@@ -17,7 +17,7 @@ import { parseArgs } from 'node:util';
 import { basename } from 'node:path';
 import {
     FP_MARK, META_MARK, flattenReport, failureOf, readMarker, pickImages,
-    issueTitle, issueBody, plan, bugsMarkdown, coverage, fingerprint, journeyId,
+    issueTitle, issueBody, plan, bugsMarkdown, coverage, fingerprint, journeyId, isInfraError,
 } from './lib.mjs';
 
 const { values: opt } = parseArgs({
@@ -139,15 +139,15 @@ function loadRun() {
     return { records, harness: null };
 }
 
-function harnessFailure(message) {
+function harnessFailure(message, errClass = 'harness') {
     const step = '(harness)';
     return {
-        fp: fingerprint({ repo, file: '(harness)', journey: 'journey run', step, errClass: 'harness' }),
+        fp: fingerprint({ repo, file: '(harness)', journey: 'journey run', step, errClass }),
         journeyId: '(harness)',
         file: opt.report,
         journey: 'journey run',
         step,
-        errClass: 'harness',
+        errClass,
         message,
         features: [],
         area: 'app',
@@ -157,8 +157,16 @@ function harnessFailure(message) {
 
 // ── Main ──────────────────────────────────────────────────────────────────
 const { records, harness } = loadRun();
-const failures = records.filter((r) => r.status === 'unexpected').map((r) => failureOf(repo, r));
+const all = records.filter((r) => r.status === 'unexpected').map((r) => failureOf(repo, r));
+const infra = all.filter((f) => isInfraError(f.message));
+const failures = all.filter((f) => !isInfraError(f.message));
 if (harness) failures.unshift(harnessFailure(harness));
+else if (infra.length)
+    failures.unshift(harnessFailure(
+        `${infra.length} journey(s) could not start: the run environment is broken, not the product.\n` +
+            `Usually the container image is behind @playwright/test.\n\n${infra[0].message}`,
+        'infra',
+    ));
 const flaky = records.filter((r) => r.status === 'flaky');
 const features = existsSync(opt.features) ? JSON.parse(readFileSync(opt.features, 'utf8')).features : null;
 const cov = coverage(records, features);

@@ -68,6 +68,7 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
 - **Journey didn't run** (deleted, renamed, skipped) → issue untouched. Close it by hand if the journey is gone.
 - **Flaky** (failed, then passed on the CI retry) → no issue, counted in metrics. A flaky rate above ~5% is an RSI finding.
 - **Harness failure** (no report, webServer didn't start, config error) → one `(harness)` issue, which closes after N runs that produce journeys again.
+- **Infra failure** (the first error line is `browserType.launch…:`, e.g. missing browser binary or system deps) → one `(harness): infra` issue for the whole run, not one per journey. The usual cause is a Dependabot bump of `@playwright/test` without the caller's `image`; vigil got five identical issues (#300–#304) from 1.63 → 1.64.
 - Issues are filed only on `schedule` / `workflow_dispatch` runs of the default branch. PR runs write the step summary only.
 
 ## Adopting it in a repo
