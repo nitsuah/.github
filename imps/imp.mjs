@@ -105,7 +105,7 @@ async function run() {
     git(wt, 'config', 'extensions.worktreeConfig', 'true');
     git(wt, 'config', '--worktree', 'user.name', '9router imp');
     git(wt, 'config', '--worktree', 'user.email', 'imp@users.noreply.github.com');
-    const { prompt, hash } = loadBrief(o.brief, wt);
+    const { meta: bm, prompt, hash } = loadBrief(o.brief, wt);
 
     const row = {
         id, repo: meta.repo, issue: Number(meta.issue), base, baseSha: git(wt, 'rev-parse', 'HEAD').out,
@@ -116,7 +116,10 @@ async function run() {
     console.log(`${id}  ${wt}`);
 
     const tools = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)',
-        'Bash(git commit:*)', 'Bash(git log:*)', 'Bash(git checkout -- :*)', 'Bash(docker run:*)'];
+        'Bash(git commit:*)', 'Bash(git log:*)', 'Bash(git checkout -- :*)',
+        // Only the brief's own commands, exactly: a bare `docker run:*` would let
+        // the imp mount ~/.ssh, ~/.claude or the Docker socket.
+        ...[bm.test, bm.lint].filter(Boolean).map((c) => `Bash(${c})`)];
     const args = ['-p', prompt, '--model', o.model, '--permission-mode', 'acceptEdits', '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '), '--max-budget-usd', o.budget,
         '--output-format', 'stream-json', '--verbose'];
@@ -169,7 +172,9 @@ function runGate(id) {
     // measured up to the imp's last commit either way.
     const runnerCommit = git(r.worktree, 'log', '-1', '--format=%s').out.includes('(imp runner)');
     const impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
-    if (meta.format && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
+    // Never format over uncommitted imp work: it would be swept into the runner commit.
+    const dirtyBefore = git(r.worktree, 'status', '--porcelain').out;
+    if (meta.format && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
         console.log(`format: ${meta.format}`);
         shell(meta.format);
         if (git(r.worktree, 'status', '--porcelain').out) {
