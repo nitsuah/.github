@@ -12,6 +12,7 @@ test('isInfraError catches a broken run environment, not product failures', () =
     assert.ok(isInfraError('\u001b[31mError\u001b[39m: browserType.launch: Host system is missing dependencies to run browsers.'));
     assert.ok(!isInfraError('Error: expect(locator).toHaveText(expected) failed'));
     assert.ok(!isInfraError('TimeoutError: locator.click: Timeout 5000ms exceeded.'));
+    assert.ok(!isInfraError('Error: expect(locator).toHaveText(expected) failed\n\nExpected: "browserType.launch: failed"'));
     assert.ok(!isInfraError());
 });
 

@@ -42,14 +42,12 @@ export function errorClass(message = '', status = 'failed') {
 
 // The run environment is broken (no browser binary, missing system deps), not
 // the product. Every journey fails the same way, so these become one infra
-// issue for the repo instead of one issue per journey.
-const INFRA = [
-    /browserType\.launch/,
-    /Executable doesn't exist at/,
-    /Host system is missing dependencies/,
-    /Please update docker image/,
-];
-export const isInfraError = (message = '') => INFRA.some((re) => re.test(stripAnsi(message)));
+// issue for the repo instead of one issue per journey. Only the first line is
+// checked: Playwright puts the failing API there, while an assertion that
+// merely quotes these words carries them in its Expected/Received lines.
+const INFRA = /^\s*(?:\w*Error: )?browserType\.launch\w*:/;
+export const isInfraError = (message = '') =>
+    INFRA.test(stripAnsi(message).split('\n').find((l) => l.trim()) || '');
 
 export function fingerprint({ repo, file, journey, step, errClass }) {
     return createHash('sha1')
