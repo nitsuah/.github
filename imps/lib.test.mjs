@@ -1,7 +1,35 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK } from './lib.mjs';
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview } from './lib.mjs';
+
+test('parseReview takes the last json block and recomputes the verdict from findings', () => {
+    const text = 'thinking…\n```json\n{"verdict":"approve","findings":[]}\n```\nthen\n```json\n' +
+        JSON.stringify({ verdict: 'approve', summary: 'Fixes it.', findings: [
+            { severity: 'major', file: 'a.ts', line: 3, title: 'Breaks caller', detail: 'x' },
+            { severity: 'weird', file: 'b.ts', title: 'Unknown severity becomes minor' },
+            { severity: 'nit', title: 'spacing' },
+            { detail: 'no title, dropped' },
+        ] }) + '\n```';
+    const rv = parseReview(text);
+    assert.equal(rv.verdict, 'request_changes'); // model said approve; a major finding wins
+    assert.equal(rv.modelVerdict, 'approve');
+    assert.deepEqual(rv.counts, { blocker: 0, major: 1, minor: 1, nit: 1 });
+    assert.equal(rv.findings[1].severity, 'minor');
+    assert.equal(parseReview('```json\n{"findings":[{"severity":"nit","title":"n"}]}\n```').verdict, 'approve');
+    assert.equal(parseReview('```json\n{"findings":[{"severity":"minor","title":"m"}]}\n```').verdict, 'comment');
+    assert.match(parseReview('no block').error, /no json block/);
+    assert.match(parseReview('```json\n{oops\n```').error, /unparseable/);
+});
+
+test('renderReview has the marker, a findings table, and escapes pipes', () => {
+    const rv = parseReview('```json\n{"summary":"S","findings":[{"severity":"major","file":"x.js","line":9,"title":"a|b","detail":"d"}]}\n```');
+    const md = renderReview(rv, { runId: 'imp_1', model: 'MAX', served: ['m'], turns: 4, minutes: '1.0' });
+    assert.match(md, /^<!-- imp-review -->/);
+    assert.match(md, /Changes needed/);
+    assert.match(md, /\| \*\*major\*\* \| a\\\|b \| `x\.js:9` \|/);
+    assert.match(md, /never approves or merges/);
+});
 
 test('pickIssues: one per repo, skips repos with an imp PR, quiet repos first, respects wip', () => {
     const c = (repo, number, labels, createdAt) => ({ repo, number, labels, createdAt });

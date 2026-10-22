@@ -97,6 +97,28 @@ After every few runs, and weekly once imps are routine:
 
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
 
+## Review
+
+After the dispatcher opens a draft PR, **`review.mjs`** runs one read-only `claude -p` pass through 9router in the imp's worktree and posts the result as a single GitHub **COMMENT** review. It never approves, never blocks, and never merges.
+
+- **Inputs:** the issue, the brief, and the diff (capped at 60 KB; the reviewer can Read the rest).
+- **Tools:** Read, Grep, Glob, plus the read-only git commands Claude Code allows by default. Edit and Write are denied, and so are PowerShell, web access and subagents (`runner.mjs` ALWAYS_DENY). Running tests or builds is denied.
+- **Prompt:** `REVIEW.md`, maintained by RSI like `PREAMBLE.md`. It has required steps (read around each hunk, Grep every changed identifier, check TASKS.md) and severities, and it ends in a JSON block.
+- **Verdict:** recomputed by the runner from the findings (`parseReview`): any blocker or major means `request_changes`, anything above nit means `comment`, otherwise `approve`. A model that says "approve" next to a blocker can't wave a PR through.
+- **Ledger:** `review` on the run row holds the verdict, the model's own verdict, counts by severity, the findings, turns, minutes, tokens, served models and the posted URL. `imp.mjs report` shows it as `approve (0B/0M/0m)`.
+
+Run it by hand with `node imps/review.mjs <run-id> [--dry-run]`.
+
+**What it's for, and what it isn't** (first evals, 2026-10-22):
+
+| PR | Result |
+| --- | --- |
+| fire#230, first prompt | 40 turns, 10 denied command attempts; one valid minor finding (TASKS.md not ticked; that was the brief's `allow:` scope) |
+| fire#230, after the "you can't run commands" line | 5 turns, 0.8 min, 0 errors; approve, and it missed that TASKS.md finding. That's why the required steps were added |
+| vigil#320 replayed at the imp's commit | **missed the `tsc` error CI caught**, and approved |
+
+So the reviewer judges *meaning*: does it fix the issue, does it break callers, is the test real. Anything a tool can check (types, lint, tests, baselines) belongs in the gate. Measure the reviewer over time by comparing its findings with what CI, CodeRabbit and you later find on the same PRs.
+
 ## Brief checklist (from CI misses)
 
 - **TypeScript repos:** include `tsc --noEmit` in the brief's `test:`. vitest doesn't type-check, so vigil#320 passed the gate and then failed CI's `test` and `docker-smoke`.

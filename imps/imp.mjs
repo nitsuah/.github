@@ -12,24 +12,20 @@
 //   node imp.mjs verdict <run-id> pass|fail "<reason>"   a gate decided by hand
 //   node imp.mjs report                    RSI table over every run
 //   node imp.mjs ingest  <transcript.jsonl> --brief <brief.md> [--worktree <dir>]   backfill a run made by hand
-//   (hourly queue: see dispatch.mjs)
+//   (hourly queue: dispatch.mjs; PR review: review.mjs)
 //
 // State lives outside any repo: $IMPS_HOME (default ~/.imps): runs.jsonl
 // (the ledger), runs/<id>.jsonl (transcripts).
-import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, createWriteStream, renameSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
-const LEDGER = join(HOME, 'runs.jsonl');
-const CODE = process.env.IMPS_CODE || join(homedir(), 'code');
-mkdirSync(join(HOME, 'runs'), { recursive: true });
 
 const [cmd, ...rest] = process.argv.slice(2);
 const { values: o, positionals: pos } = parseArgs({
@@ -43,28 +39,6 @@ const { values: o, positionals: pos } = parseArgs({
         worktree: { type: 'string' },
     },
 });
-
-// ── ledger ────────────────────────────────────────────────────────────────
-const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
-// Atomic: a crash mid-write must not truncate the run history.
-const save = (all) => {
-    const tmp = `${LEDGER}.${process.pid}.tmp`;
-    writeFileSync(tmp, all.map((r) => JSON.stringify(r)).join('\n') + '\n');
-    renameSync(tmp, LEDGER);
-};
-function update(id, patch) {
-    const all = rows();
-    const r = all.find((x) => x.id === id);
-    if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
-    Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
-    save(all);
-    return r;
-}
-const sh = (bin, args, opts = {}) => {
-    const r = spawnSync(bin, args, { encoding: 'utf8', ...opts });
-    return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
-};
-const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
 
 // ── brief ─────────────────────────────────────────────────────────────────
 // Every brief gets PREAMBLE.md (the shared, RSI-maintained rules) in front.
@@ -81,17 +55,6 @@ function loadBrief(path, wt) {
     const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
-}
-
-function cleanEnv() {
-    const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
-    const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME',
-        'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'ProgramFiles', 'ProgramData', 'HOMEDRIVE', 'HOMEPATH', 'DOCKER_HOST'];
-    const env = Object.fromEntries(keep.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
-    // Nothing from the dispatching session leaks in: no Claude/GitHub tokens.
-    env.ANTHROPIC_BASE_URL = s.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1';
-    env.ANTHROPIC_API_KEY = s.NINEROUTER_KEY || s.ANTHROPIC_API_KEY;
-    return env;
 }
 
 // ── commands ──────────────────────────────────────────────────────────────
@@ -128,45 +91,7 @@ async function run() {
         // Only the brief's own commands, exactly: a bare `docker run:*` would let
         // the imp mount ~/.ssh, ~/.claude or the Docker socket.
         ...[bm.test, bm.lint].filter(Boolean).map((c) => `Bash(${c})`)];
-    const args = ['-p', prompt, '--model', o.model, '--permission-mode', 'acceptEdits', '--strict-mcp-config',
-        '--setting-sources', 'project', '--allowedTools', tools.join(' '), '--max-budget-usd', o.budget,
-        '--output-format', 'stream-json', '--verbose'];
-    // Spawn the binary itself: a shell (the npm .cmd shim) splits multi-word args.
-    const bin = process.platform === 'win32'
-        ? join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
-        : 'claude';
-    const out = createWriteStream(row.transcript);
-    const events = [];
-    const t0 = Date.now();
-    const child = spawn(bin, args, { cwd: wt, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-    let buf = '';
-    child.stdout.on('data', (d) => {
-        buf += d;
-        let i;
-        while ((i = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, i);
-            buf = buf.slice(i + 1);
-            let ev;
-            try { ev = JSON.parse(line); } catch { continue; }
-            ev._ts = Date.now();
-            events.push(ev);
-            out.write(JSON.stringify(ev) + '\n');
-            if (ev.type === 'assistant')
-                for (const c of ev.message?.content || [])
-                    if (c.type === 'tool_use') console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
-        }
-    });
-    child.stderr.on('data', () => {});
-    const timer = setTimeout(() => child.kill('SIGTERM'), Number(o.minutes) * 60_000);
-    // `close`, not `exit`: stdout can still hold the final result event at exit.
-    const code = await new Promise((done) => {
-        child.once('error', (e) => { console.error(`spawn failed: ${e.message}`); done(null); });
-        child.once('close', done);
-    });
-    clearTimeout(timer);
-    await new Promise((done) => out.end(done));
-    const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
-    if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
+    const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
@@ -260,7 +185,7 @@ function outcome(id) {
     if (!r.pr) return console.log('no PR');
     const s = sh('gh', ['pr', 'view', r.pr, '--json', 'state,reviews,comments', '--jq', '{state, reviews: (.reviews|length), comments: (.comments|length)}']);
     const v = JSON.parse(s.out);
-    update(id, { outcome: v.state.toLowerCase(), review: { reviews: v.reviews, comments: v.comments } });
+    update(id, { outcome: v.state.toLowerCase(), prActivity: { reviews: v.reviews, comments: v.comments } });
     console.log(`${id}: ${v.state} · ${v.reviews} reviews · ${v.comments} comments`);
 }
 

@@ -148,6 +148,48 @@ export function briefFromComments(comments = []) {
     return (fenced ? fenced[1] : body).trim() + '\n';
 }
 
+// The reviewer's answer is the last ```json block in its final text. The
+// verdict is recomputed from the findings, so a model that says "approve"
+// with a blocker in its list can't wave a PR through.
+const SEVERITIES = ['blocker', 'major', 'minor', 'nit'];
+export function parseReview(text = '') {
+    const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
+    if (!blocks.length) return { error: 'no json block in the reviewer output' };
+    let raw;
+    try {
+        raw = JSON.parse(blocks[blocks.length - 1][1]);
+    } catch (e) {
+        return { error: `unparseable json: ${e.message}` };
+    }
+    const findings = (Array.isArray(raw.findings) ? raw.findings : [])
+        .filter((f) => f && f.title)
+        .map((f) => ({
+            severity: SEVERITIES.includes(f.severity) ? f.severity : 'minor',
+            file: String(f.file || ''),
+            line: Number.isFinite(Number(f.line)) ? Number(f.line) : null,
+            title: String(f.title),
+            detail: String(f.detail || ''),
+        }));
+    const counts = Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s).length]));
+    const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
+    return { verdict, modelVerdict: raw.verdict || null, summary: String(raw.summary || ''), findings, counts };
+}
+
+const VERDICT_LABEL = { approve: '✅ No issues found', comment: '💬 Minor findings', request_changes: '⛔ Changes needed' };
+export function renderReview(rv, { runId, model, served = [], turns, minutes }) {
+    const lines = ['<!-- imp-review -->', `### Imp review: ${VERDICT_LABEL[rv.verdict]}`, '', rv.summary || '(no summary)', ''];
+    if (rv.findings.length) {
+        lines.push('| | Finding | Where |', '| --- | --- | --- |');
+        for (const f of rv.findings) lines.push(`| **${f.severity}** | ${f.title.replace(/\|/g, '\\|')} | \`${f.file}${f.line ? `:${f.line}` : ''}\` |`);
+        lines.push('');
+        for (const f of rv.findings.filter((x) => x.severity !== 'nit'))
+            lines.push(`<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
+        lines.push('');
+    }
+    lines.push(`<sub>Read-only review by an imp reviewer through 9router (\`${model}\`, served ${served.join(', ') || '?'}; ${turns ?? '?'} turns, ${minutes ?? '?'} min; run \`${runId}\`). It never approves or merges; a human does.</sub>`);
+    return lines.join('\n');
+}
+
 // RSI report over ledger rows: one line per model mix, plus the error kinds and
 // gate reasons that keep coming back (those are what the next preamble fixes).
 export function report(rows) {
@@ -163,10 +205,10 @@ export function report(rows) {
         for (const r of rows) for (const [k, v] of Object.entries(pick(r) || {})) t[k] = (t[k] || 0) + v;
         return Object.entries(t).sort((a, b) => b[1] - a[1]);
     };
-    out.push('', '| run | issue | brief | model | turns | min | tool err | switches | gate | outcome |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    out.push('', '| run | issue | brief | model | turns | min | tool err | switches | gate | review | outcome |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const r of rows) {
         const m = r.metrics || {};
-        out.push(`| ${r.id} | ${r.repo}#${r.issue ?? '?'} | ${r.briefHash?.slice(0, 7) ?? ''} | ${r.model}${m.served?.length > 1 ? ` (${m.served.length} served)` : ''} | ${m.turns ?? ''} | ${m.durationMs ? (m.durationMs / 60000).toFixed(1) : ''} | ${m.toolErrors ?? ''} | ${m.modelSwitches ?? ''} | ${r.gate ? (r.gate.pass ? 'pass' : 'fail') : '…'} | ${r.outcome ?? ''} |`);
+        out.push(`| ${r.id} | ${r.repo}#${r.issue ?? '?'} | ${r.briefHash?.slice(0, 7) ?? ''} | ${r.model}${m.served?.length > 1 ? ` (${m.served.length} served)` : ''} | ${m.turns ?? ''} | ${m.durationMs ? (m.durationMs / 60000).toFixed(1) : ''} | ${m.toolErrors ?? ''} | ${m.modelSwitches ?? ''} | ${r.gate ? (r.gate.pass ? 'pass' : 'fail') : '…'} | ${r.review ? (r.review.error ? 'error' : `${r.review.verdict}${r.review.counts ? ` (${r.review.counts.blocker}B/${r.review.counts.major}M/${r.review.counts.minor}m)` : ''}`) : ''} | ${r.outcome ?? ''} |`);
     }
     const errs = tally((r) => r.metrics?.errorKinds);
     if (errs.length) out.push('', 'tool errors: ' + errs.map(([k, v]) => `${k} ${v}`).join(' · '));
