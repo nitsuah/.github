@@ -19,13 +19,12 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief } from './runner.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 const [cmd, ...rest] = process.argv.slice(2);
 const { values: o, positionals: pos } = parseArgs({
@@ -37,25 +36,9 @@ const { values: o, positionals: pos } = parseArgs({
         minutes: { type: 'string', default: '25' },
         budget: { type: 'string', default: '15' },
         worktree: { type: 'string' },
+        slack: { type: 'string', default: '0' },
     },
 });
-
-// ── brief ─────────────────────────────────────────────────────────────────
-// Every brief gets PREAMBLE.md (the shared, RSI-maintained rules) in front.
-// The hash of the combined prompt ties each outcome to a prompt version.
-function loadBrief(path, wt) {
-    const { meta, body } = parseBrief(readFileSync(path, 'utf8'));
-    const preamble = readFileSync(join(HERE, 'PREAMBLE.md'), 'utf8');
-    const fill = (s) => s.replaceAll('{wt}', wt.replaceAll('\\', '/')).replaceAll('{issue}', meta.issue || '');
-    // The gate's scope and size limits go in the prompt too, so the imp knows them.
-    const limits = [
-        meta.allow && `- You may only change files under: ${meta.allow}. Anything else fails the gate.`,
-        `- The whole diff must stay under ${meta.maxLines || 80} changed lines.`,
-    ].filter(Boolean).join('\n');
-    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
-    const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
-    return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
-}
 
 // ── commands ──────────────────────────────────────────────────────────────
 async function run() {
@@ -122,8 +105,11 @@ function runGate(id) {
     }
     // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
     const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
-    const log = git(r.worktree, 'log', '--format=%B%x00', `${r.baseSha}..HEAD`).out;
-    const commits = log.split('\0').map((s) => s.trim()).filter(Boolean);
+    // Only the imp's own commits must carry the imp trailer: a human or the
+    // hypervisor may push a fix to the PR branch between rounds.
+    const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
+    const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
+        .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
     const dirty = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
     let lintExit = null;
@@ -138,7 +124,8 @@ function runGate(id) {
     const g = gate({
         numstat, commits, testExit,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
-        maxLines: Number(meta.maxLines || 80),
+        // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
+        maxLines: Number(meta.maxLines || 80) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
     if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);

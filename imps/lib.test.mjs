@@ -1,7 +1,53 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview } from './lib.mjs';
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions } from './lib.mjs';
+
+test('feedbackItems keeps real feedback and drops the noise', () => {
+    const items = feedbackItems({
+        threads: [
+            { id: 'T1', isResolved: false, path: 'a.js', line: 3, comments: [{ databaseId: 11, author: 'coderabbitai', body: '<!-- x -->**Bug**: off by one' }] },
+            { id: 'T2', isResolved: true, comments: [{ databaseId: 12, author: 'coderabbitai', body: 'old' }] },
+            { id: 'T3', isResolved: false, isOutdated: true, comments: [{ databaseId: 13, author: 'coderabbitai', body: 'stale' }] },
+            { id: 'T4', isResolved: false, comments: [{ databaseId: 14, author: 'coderabbitai', body: 'q' }, { databaseId: 15, author: 'nitsuah', body: '<!-- imp-fix -->\nPushed back: …' }] },
+        ],
+        comments: [
+            { id: 1, author: 'coderabbitai[bot]', body: '## Review limit reached' },
+            { id: 2, author: 'netlify[bot]', body: 'Deploy Preview ready' },
+            { id: 3, author: 'nitsuah', body: '<!-- imp-review -->\n### Imp review' },
+            { id: 4, author: 'nitsuah', body: '@coderabbitai approve' },
+            { id: 5, author: 'nitsuah', body: 'Please also handle the empty list case', createdAt: '2026-10-22T09:00:00Z' },
+            { id: 6, author: 'nitsuah', body: 'handled already', createdAt: '2026-10-22T07:00:00Z' },
+        ],
+        checks: [{ name: 'test', state: 'FAILURE' }, { name: 'Pages changed - lifefire', state: 'FAILURE' }, { name: 'lint', state: 'SUCCESS' }],
+        impReview: { verdict: 'request_changes', findings: [{ severity: 'major', file: 'b.js', line: 2, title: 'Breaks caller', detail: 'd' }, { severity: 'nit', title: 'n' }] },
+        since: '2026-10-22T08:00:00Z',
+    });
+    assert.deepEqual(items.map((i) => i.id), ['T1', 'c5', 'r0', 'ci:test']);
+    assert.equal(items[0].author, 'coderabbitai');
+    assert.match(items[0].text, /^coderabbitai: \*\*Bug\*\*: off by one$/);
+    assert.equal(feedbackItems({ impReview: { verdict: 'request_changes', handled: true, findings: [{ severity: 'major', title: 'x' }] } }).length, 0);
+});
+
+test('shouldAskCodeRabbitApprove only when CodeRabbit alone blocks and everything is clean', () => {
+    const ok = { reviewDecision: 'CHANGES_REQUESTED', latestBy: { 'coderabbitai[bot]': 'CHANGES_REQUESTED' }, threads: [{ isResolved: true }], checks: [{ name: 'test', state: 'SUCCESS' }, { name: 'CodeRabbit', state: 'PENDING' }] };
+    assert.equal(shouldAskCodeRabbitApprove(ok), true);
+    assert.equal(shouldAskCodeRabbitApprove({ ...ok, askedAt: 'x' }), false);
+    assert.equal(shouldAskCodeRabbitApprove({ ...ok, latestBy: { ...ok.latestBy, nitsuah: 'CHANGES_REQUESTED' } }), false);
+    assert.equal(shouldAskCodeRabbitApprove({ ...ok, threads: [{ isResolved: false }] }), false);
+    assert.equal(shouldAskCodeRabbitApprove({ ...ok, checks: [{ name: 'test', state: 'FAILURE' }] }), false);
+    assert.equal(shouldAskCodeRabbitApprove({ ...ok, reviewDecision: 'APPROVED' }), false);
+});
+
+test('parseFixDecisions maps answers onto items and defaults the rest to skip', () => {
+    const items = [{ id: 'T1', kind: 'thread' }, { id: 'c5', kind: 'comment' }, { id: 'ci:test', kind: 'ci' }];
+    const text = '```json\n{"decisions":[{"id":"T1","action":"fix","reply":"Fixed the bound."},{"id":"c5","action":"pushback","reply":"Out of scope: #12 tracks it."},{"id":"zzz","action":"fix"}]}\n```';
+    const d = parseFixDecisions(text, items);
+    assert.deepEqual(d.map((x) => [x.id, x.action, x.answered]), [['T1', 'fix', true], ['c5', 'pushback', true], ['ci:test', 'skip', false]]);
+    assert.equal(d[2].reply, 'Not addressed in this round.');
+    assert.deepEqual(parseFixDecisions('garbage', items).map((x) => x.action), ['skip', 'skip', 'skip']);
+});
 
 test('parseReview takes the last json block and recomputes the verdict from findings', () => {
     const text = 'thinking…\n```json\n{"verdict":"approve","findings":[]}\n```\nthen\n```json\n' +

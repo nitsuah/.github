@@ -119,6 +119,23 @@ Run it by hand with `node imps/review.mjs <run-id> [--dry-run]`.
 
 So the reviewer judges *meaning*: does it fix the issue, does it break callers, is the test real. Anything a tool can check (types, lint, tests, baselines) belongs in the gate. Measure the reviewer over time by comparing its findings with what CI, CodeRabbit and you later find on the same PRs.
 
+## Fix rounds
+
+**`fix.mjs <run-id> [--dry-run]`** answers review feedback and red CI on an imp's open PR with a 9router imp, so routine comments don't need the paid hypervisor.
+
+1. **Collect, with no model:** unresolved review threads, new human comments, the imp reviewer's blocker/major findings, and failing checks (with a log excerpt).
+2. **Filter the noise** (`feedbackItems`, tested): bot summaries, "review skipped" and rate-limit notices, deploy previews and Netlify's deploy checks, confirmations, and anything carrying an `<!-- imp-` marker (our own replies) never become items. **No items means no model runs.**
+3. **Clear a stale CodeRabbit block:** if CodeRabbit's old `CHANGES_REQUESTED` is the only blocker, CI is green and every thread is resolved, post `@coderabbitai approve` once (`shouldAskCodeRabbitApprove`).
+4. **Otherwise the imp decides each item** using `FIX.md`: **fix** (small and in scope), **pushback** (wrong, with evidence), or **skip** (right but out of scope; make it its own issue). It works in the PR's own worktree, fast-forwarded to the PR branch first. Then the gate runs again with `--slack 30` extra lines. Only the imp's own commits need the imp trailer, so a fix pushed by a human or the hypervisor doesn't fail it.
+5. **Gate passes:** push to the PR branch, reply on every thread (`<!-- imp-fix -->`), and resolve the fixed and skipped threads. Pushback threads stay open for the reviewer to answer. **Gate fails:** reset the worktree, label `imp:needs-human`, and comment the reasons.
+6. **After 2 rounds, or on a merge conflict:** label `imp:needs-human` and do nothing else.
+
+Every round is appended to the run's `fixes[]` in the ledger: items, decisions with replies, gate result, turns, tokens and served model. **That's the training data for 9router's comment judgment.** The hypervisor reads the decisions, overrides any it disagrees with (by replying on the thread), and turns recurring misjudgements into `FIX.md` lines, the same RSI loop as `PREAMBLE.md` and `REVIEW.md`.
+
+First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority regex matched `P20` as P2). The imp decided **fix**: a 2-line regex change, 7 turns, 1.4 min, one model. The gate passed, it pushed `a8659a1`, replied, and resolved the thread. The first attempt was voided by a runner bug (the trailer check on a hypervisor commit), fixed in the same PR.
+
+**Not wired into the hourly dispatcher yet.** Running fix rounds unattended means the loop pushes to PRs with no person involved, so turning that on is a deliberate choice for the owner. Until then, run it by hand, or from the hypervisor session when an Auto-fix event arrives on an imp PR.
+
 ## Brief checklist (from CI misses)
 
 - **TypeScript repos:** include `tsc --noEmit` in the brief's `test:`. vitest doesn't type-check, so vigil#320 passed the gate and then failed CI's `test` and `docker-smoke`.
