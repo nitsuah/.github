@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget } from './lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
@@ -23,6 +23,7 @@ const { values: o } = parseArgs({
         max: { type: 'string', default: '5' },
         wip: { type: 'string', default: '8' },
         concurrency: { type: 'string', default: '3' },
+        'daily-cap': { type: 'string', default: '15' },
         owner: { type: 'string', default: 'nitsuah' },
         'dry-run': { type: 'boolean', default: false },
     },
@@ -123,7 +124,7 @@ async function work(issue) {
             // One read-only review through 9router, posted as a COMMENT. A failed
             // review never blocks the PR; it's logged and the human reviews anyway.
             const rv = await node(['review', id], 'review.mjs');
-            return log({ event: 'pr', repo, number, id, url, review: (rv.out.match(/posted (w+)/) || [])[1] || 'failed' });
+            return log({ event: 'pr', repo, number, id, url, review: (rv.out.match(/posted (\w+)/) || [])[1] || 'failed' });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
         comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
@@ -175,7 +176,9 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 }
 
 const picked = [];
-for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip) })) {
+// Read the ledger again: the fix sweep above may have added rounds.
+const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
+for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), dailyCap: Number(o['daily-cap']), ...budget })) {
     const brief = briefFromComments(ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
@@ -185,7 +188,7 @@ for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip:
     writeFileSync(i.briefPath, brief);
     picked.push(i);
 }
-log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
+log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
 if (dry || !picked.length) process.exit(0);
 
 // Run up to `concurrency` imps at once (one per repo, so no worktree clashes).

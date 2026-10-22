@@ -2,7 +2,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget } from './lib.mjs';
+
+test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
+    const now = Date.parse('2026-10-23T12:00:00Z');
+    const run = (id, repo, at, pass) => ({ id, repo, startedAt: at, gate: pass == null ? undefined : { pass } });
+    const rows = [
+        run('imp_1', 'vhs', '2026-10-23T09:00:00Z', false), run('imp_2', 'vhs', '2026-10-23T10:00:00Z', false),
+        run('imp_3', 'fire', '2026-10-23T09:00:00Z', false), run('imp_4', 'fire', '2026-10-23T10:00:00Z', true),
+        run('imp_5', 'vigil', '2026-10-21T09:00:00Z', false), run('imp_6', 'vigil', '2026-10-21T10:00:00Z', false),
+        { id: 'imp_manual_x_1', repo: 'vhs', startedAt: '2026-10-23T11:00:00Z', ingested: true },
+    ];
+    const b = loopBudget(rows, now);
+    assert.equal(b.runsLast24h, 4);
+    assert.deepEqual(Object.keys(b.cooldown), ['vhs']); // vigil's failures are older than 24 h; fire's last run passed
+    const cands = [{ repo: 'vhs', number: 1, labels: [], createdAt: '1' }, { repo: 'fire', number: 2, labels: [], createdAt: '2' }];
+    assert.deepEqual(pickIssues({ candidates: cands, repos: {}, ...b }).map((i) => i.repo), ['fire']);
+    assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
+});
 
 test('latestDecisiveReviews ignores COMMENTED, like GitHub reviewDecision', () => {
     const latest = latestDecisiveReviews([

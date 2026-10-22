@@ -61,6 +61,20 @@ Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-ru
 
 **Triage stays with the hypervisor.** Opus reads new issues once a day and either posts a brief and adds `imp:ready`, or labels the issue for a human. It also re-briefs `imp:failed` issues, using the gate reasons and the PREAMBLE lessons. The hourly loop never calls a paid model.
 
+## Limits (so an unattended day stays boring)
+
+| Limit | Value | Where |
+| --- | --- | --- |
+| Turn cap per model run | imp 40, fix round 25, reviewer 15 | `runClaude({ maxTurns })`. Enforced by the runner, because this CLI ignores `--max-turns`. Runs end `killed-max-turns` |
+| Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
+| Imps per cycle | 5, one per repo, at most 3 at once | `dispatch.mjs --max/--concurrency` |
+| Open imp PRs | 8 in total, 1 per repo | `--wip`, `pickIssues` |
+| Imp runs per 24 h | 15 | `--daily-cap`, `loopBudget` |
+| Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
+| Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
+
+Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for that repo need a look (daily triage) before more model time goes there.
+
 ## Guardrails
 
 - **Clean environment.** The imp gets PATH and the 9router URL and key, nothing else. No Claude session tokens, no GitHub token.
