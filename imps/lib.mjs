@@ -111,6 +111,40 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
 }
 
+// The hourly dispatcher's choice. Pure so it can be tested.
+//   candidates: [{ repo, number, labels, createdAt }]  open `imp:ready` issues that have a brief
+//   repos: { [repo]: { humanPRs, impPRs, lastCommitHours } }
+// Rules: at most `max` issues, one per repo, never a repo that already has an
+// imp PR open (one in flight per repo avoids conflicting PRs), and never past
+// `wip` imp PRs open in total (review is the bottleneck). Quiet repos first:
+// no open human PRs, no commit in the last few hours. Within a repo,
+// bot:review (already diagnosed) before bugs, then oldest first.
+export function pickIssues({ candidates, repos, max = 5, wip = 8, quietHours = 6 }) {
+    const openImp = Object.values(repos).reduce((n, r) => n + (r.impPRs || 0), 0);
+    const room = Math.max(0, Math.min(max, wip - openImp));
+    const kind = (i) => (i.labels.includes('bot:review') ? 0 : i.labels.includes('bug') ? 1 : 2);
+    const busy = (r) => (r.humanPRs || 0) * 10 + ((r.lastCommitHours ?? 99) < quietHours ? 20 : 0);
+    const best = new Map();
+    for (const i of candidates) {
+        const r = repos[i.repo] || {};
+        if (r.impPRs) continue;
+        const cur = best.get(i.repo);
+        if (!cur || kind(i) < kind(cur) || (kind(i) === kind(cur) && i.createdAt < cur.createdAt)) best.set(i.repo, i);
+    }
+    return [...best.values()]
+        .sort((a, b) => busy(repos[a.repo] || {}) - busy(repos[b.repo] || {}) || kind(a) - kind(b) || (a.createdAt < b.createdAt ? -1 : 1))
+        .slice(0, room);
+}
+
+// A brief lives on the issue as a comment that starts with this marker, so
+// it's reviewable on GitHub and the dispatcher needs no local state.
+export const BRIEF_MARK = '<!-- imp-brief -->';
+export function briefFromComments(comments = []) {
+    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
+    if (!c) return null;
+    return c.body.trimStart().slice(BRIEF_MARK.length).replace(/^\s*```(?:markdown)?\r?\n/, '').replace(/\r?\n```\s*$/, '').trim() + '\n';
+}
+
 // RSI report over ledger rows: one line per model mix, plus the error kinds and
 // gate reasons that keep coming back (those are what the next preamble fixes).
 export function report(rows) {

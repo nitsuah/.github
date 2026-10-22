@@ -36,6 +36,31 @@ allow: app/lib/, docs/CHANGELOG.md
 
 Front matter values are taken verbatim, so don't add trailing `#` comments. `repo` is the folder under `~/code`. `maxLines` is the imp's added+deleted lines (runner formatting excluded). `allow` is the path prefixes the diff may touch. `{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted.
 
+## The queue and the hourly dispatcher
+
+GitHub issues are the queue; labels are the state.
+
+| Label | Set by | Meaning |
+| --- | --- | --- |
+| `imp:ready` | Opus triage (daily) | The issue has a brief comment and may be taken |
+| `imp:working` | dispatcher | An imp is on it now |
+| `imp:pr` | dispatcher | A draft PR is open (the issue comment links it) |
+| `imp:failed` | dispatcher | Gate failed; reasons are commented. It needs a new brief or a human |
+
+**The brief** is an issue comment whose first line is `<!-- imp-brief -->`, followed by the brief (front matter + body, optionally in a ```` ```markdown ```` fence). The newest such comment wins. Writing it on the issue keeps every brief reviewable, and the dispatcher needs no local state.
+
+**`dispatch.mjs`** runs hourly with no LLM of its own:
+1. It skips the cycle if the previous one is still running, or if 9router doesn't answer a `MAX` probe.
+2. It picks up to `--max 5` `imp:ready` issues: **one per repo**, never in a repo that already has an `imp` PR open, and never past `--wip 8` open imp PRs in total. Your review is the bottleneck, so the dispatcher stops when the review pile is full.
+3. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
+4. It runs `--concurrency 3` imps at once through `imp.mjs run → gate → pr`, then relabels and comments the result on the issue.
+
+Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-run` prints the picks and changes nothing.
+
+**Scheduling (Windows).** The Task Scheduler task `imps-dispatch` runs `~/.imps/hourly.cmd` at :07 every hour. The wrapper first resets a dedicated checkout (`~/code/imps-runner`) to `origin/main`, so **only merged, reviewed kit code runs unattended**. Output goes to `~/.imps/hourly.log`. When this moves into motor-pool (IMPS-PLAN PR 3), the same loop becomes the `imp-runner` service, and a second runner on the desktop just claims from the same labels.
+
+**Triage stays with the hypervisor.** Opus reads new issues once a day and either posts a brief and adds `imp:ready`, or labels the issue for a human. It also re-briefs `imp:failed` issues, using the gate reasons and the PREAMBLE lessons. The hourly loop never calls a paid model.
+
 ## Guardrails
 
 - **Clean environment.** The imp gets PATH and the 9router URL and key, nothing else. No Claude session tokens, no GitHub token.
