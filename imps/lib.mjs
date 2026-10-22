@@ -119,15 +119,32 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
 // `wip` imp PRs open in total (review is the bottleneck). Quiet repos first:
 // no open human PRs, no commit in the last few hours. Within a repo,
 // bot:review (already diagnosed) before bugs, then oldest first.
-export function pickIssues({ candidates, repos, max = 5, wip = 8, quietHours = 6 }) {
+// Limits learned from the ledger, so a bad day can't turn into a runaway:
+// `runsLast24h` counts imp runs in the last 24 h (the daily cap), and a repo
+// whose last two gated runs both failed sits out for 24 h after the latest
+// failure (`cooldown`), until triage fixes the brief or the cause.
+export function loopBudget(rows, now = Date.now()) {
+    const day = 24 * 3600_000;
+    const runs = rows.filter((r) => r.startedAt && !r.ingested && /^imp_\d/.test(r.id));
+    const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
+    const cooldown = {};
+    for (const repo of new Set(runs.map((r) => r.repo))) {
+        const gated = runs.filter((r) => r.repo === repo && r.gate).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const [a, b] = gated.slice(-2);
+        if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < day) cooldown[repo] = b.startedAt;
+    }
+    return { runsLast24h, cooldown };
+}
+
+export function pickIssues({ candidates, repos, max = 5, wip = 8, quietHours = 6, dailyCap = Infinity, runsLast24h = 0, cooldown = {} }) {
     const openImp = Object.values(repos).reduce((n, r) => n + (r.impPRs || 0), 0);
-    const room = Math.max(0, Math.min(max, wip - openImp));
+    const room = Math.max(0, Math.min(max, wip - openImp, dailyCap - runsLast24h));
     const kind = (i) => (i.labels.includes('bot:review') ? 0 : i.labels.includes('bug') ? 1 : 2);
     const busy = (r) => (r.humanPRs || 0) * 10 + ((r.lastCommitHours ?? 99) < quietHours ? 20 : 0);
     const best = new Map();
     for (const i of candidates) {
         const r = repos[i.repo] || {};
-        if (r.impPRs) continue;
+        if (r.impPRs || cooldown[i.repo]) continue;
         const cur = best.get(i.repo);
         if (!cur || kind(i) < kind(cur) || (kind(i) === kind(cur) && i.createdAt < cur.createdAt)) best.set(i.repo, i);
     }

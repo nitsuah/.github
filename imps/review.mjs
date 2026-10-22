@@ -52,7 +52,7 @@ console.log(`reviewing ${r.pr} (${id})`);
 const transcript = join(HOME, 'runs', `${id}.review.jsonl`);
 const metrics = await runClaude({
     cwd: r.worktree, prompt, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
-    minutes: o.minutes, budget: 10, transcript, permissionMode: 'default',
+    minutes: o.minutes, budget: 10, maxTurns: 15, transcript, permissionMode: 'default',
 });
 const rv = parseReview(metrics.finalText);
 const minutes = metrics.durationMs ? (metrics.durationMs / 60000).toFixed(1) : null;

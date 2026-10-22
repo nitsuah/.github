@@ -97,7 +97,7 @@ const list = items.map((i) => `### ${i.id} · ${i.kind} · ${i.author}${i.path ?
 const prompt = `${base}\n\n---\n\n${readFileSync(join(HERE, 'FIX.md'), 'utf8').replaceAll('<#PR>', `#${number}`)}\n\n## Feedback items (round ${round}, PR ${r.pr})\n\n${list}`;
 const tools = IMP_TOOLS;
 const metrics = await runClaude({
-    cwd: r.worktree, prompt, model: r.model || 'MAX', tools, minutes: o.minutes, budget: 10,
+    cwd: r.worktree, prompt, model: r.model || 'MAX', tools, minutes: o.minutes, budget: 10, maxTurns: 25,
     transcript: join(HOME, 'runs', `${id}.fix${round}.jsonl`),
 });
 const decisions = parseFixDecisions(metrics.finalText, items);

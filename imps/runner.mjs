@@ -57,7 +57,11 @@ export function cleanEnv() {
 // Never useful to a worker, and each is a way out of the worktree.
 const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'NotebookEdit', 'Monitor', 'CronCreate', 'ScheduleWakeup', 'SendMessage', 'PushNotification'];
 
-export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, transcript, permissionMode = 'acceptEdits' }) {
+// maxTurns is enforced here: this CLI build accepts --max-turns but ignores it
+// (2026-10-22: a 2-turn cap ran 4 turns). A turn is an assistant message that
+// calls a tool; past the cap the process is stopped and the run ends
+// `killed-max-turns`.
+export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, transcript, permissionMode = 'acceptEdits' }) {
     const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
         '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
@@ -71,6 +75,8 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     const t0 = Date.now();
     const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = '';
+    let toolTurns = 0;
+    let capped = false;
     child.stdout.on('data', (d) => {
         buf += d;
         let i;
@@ -82,9 +88,15 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
             ev._ts = Date.now();
             events.push(ev);
             out.write(JSON.stringify(ev) + '\n');
-            if (ev.type === 'assistant')
-                for (const c of ev.message?.content || [])
-                    if (c.type === 'tool_use') console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
+            if (ev.type === 'assistant') {
+                const uses = (ev.message?.content || []).filter((c) => c.type === 'tool_use');
+                for (const c of uses) console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
+                if (uses.length && ++toolTurns > maxTurns && !capped) {
+                    capped = true;
+                    console.log(`  turn cap ${maxTurns} reached; stopping`);
+                    child.kill('SIGTERM');
+                }
+            }
         }
     });
     child.stderr.on('data', () => {});
@@ -97,7 +109,9 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     clearTimeout(timer);
     await new Promise((done) => out.end(done));
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
-    if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
+    if (capped) metrics.end = 'killed-max-turns';
+    else if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
+    metrics.toolTurns = toolTurns;
     return metrics;
 }
 
