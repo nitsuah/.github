@@ -50,11 +50,21 @@ const prompt = [
 
 console.log(`reviewing ${r.pr} (${id})`);
 const transcript = join(HOME, 'runs', `${id}.review.jsonl`);
-const metrics = await runClaude({
-    cwd: r.worktree, prompt, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
-    minutes: o.minutes, budget: 10, maxTurns: 25, transcript, permissionMode: 'default',
-});
-const rv = parseReview(metrics.finalText);
+// A model sometimes ends without the JSON block (vhs#91, 2026-10-22). One
+// retry; the second attempt is reminded up front.
+let metrics;
+let rv;
+for (const attempt of [1, 2]) {
+    metrics = await runClaude({
+        cwd: r.worktree, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
+        prompt: attempt === 1 ? prompt : `${prompt}\n\n**Your previous attempt ended without the required \`json\` block. Keep it short and end with that block.**`,
+        minutes: o.minutes, budget: 10, maxTurns: 25, permissionMode: 'default',
+        transcript: attempt === 1 ? transcript : transcript.replace(/\.jsonl$/, '.retry.jsonl'),
+    });
+    rv = parseReview(metrics.finalText);
+    if (!rv.error) break;
+    console.log(`attempt ${attempt}: ${rv.error} (${metrics.end})${attempt === 1 ? '; retrying once' : ''}`);
+}
 const minutes = metrics.durationMs ? (metrics.durationMs / 60000).toFixed(1) : null;
 const record = {
     at: new Date().toISOString(), model: o.model, transcript, end: metrics.end, turns: metrics.turns, minutes: Number(minutes),
