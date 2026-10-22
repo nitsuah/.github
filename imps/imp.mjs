@@ -12,6 +12,7 @@
 //   node imp.mjs verdict <run-id> pass|fail "<reason>"   a gate decided by hand
 //   node imp.mjs report                    RSI table over every run
 //   node imp.mjs ingest  <transcript.jsonl> --brief <brief.md> [--worktree <dir>]   backfill a run made by hand
+//   (hourly queue: see dispatch.mjs)
 //
 // State lives outside any repo: $IMPS_HOME (default ~/.imps): runs.jsonl
 // (the ledger), runs/<id>.jsonl (transcripts).

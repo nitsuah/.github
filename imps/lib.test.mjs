@@ -1,7 +1,31 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report } from './lib.mjs';
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK } from './lib.mjs';
+
+test('pickIssues: one per repo, skips repos with an imp PR, quiet repos first, respects wip', () => {
+    const c = (repo, number, labels, createdAt) => ({ repo, number, labels, createdAt });
+    const candidates = [
+        c('fire', 1, ['enhancement'], '2026-10-01'), c('fire', 2, ['bug', 'bot:review'], '2026-10-05'),
+        c('vigil', 3, ['bug'], '2026-10-02'), c('vhs', 4, ['bot:review'], '2026-10-03'), c('busy', 5, ['bot:review'], '2026-09-01'),
+        c('darkmoon', 6, ['bug'], '2026-10-04'),
+    ];
+    const repos = {
+        fire: { humanPRs: 0, impPRs: 0, lastCommitHours: 30 }, vigil: { humanPRs: 0, impPRs: 0, lastCommitHours: 48 },
+        vhs: { humanPRs: 0, impPRs: 1, lastCommitHours: 50 }, busy: { humanPRs: 2, impPRs: 0, lastCommitHours: 1 },
+        darkmoon: { humanPRs: 0, impPRs: 0, lastCommitHours: 2 },
+    };
+    const picked = pickIssues({ candidates, repos, max: 5, wip: 8 });
+    assert.deepEqual(picked.map((i) => `${i.repo}#${i.number}`), ['fire#2', 'vigil#3', 'darkmoon#6', 'busy#5']);
+    assert.equal(pickIssues({ candidates, repos, max: 5, wip: 3 }).length, 2); // 1 imp PR open, room for 2
+    assert.equal(pickIssues({ candidates, repos, max: 1 }).length, 1);
+});
+
+test('briefFromComments takes the newest marked comment and strips a code fence', () => {
+    const body = `${BRIEF_MARK}\n\`\`\`markdown\n---\nrepo: fire\nissue: 1\n---\nfix it\n\`\`\``;
+    assert.equal(briefFromComments([{ body: 'hi' }, { body: `${BRIEF_MARK}\nold` }, { body }]), '---\nrepo: fire\nissue: 1\n---\nfix it\n');
+    assert.equal(briefFromComments([{ body: 'no brief' }]), null);
+});
 
 test('parseBrief reads front matter and leaves the body', () => {
     const { meta, body } = parseBrief('---\nrepo: fire\nissue: 166\nallow: app/lib/, docs/CHANGELOG.md\n---\n## Issue\nfix it');
