@@ -67,7 +67,12 @@ function loadBrief(path, wt) {
     const { meta, body } = parseBrief(readFileSync(path, 'utf8'));
     const preamble = readFileSync(join(HERE, 'PREAMBLE.md'), 'utf8');
     const fill = (s) => s.replaceAll('{wt}', wt.replaceAll('\\', '/')).replaceAll('{issue}', meta.issue || '');
-    const prompt = fill(`${preamble}\n\n---\n\n${body}`);
+    // The gate's scope and size limits go in the prompt too, so the imp knows them.
+    const limits = [
+        meta.allow && `- You may only change files under: ${meta.allow}. Anything else fails the gate.`,
+        `- The whole diff must stay under ${meta.maxLines || 80} changed lines.`,
+    ].filter(Boolean).join('\n');
+    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
 }
@@ -96,6 +101,10 @@ async function run() {
     const add = git(repoDir, 'worktree', 'add', '-q', wt, '-b', branch, `origin/${base}`);
     if (add.code) throw new Error(add.err);
     git(wt, 'remote', 'set-url', '--push', 'origin', 'no_push');
+    // Worktree-local identity: never inherit a repo's stale user (fire had `openhands`).
+    git(wt, 'config', 'extensions.worktreeConfig', 'true');
+    git(wt, 'config', '--worktree', 'user.name', '9router imp');
+    git(wt, 'config', '--worktree', 'user.email', 'imp@users.noreply.github.com');
     const { prompt, hash } = loadBrief(o.brief, wt);
 
     const row = {

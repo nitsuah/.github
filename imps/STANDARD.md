@@ -24,7 +24,7 @@ Front matter, then the issue-specific body. `PREAMBLE.md` is prepended to every 
 ---
 repo: fire                       # folder under ~/code
 issue: 166
-test: docker run --rm -v {wt}://app -w //app node:22 sh -c "npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run --config config/vitest.config.ts"
+test: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 sh -c "npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run --config config/vitest.config.ts"
 maxLines: 40                     # gate: total added+deleted lines
 allow: app/lib/, docs/CHANGELOG.md   # gate: path prefixes the diff may touch
 ---
@@ -32,7 +32,7 @@ allow: app/lib/, docs/CHANGELOG.md   # gate: path prefixes the diff may touch
 <the problem, where it is, what done looks like, and repo facts the imp would otherwise burn turns discovering>
 ```
 
-`{wt}` becomes the worktree path. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted.
+`{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted.
 
 ## Guardrails
 
@@ -68,3 +68,8 @@ After every few runs, and weekly once imps are routine:
 4. Delete a lesson once ~10 runs pass without hitting that failure. The preamble stays short.
 
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
+
+## Known gaps (next)
+
+- **Baseline tests.** The gate fails on any failing test. It should also run the test command on `baseSha` and only count failures that are new. fire's server fail-fast tests time out locally while main's CI is green.
+- **Pin a real model.** Both fire#166 runs went through `MAX` while 9router was in fallback: 10–11 free models, 43–65 switches, 0 cache reads. Add a pre-run probe that holds the run when the served model isn't the intended one (IMPS-PLAN D9).
