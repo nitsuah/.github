@@ -175,6 +175,87 @@ export function parseReview(text = '') {
     return { verdict, modelVerdict: raw.verdict || null, summary: String(raw.summary || ''), findings, counts };
 }
 
+// ── fix rounds ────────────────────────────────────────────────────────────
+// Everything a runner posts carries an `<!-- imp-` marker, so it never
+// mistakes its own replies for feedback.
+export const IMP_MARK = /<!-- imp-[a-z-]+ -->/;
+const botLogin = (login = '') => /\[bot\]$|^app\/|^(coderabbitai|netlify|dependabot|github-actions|copilot-pull-request-reviewer)$/i.test(login);
+const norm = (login = '') => login.replace(/\[bot\]$/, '').toLowerCase();
+
+// Turn a PR's raw state into the items a fix round should act on. Pure.
+//   threads: [{ id, isResolved, isOutdated, path, line, comments: [{ databaseId, author, body }] }]
+//   comments: PR conversation comments [{ id, author, body, createdAt }]
+//   checks: [{ name, state }]   impReview: the run's ledger review (or null)
+// Noise (bot summaries, skip/rate-limit notices, deploy previews, confirmations,
+// our own replies) never becomes an item: no model is woken for it.
+export function feedbackItems({ threads = [], comments = [], checks = [], impReview = null, since = null }) {
+    const items = [];
+    for (const t of threads) {
+        if (t.isResolved || t.isOutdated || !t.comments?.length) continue;
+        const last = t.comments[t.comments.length - 1];
+        if (IMP_MARK.test(last.body || '')) continue; // we answered it last; waiting on them
+        const first = t.comments[0];
+        items.push({
+            kind: 'thread', id: t.id, commentId: first.databaseId, author: norm(first.author), path: t.path, line: t.line,
+            text: t.comments.map((c) => `${norm(c.author)}: ${(c.body || '').replace(/<!--[\s\S]*?-->/g, '').trim()}`).join('\n\n').slice(0, 4000),
+        });
+    }
+    for (const c of comments) {
+        if (botLogin(c.author) || IMP_MARK.test(c.body || '')) continue;
+        if (since && c.createdAt <= since) continue;
+        if (!(c.body || '').trim() || /^@coderabbitai\b/i.test(c.body.trim())) continue;
+        items.push({ kind: 'comment', id: `c${c.id}`, author: norm(c.author), text: c.body.slice(0, 4000) });
+    }
+    if (impReview && !impReview.error && impReview.verdict === 'request_changes' && !impReview.handled)
+        for (const [i, f] of (impReview.findings || []).entries())
+            if (f.severity === 'blocker' || f.severity === 'major')
+                items.push({ kind: 'review', id: `r${i}`, author: 'imp-reviewer', path: f.file, line: f.line, text: `${f.severity}: ${f.title}\n${f.detail}` });
+    for (const c of checks)
+        // Netlify's deploy checks ("Pages changed - x", "Header rules - x", "Redirect rules - x") aren't code feedback.
+        if (/^(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|fail)$/i.test(c.state || '') && !/netlify|coderabbit|^(Pages changed|Header rules|Redirect rules) - /i.test(c.name))
+            items.push({ kind: 'ci', id: `ci:${c.name}`, author: 'ci', text: `Check "${c.name}" is failing.${c.log ? `\n\n${c.log}` : ''}` });
+    return items;
+}
+
+// CodeRabbit keeps its old CHANGES_REQUESTED after the fixes land (and often
+// can't re-review because of the free-tier limit). When CI is green and every
+// thread is resolved, one `@coderabbitai approve` clears it.
+// Each reviewer's latest *decisive* review, the way GitHub computes
+// reviewDecision: COMMENTED reviews don't replace an earlier CHANGES_REQUESTED.
+export function latestDecisiveReviews(reviews = []) {
+    const out = {};
+    for (const rv of reviews)
+        if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(rv.state)) out[rv.author?.login || rv.author] = rv.state;
+    return out;
+}
+
+export function shouldAskCodeRabbitApprove({ reviewDecision, latestBy = {}, threads = [], checks = [], askedAt = null }) {
+    if (askedAt || reviewDecision !== 'CHANGES_REQUESTED') return false;
+    const blockers = Object.entries(latestBy).filter(([, s]) => s === 'CHANGES_REQUESTED').map(([who]) => norm(who));
+    if (!blockers.length || blockers.some((who) => who !== 'coderabbitai')) return false;
+    if (threads.some((t) => !t.isResolved && !t.isOutdated)) return false;
+    return checks.every((c) => /^(SUCCESS|NEUTRAL|SKIPPED|pass|skipping)$/i.test(c.state || '') || /coderabbit/i.test(c.name));
+}
+
+// The fix imp ends with a json block: { "decisions": [{ id, action, reply }] }.
+// Unknown ids are dropped; items it didn't answer come back as `skip` with a
+// note, so every thread gets a reply.
+export function parseFixDecisions(text = '', items = []) {
+    const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
+    let raw = [];
+    try {
+        raw = blocks.length ? JSON.parse(blocks[blocks.length - 1][1]).decisions || [] : [];
+    } catch {
+        raw = [];
+    }
+    const byId = new Map(raw.filter((d) => d && d.id).map((d) => [String(d.id), d]));
+    return items.map((it) => {
+        const d = byId.get(it.id);
+        const action = ['fix', 'pushback', 'skip'].includes(d?.action) ? d.action : 'skip';
+        return { id: it.id, kind: it.kind, action, reply: String(d?.reply || (d ? '' : 'Not addressed in this round.')).slice(0, 1500), answered: !!d };
+    });
+}
+
 const VERDICT_LABEL = { approve: '✅ No issues found', comment: '💬 Minor findings', request_changes: '⛔ Changes needed' };
 export function renderReview(rv, { runId, model, served = [], turns, minutes }) {
     const lines = ['<!-- imp-review -->', `### Imp review: ${VERDICT_LABEL[rv.verdict]}`, '', rv.summary || '(no summary)', ''];
