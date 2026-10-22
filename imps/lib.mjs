@@ -142,7 +142,10 @@ export const BRIEF_MARK = '<!-- imp-brief -->';
 export function briefFromComments(comments = []) {
     const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
     if (!c) return null;
-    return c.body.trimStart().slice(BRIEF_MARK.length).replace(/^\s*```(?:markdown)?\r?\n/, '').replace(/\r?\n```\s*$/, '').trim() + '\n';
+    // Prose may sit around the brief: take the fenced block if there is one.
+    const body = c.body.trimStart().slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
+    const fenced = body.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
+    return (fenced ? fenced[1] : body).trim() + '\n';
 }
 
 // RSI report over ledger rows: one line per model mix, plus the error kinds and

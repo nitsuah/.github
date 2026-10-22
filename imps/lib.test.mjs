@@ -25,6 +25,9 @@ test('briefFromComments takes the newest marked comment and strips a code fence'
     const body = `${BRIEF_MARK}\n\`\`\`markdown\n---\nrepo: fire\nissue: 1\n---\nfix it\n\`\`\``;
     assert.equal(briefFromComments([{ body: 'hi' }, { body: `${BRIEF_MARK}\nold` }, { body }]), '---\nrepo: fire\nissue: 1\n---\nfix it\n');
     assert.equal(briefFromComments([{ body: 'no brief' }]), null);
+    // Intro prose before the fence, CRLF from GitHub, and a fenced test: command inside.
+    const withProse = `${BRIEF_MARK}\r\nImp brief (written by Opus triage).\r\n\r\n\`\`\`markdown\r\n---\r\nrepo: vigil\r\nissue: 277\r\n---\r\nbody\r\n\`\`\`\r\n`;
+    assert.equal(briefFromComments([{ body: withProse }]), '---\nrepo: vigil\nissue: 277\n---\nbody\n');
 });
 
 test('parseBrief reads front matter and leaves the body', () => {
