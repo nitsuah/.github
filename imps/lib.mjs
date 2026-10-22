@@ -85,15 +85,18 @@ const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i, /package-lock\.
 
 // The pre-push gate. Deterministic: numstat lines from
 // `git diff --numstat <base>..HEAD`, commit messages, and the test exit code.
-export function gate({ numstat, commits, testExit, maxLines = 80, allow = [] }) {
-    const files = numstat
+// sizeNumstat (optional) is the imp's own commits only, so a runner-side
+// formatter commit counts toward scope but not toward the size budget.
+export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = 80, allow = [] }) {
+    const parse = (s) => s
         .split('\n')
         .filter(Boolean)
         .map((l) => {
             const [a, d, path] = l.split('\t');
             return { path, lines: (Number(a) || 0) + (Number(d) || 0) };
         });
-    const lines = files.reduce((n, f) => n + f.lines, 0);
+    const files = parse(numstat);
+    const lines = parse(sizeNumstat).reduce((n, f) => n + f.lines, 0);
     const reasons = [];
     if (!commits.length) reasons.push('no commits');
     for (const f of files) {

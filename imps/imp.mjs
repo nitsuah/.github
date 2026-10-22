@@ -161,23 +161,46 @@ async function run() {
 function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
+    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: true, stdio: 'inherit', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
+    // Formatting is mechanical, so the runner does it, not the model: run the
+    // repo's formatter and commit any change as a separate runner commit.
+    let formatted = false;
+    // On a re-run the runner's format commit is already there; size is
+    // measured up to the imp's last commit either way.
+    const runnerCommit = git(r.worktree, 'log', '-1', '--format=%s').out.includes('(imp runner)');
+    const impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
+    if (meta.format && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
+        console.log(`format: ${meta.format}`);
+        shell(meta.format);
+        if (git(r.worktree, 'status', '--porcelain').out) {
+            git(r.worktree, 'add', '-A');
+            git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
+            formatted = true;
+        }
+    }
     const numstat = git(r.worktree, 'diff', '--numstat', `${r.baseSha}..HEAD`).out;
     const log = git(r.worktree, 'log', '--format=%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean);
     const dirty = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
+    let lintExit = null;
     if (meta.test && commits.length) {
         console.log(`tests: ${meta.test}`);
-        const t = spawnSync(meta.test, { cwd: r.worktree, shell: true, stdio: 'inherit', env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
-        testExit = t.status;
+        testExit = shell(meta.test);
+    }
+    if (meta.lint && commits.length) {
+        console.log(`lint: ${meta.lint}`);
+        lintExit = shell(meta.lint);
     }
     const g = gate({
         numstat, commits, testExit,
+        sizeNumstat: git(r.worktree, 'diff', '--numstat', `${r.baseSha}..${impHead}`).out,
         maxLines: Number(meta.maxLines || 80),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
     if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);
-    update(id, { gate: { ...g, at: new Date().toISOString() } });
+    if (lintExit) g.reasons.push(`lint exit ${lintExit}`), (g.pass = false);
+    update(id, { gate: { ...g, formatted, lintExit, at: new Date().toISOString() } });
     console.log(g.pass ? `gate PASS (${g.lines} lines: ${g.files.join(', ')})` : `gate FAIL: ${g.reasons.join('; ')}`);
 }
 

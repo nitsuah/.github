@@ -64,6 +64,10 @@ test('gate fails on size, scope, deny paths, trailer and tests', () => {
     assert.ok(g.reasons.includes('commit missing imp trailer'));
     assert.ok(g.reasons.includes('tests exit 1'));
     assert.deepEqual(gate({ numstat: '', commits: [], testExit: null }).reasons, ['no commits', 'tests not run']);
+    // A runner formatter commit counts for scope, not for the size budget.
+    const f = gate({ numstat: '30\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', sizeNumstat: '26\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', commits: [ok], testExit: 0, maxLines: 40, allow: ['app/lib/'] });
+    assert.equal(f.pass, true, f.reasons.join());
+    assert.equal(f.lines, 40);
 });
 
 test('report tallies runs, tokens, error kinds and recurring gate failures', () => {

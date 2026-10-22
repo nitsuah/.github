@@ -25,7 +25,9 @@ Front matter, then the issue-specific body. `PREAMBLE.md` is prepended to every 
 repo: fire                       # folder under ~/code
 issue: 166
 test: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 sh -c "npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run --config config/vitest.config.ts"
-maxLines: 40                     # gate: total added+deleted lines
+format: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs --fix app/lib
+lint: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs app/lib
+maxLines: 40                     # gate: the imp's added+deleted lines (runner formatting excluded)
 allow: app/lib/, docs/CHANGELOG.md   # gate: path prefixes the diff may touch
 ---
 ## Issue nitsuah/fire#166
@@ -39,7 +41,8 @@ allow: app/lib/, docs/CHANGELOG.md   # gate: path prefixes the diff may touch
 - **Clean environment.** The imp gets PATH and the 9router URL and key, nothing else. No Claude session tokens, no GitHub token.
 - **No push.** The worktree's push URL is `no_push`. Only `imp.mjs pr` pushes, and only after the gate passes.
 - **Tool allowlist.** Read, Edit, Write, Glob, Grep, `git status|diff|add|commit|log|checkout --`, `docker run`. No `gh`, no host npm/node.
-- **Gate.** Tests exit 0 in Docker, at least one commit, every commit has the imp trailer, no uncommitted leftovers, the diff is within `maxLines` (default 80), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles.
+- **Formatting is the runner's job.** If the brief has `format:`, the gate runs it first and commits any change as a separate `style: … (imp runner)` commit. The model never spends turns on whitespace.
+- **Gate.** Tests (filter by path prefix, not exact filename) and `lint:` exit 0 in Docker, at least one commit, every commit has the imp trailer, no uncommitted leftovers, the diff is within `maxLines` (default 80), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles.
 - **Review.** Imp PRs open as **drafts** labelled `imp`, saying `Fixes #n`. They're never auto-merged. Marking the draft "ready for review" is your +1, and CodeRabbit reviews it like any other PR. Once imps run unattended, they move to a GitHub App identity (IMPS-PLAN D5), so a ruleset can require your approval on `imp` PRs; you can't approve PRs pushed under your own account.
 
 ## What gets measured
@@ -72,4 +75,5 @@ Don't draw conclusions from runs served by a fallback model; note them and rerun
 ## Known gaps (next)
 
 - **Baseline tests.** The gate fails on any failing test. It should also run the test command on `baseSha` and only count failures that are new. fire's server fail-fast tests time out locally while main's CI is green.
-- **Pin a real model.** Both fire#166 runs went through `MAX` while 9router was in fallback: 10–11 free models, 43–65 switches, 0 cache reads. Add a pre-run probe that holds the run when the served model isn't the intended one (IMPS-PLAN D9).
+- **Model probe.** Runs 1–2 went through a 9router build that sent `MAX` to OpenRouter's free auto-router: 10–11 models and 43–65 switches per run. Rebuilt on v0.5.104, `MAX` serves one model (run 3: 0 switches, gate pass). Add a pre-run probe that holds the run if the served model changes mid-run (IMPS-PLAN D9).
+- **Prompt caching.** Run 3 sent 1.57M input tokens with 0 cache reads for a 40-line fix. Find a 9router route for `MAX` that caches, or trim the context each turn resends.
