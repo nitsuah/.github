@@ -197,15 +197,19 @@ for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip:
 log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
 if (dry || !picked.length) process.exit(0);
 
-// Run up to `concurrency` imps at once (worktrees and branches are per run, so same-repo imps don't clash).
-const pool = [...picked];
+// Run up to `concurrency` repos at once. Imps for the same repo run one after another:
+// they share the repo's `imp-nm-<repo>` node_modules volume, and two `npm ci` runs on it would race.
+const byRepo = new Map();
+for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
+const pool = [...byRepo.values()];
 await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
     while (pool.length) {
-        const i = pool.shift();
-        try {
-            await work(i);
-        } catch (e) {
-            log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+        for (const i of pool.shift()) {
+            try {
+                await work(i);
+            } catch (e) {
+                log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+            }
         }
     }
 }));
