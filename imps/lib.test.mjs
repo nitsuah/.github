@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
@@ -213,3 +213,15 @@ test('report tallies runs, tokens, error kinds and recurring gate failures', () 
     assert.match(out, /diff N lines > N ×1/);
     assert.match(out, /\| r1 \| fire#166 \|/);
 });
+
+test('triageWork: idle when nothing is open, otherwise says why', () => {
+    assert.deepEqual(triageWork({}), { work: false, reasons: [], unbriefed: [] });
+    const issue = (o) => ({ repo: 'fire', number: 1, title: 'x', labels: ['bug'], comments: [], ...o });
+    assert.equal(triageWork({ issues: [issue({ comments: ['<!-- imp-triage -->'] })] }).work, false);
+    assert.equal(triageWork({ issues: [issue({ labels: ['bug', 'imp:ready'] })] }).work, false);
+    assert.equal(triageWork({ issues: [issue({ repo: 'kryptos' }), issue({ title: 'Revisit: foo' })] }).work, false);
+    assert.deepEqual(triageWork({ issues: [issue({ number: 7 })] }).unbriefed, ['fire#7']);
+    const r = triageWork({ impPRs: [{ labels: ['imp'] }, { labels: ['imp', 'imp:needs-human'] }], failed: [issue({})] });
+    assert.equal(r.reasons.length, 3);
+});
+

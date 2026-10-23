@@ -319,3 +319,27 @@ export function report(rows) {
     if (rs.length) out.push('gate failures: ' + rs.map(([k, v]) => `${k} ×${v}`).join(' · '));
     return out.join('\n');
 }
+
+// Does the daily hypervisor have anything to do? Pure, so the model session can be
+// skipped (zero tokens) on quiet days. Mirrors the triage prompt's own filters:
+//   impPRs: [{ labels: [name] }]   open `imp` PRs
+//   issues: [{ repo, title, labels: [name], comments: [body] }]   open bug / bot:review issues
+//   failed: [issue]   open `imp:failed` issues
+export function triageWork({ impPRs = [], issues = [], failed = [] }) {
+    const reasons = [];
+    const escalate = impPRs.filter((p) => p.labels.includes('imp:needs-human')).length;
+    const mergeable = impPRs.length - escalate;
+    if (mergeable) reasons.push(`${mergeable} imp PR(s) to check for merge`);
+    if (escalate) reasons.push(`${escalate} imp PR(s) need a human`);
+    if (failed.length) reasons.push(`${failed.length} imp:failed issue(s) to re-brief`);
+    const unbriefed = issues.filter(
+        (i) =>
+            i.repo !== 'kryptos' &&
+            !i.title.startsWith('Revisit') &&
+            !i.labels.some((l) => l.startsWith('imp:')) &&
+            !i.comments.some((c) => c.trimStart().startsWith('<!-- imp-')),
+    );
+    if (unbriefed.length) reasons.push(`${unbriefed.length} issue(s) with no brief or triage note`);
+    return { work: reasons.length > 0, reasons, unbriefed: unbriefed.map((i) => `${i.repo}#${i.number}`) };
+}
+
