@@ -114,8 +114,8 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
 // The hourly dispatcher's choice. Pure so it can be tested.
 //   candidates: [{ repo, number, labels, createdAt }]  open `imp:ready` issues that have a brief
 //   repos: { [repo]: { humanPRs, impPRs, lastCommitHours } }
-// Rules: at most `max` issues, one per repo, never a repo that already has an
-// imp PR open (one in flight per repo avoids conflicting PRs), and never past
+// Rules: at most `max` issues, at most `perRepo` per repo counting imp PRs
+// already open there (default 1: one in flight avoids conflicting PRs), and never past
 // `wip` imp PRs open in total (review is the bottleneck). Quiet repos first:
 // no open human PRs, no commit in the last few hours. Within a repo,
 // bot:review (already diagnosed) before bugs, then oldest first.
@@ -136,19 +136,23 @@ export function loopBudget(rows, now = Date.now()) {
     return { runsLast24h, cooldown };
 }
 
-export function pickIssues({ candidates, repos, max = 5, wip = 8, quietHours = 6, dailyCap = Infinity, runsLast24h = 0, cooldown = {} }) {
+export function pickIssues({ candidates, repos, max = 5, wip = 8, perRepo = 1, quietHours = 6, dailyCap = Infinity, runsLast24h = 0, cooldown = {} }) {
     const openImp = Object.values(repos).reduce((n, r) => n + (r.impPRs || 0), 0);
     const room = Math.max(0, Math.min(max, wip - openImp, dailyCap - runsLast24h));
     const kind = (i) => (i.labels.includes('bot:review') ? 0 : i.labels.includes('bug') ? 1 : 2);
     const busy = (r) => (r.humanPRs || 0) * 10 + ((r.lastCommitHours ?? 99) < quietHours ? 20 : 0);
-    const best = new Map();
+    const byRepo = new Map();
     for (const i of candidates) {
         const r = repos[i.repo] || {};
-        if (r.impPRs || cooldown[i.repo]) continue;
-        const cur = best.get(i.repo);
-        if (!cur || kind(i) < kind(cur) || (kind(i) === kind(cur) && i.createdAt < cur.createdAt)) best.set(i.repo, i);
+        if (cooldown[i.repo] || (r.impPRs || 0) >= perRepo) continue;
+        byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
     }
-    return [...best.values()]
+    const picks = [];
+    for (const [repo, list] of byRepo) {
+        list.sort((a, b) => kind(a) - kind(b) || (a.createdAt < b.createdAt ? -1 : 1));
+        picks.push(...list.slice(0, perRepo - ((repos[repo] || {}).impPRs || 0)));
+    }
+    return picks
         .sort((a, b) => busy(repos[a.repo] || {}) - busy(repos[b.repo] || {}) || kind(a) - kind(b) || (a.createdAt < b.createdAt ? -1 : 1))
         .slice(0, room);
 }

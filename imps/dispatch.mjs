@@ -2,7 +2,7 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 8] [--concurrency 3] [--owner nitsuah] [--dry-run]
+//   node dispatch.mjs [--max 5] [--wip 8] [--per-repo 2] [--concurrency 3] [--owner nitsuah] [--dry-run]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage writes them). Each issue moves to
@@ -22,12 +22,18 @@ const { values: o } = parseArgs({
     options: {
         max: { type: 'string', default: '5' },
         wip: { type: 'string', default: '8' },
+        'per-repo': { type: 'string', default: '2' },
         concurrency: { type: 'string', default: '3' },
         'daily-cap': { type: 'string', default: '15' },
         owner: { type: 'string', default: 'nitsuah' },
         'dry-run': { type: 'boolean', default: false },
     },
 });
+const perRepo = Number(o['per-repo']);
+if (!Number.isInteger(perRepo) || perRepo < 1) {
+    console.error('--per-repo must be a positive integer');
+    process.exit(2);
+}
 const dry = o['dry-run'];
 mkdirSync(join(HOME, 'briefs'), { recursive: true });
 const LOG = join(HOME, 'dispatch.jsonl');
@@ -178,7 +184,7 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
-for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), dailyCap: Number(o['daily-cap']), ...budget })) {
+for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo, dailyCap: Number(o['daily-cap']), ...budget })) {
     const brief = briefFromComments(ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
@@ -191,15 +197,19 @@ for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip:
 log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
 if (dry || !picked.length) process.exit(0);
 
-// Run up to `concurrency` imps at once (one per repo, so no worktree clashes).
-const pool = [...picked];
+// Run up to `concurrency` repos at once. Imps for the same repo run one after another:
+// they share the repo's `imp-nm-<repo>` node_modules volume, and two `npm ci` runs on it would race.
+const byRepo = new Map();
+for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
+const pool = [...byRepo.values()];
 await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
     while (pool.length) {
-        const i = pool.shift();
-        try {
-            await work(i);
-        } catch (e) {
-            log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+        for (const i of pool.shift()) {
+            try {
+                await work(i);
+            } catch (e) {
+                log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+            }
         }
     }
 }));
