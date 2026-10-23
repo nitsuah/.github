@@ -29,6 +29,11 @@ const { values: o } = parseArgs({
         'dry-run': { type: 'boolean', default: false },
     },
 });
+const perRepo = Number(o['per-repo']);
+if (!Number.isInteger(perRepo) || perRepo < 1) {
+    console.error('--per-repo must be a positive integer');
+    process.exit(2);
+}
 const dry = o['dry-run'];
 mkdirSync(join(HOME, 'briefs'), { recursive: true });
 const LOG = join(HOME, 'dispatch.jsonl');
@@ -179,7 +184,7 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
-for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo: Number(o['per-repo']), dailyCap: Number(o['daily-cap']), ...budget })) {
+for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo, dailyCap: Number(o['daily-cap']), ...budget })) {
     const brief = briefFromComments(ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
