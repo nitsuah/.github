@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
@@ -232,5 +232,34 @@ test('triageWork: idle when nothing is open, otherwise says why', () => {
     assert.deepEqual(triageWork({ issues: [issue({ number: 7 })] }).unbriefed, ['fire#7']);
     const r = triageWork({ impPRs: [{ labels: ['imp'] }, { labels: ['imp', 'imp:needs-human'] }], failed: [issue({})] });
     assert.equal(r.reasons.length, 3);
+});
+
+test('summarizeRun records context size, first edit and whether tokens were metered', () => {
+    const asst = (name) => ({ type: 'assistant', message: { model: 'm', content: [{ type: 'tool_use', name, input: {} }] } });
+    const killed = summarizeRun([{ type: 'system', subtype: 'init', tools: [1, 2], slash_commands: [], skills: [] }, asst('Read'), asst('Edit')]);
+    assert.deepEqual(killed.init, { tools: 2, slashCommands: 0, skills: 0 });
+    assert.equal(killed.firstEditTurn, 2);
+    assert.equal(killed.unmetered, true); // no result event: no usage numbers
+    const done = summarizeRun([asst('Read'), { type: 'result', subtype: 'success', num_turns: 1, usage: { input_tokens: 5 } }]);
+    assert.equal(done.unmetered, false);
+    assert.equal(done.firstEditTurn, null);
+});
+
+test('repoTable counts issues, bugs, PRs and imp labels per repo, with a total row', () => {
+    const issue = (repo, ...labels) => ({ repository: { name: repo }, labels: labels.map((name) => ({ name })) });
+    const t = repoTable([issue('fire', 'bug', 'imp:ready'), issue('fire'), issue('vhs', 'bug', 'imp:failed')], [{ repository: { name: 'fire' }, labels: [{ name: 'imp' }] }]);
+    assert.deepEqual(t[0], { repo: 'fire', issues: 2, bugs: 1, prs: 1, impPrs: 1, ready: 1, failed: 0 });
+    assert.deepEqual(t.at(-1), { repo: 'TOTAL', issues: 3, bugs: 2, prs: 1, impPrs: 1, ready: 1, failed: 1 });
+});
+
+test('tokenTable estimates killed runs from the median input per turn and totals the waste', () => {
+    const run = (id, m, gate) => ({ id, repo: 'r', issue: 1, startedAt: '2026-10-23T00:00:00Z', metrics: m, gate });
+    const ok = run('imp_1', { turns: 10, toolTurns: 10, unmetered: false, tokens: { input: 300_000 }, durationMs: 60000 }, { pass: true });
+    const killed = run('imp_2', { turns: 0, toolTurns: 40, unmetered: true, tokens: { input: 0 }, end: 'killed-max-turns' }, undefined);
+    const t = tokenTable([ok, killed]);
+    assert.equal(t.medianInPerTurn, 30_000);
+    assert.equal(t.lines[1].input, 1_200_000);
+    assert.equal(t.lines[1].estimated, true);
+    assert.equal(t.totals.wastedInput, 1_200_000);
 });
 

@@ -61,11 +61,19 @@ const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'No
 // (2026-10-22: a 2-turn cap ran 4 turns). A turn is an assistant message that
 // calls a tool; past the cap the process is stopped and the run ends
 // `killed-max-turns`.
-export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, transcript, permissionMode = 'acceptEdits' }) {
+// noEditByTurn: stop a worker that has made this many tool calls without a single
+// Edit/Write (vhs#77 ran 41 tool calls exploring and never edited); ends `killed-no-edit`.
+// Context trim: the default CLI session sends ~60 slash commands, skills and every
+// built-in tool each turn; workers only need `tools`. IMPS_NO_TRIM=1 turns the trim off.
+export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
     const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
         '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
         '--output-format', 'stream-json', '--verbose'];
+    if (!process.env.IMPS_NO_TRIM) {
+        const builtin = [...new Set(tools.map((t) => t.replace(/\(.*$/, '')))];
+        args.push('--disable-slash-commands', '--no-session-persistence', '--tools', builtin.join(','));
+    }
     // Spawn the binary itself: a shell (the npm .cmd shim) splits multi-word args.
     const bin = process.platform === 'win32'
         ? join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
@@ -77,6 +85,8 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     let buf = '';
     let toolTurns = 0;
     let capped = false;
+    let edited = false;
+    let noEdit = false;
     child.stdout.on('data', (d) => {
         buf += d;
         let i;
@@ -90,7 +100,15 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
             out.write(JSON.stringify(ev) + '\n');
             if (ev.type === 'assistant') {
                 const uses = (ev.message?.content || []).filter((c) => c.type === 'tool_use');
-                for (const c of uses) console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
+                for (const c of uses) {
+                    console.log(`  ${c.name} ${JSON.stringify(c.input).slice(0, 110)}`);
+                    if (c.name === 'Edit' || c.name === 'Write') edited = true;
+                }
+                if (uses.length && noEditByTurn && !edited && toolTurns + 1 > noEditByTurn && !capped && !noEdit) {
+                    noEdit = true;
+                    console.log(`  ${noEditByTurn} tool calls with no edit; stopping`);
+                    child.kill('SIGTERM');
+                }
                 if (uses.length && ++toolTurns > maxTurns && !capped) {
                     capped = true;
                     console.log(`  turn cap ${maxTurns} reached; stopping`);
@@ -110,9 +128,38 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     await new Promise((done) => out.end(done));
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
     if (capped) metrics.end = 'killed-max-turns';
+    else if (noEdit) metrics.end = 'killed-no-edit';
     else if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
     metrics.toolTurns = toolTurns;
+    if (!metrics.turns) metrics.turns = toolTurns;
     return metrics;
+}
+
+// One plain chat completion through 9router (OpenAI format): no agent loop, no tools, no
+// 30k-token session resent every turn. For read-only work whose whole input fits in one prompt
+// (reviews). Returns the same shape the review path reads from runClaude.
+export async function chat({ prompt, model = 'MAX', maxTokens = 6000, minutes = 6 }) {
+    const env = cleanEnv();
+    const t0 = Date.now();
+    try {
+        const res = await fetch(`${env.ANTHROPIC_BASE_URL.replace(/\/$/, '')}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.ANTHROPIC_API_KEY}` },
+            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream: false }),
+            signal: AbortSignal.timeout(Number(minutes) * 60_000),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) return { end: `http-${res.status}`, finalText: '', served: [], turns: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, durationMs: Date.now() - t0, toolErrors: 0 };
+        const u = body.usage || {};
+        return {
+            end: body.choices?.[0]?.finish_reason === 'length' ? 'length' : 'success',
+            finalText: body.choices?.[0]?.message?.content || '',
+            served: body.model ? [body.model] : [], turns: 1, toolErrors: 0, durationMs: Date.now() - t0,
+            tokens: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cacheRead: u.prompt_tokens_details?.cached_tokens || 0, cacheWrite: 0 },
+        };
+    } catch (e) {
+        return { end: 'chat-error', error: e.message, finalText: '', served: [], turns: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, durationMs: Date.now() - t0, toolErrors: 0 };
+    }
 }
 
 // ── brief ─────────────────────────────────────────────────────────────────
