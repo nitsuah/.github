@@ -109,6 +109,16 @@ After every few runs, and weekly once imps are routine:
 3. That change goes in its own PR. Because the brief hash changes, the next runs show whether it helped.
 4. Delete a lesson once ~10 runs pass without hitting that failure. The preamble stays short.
 
+### Token review (hypervisor)
+
+The paid-model daily pass is the one cost we control, so review it on the same cadence as the runs above (weekly, or after ~10 triage logs):
+
+1. Read the `usage-start` / `usage-end` lines and the `tool calls ~n` totals in `stash/agent/logs/imps-triage.log`. Which sections spent the most?
+2. For each, ask in order: can a **deterministic script** do it (like `precheck.mjs`, which skips the model on quiet days)? If not, can a **free 9router model** do it (summaries, label checks, dedupe by error signature, templated briefs)? Only judgment calls (a brief for a new kind of bug, a conflict, an oversight call) stay on the paid model.
+3. Move one thing per review: write it as a kit script with a test, in its own PR, and delete that step from the triage prompt. Log the saving (calls or % of the 5-hour limit) next to the change.
+4. Add the next candidate to the 'Known gaps' list below so it isn't forgotten. Current candidates: merge passing imp PRs as a script, auto-bump `maxLines` on `diff N > M` gate failures, brief lint at post time, dedupe journey issues with the same error signature.
+
+
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
 
 ## Review
