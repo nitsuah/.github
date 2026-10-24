@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseReview, renderReview } from './lib.mjs';
-import { HOME, rows, update, sh, git, runClaude } from './runner.mjs';
+import { HOME, rows, update, sh, git, runClaude, chat } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -23,6 +23,7 @@ const { values: o, positionals: [id] } = parseArgs({
         model: { type: 'string', default: 'MAX' },
         minutes: { type: 'string', default: '12' },
         'dry-run': { type: 'boolean', default: false },
+        mode: { type: 'string', default: 'chat' }, // chat = one completion (cheap); agent = read-only claude -p session
     },
 });
 const r = rows().find((x) => x.id === id);
@@ -54,7 +55,23 @@ const transcript = join(HOME, 'runs', `${id}.review.jsonl`);
 // retry; the second attempt is reminded up front.
 let metrics;
 let rv;
-for (const attempt of [1, 2]) {
+let mode = o.mode;
+if (mode === 'chat') {
+    // The whole diff and brief are in the prompt, so one completion is enough. Anything
+    // unusable (HTTP error, truncated, no JSON block) falls back to the agent session.
+    metrics = await chat({
+        model: o.model, minutes: o.minutes,
+        prompt: `${prompt}
+
+**You cannot read other files in this mode: judge the diff and the context above only, and do not report a file as missing because you cannot see it. Keep the reasoning short and end with the required \`json\` block.**`,
+    });
+    rv = parseReview(metrics.finalText);
+    if (rv.error) {
+        console.log(`chat review unusable (${rv.error}, ${metrics.end}); falling back to the agent session`);
+        mode = 'agent';
+    }
+}
+for (const attempt of mode === 'agent' ? [1, 2] : []) {
     metrics = await runClaude({
         cwd: r.worktree, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
         prompt: attempt === 1 ? prompt : `${prompt}\n\n**Your previous attempt ended without the required \`json\` block. Keep it short and end with that block.**`,
@@ -67,7 +84,7 @@ for (const attempt of [1, 2]) {
 }
 const minutes = metrics.durationMs ? (metrics.durationMs / 60000).toFixed(1) : null;
 const record = {
-    at: new Date().toISOString(), model: o.model, transcript, end: metrics.end, turns: metrics.turns, minutes: Number(minutes),
+    at: new Date().toISOString(), mode, model: o.model, transcript, end: metrics.end, turns: metrics.turns, minutes: Number(minutes),
     served: metrics.served, tokens: metrics.tokens, toolErrors: metrics.toolErrors,
 };
 if (rv.error) {
@@ -82,5 +99,5 @@ if (!o['dry-run']) {
     if (post.code) throw new Error(`posting the review failed: ${post.err}`);
     url = post.out;
 }
-update(id, { review: { ...record, verdict: rv.verdict, modelVerdict: rv.modelVerdict, counts: rv.counts, findings: rv.findings, url } });
+if (!o['dry-run']) update(id, { review: { ...record, verdict: rv.verdict, modelVerdict: rv.modelVerdict, counts: rv.counts, findings: rv.findings, url } });
 console.log(o['dry-run'] ? body : `posted ${rv.verdict}: ${url}`);

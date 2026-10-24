@@ -171,6 +171,25 @@ First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority r
 - **Re-brief from the gate reasons.** When an issue goes `imp:failed` twice (vigil#276), read both gate reasons before writing the next brief. Tighten `allow:` and `maxLines`, quote the exact lines to change, and split the issue if it has two parts (vhs#77). Don't resend the same brief.
 - **Don't brief what needs a decision you can make yourself.** Pick the obvious option from the issue and the code (the dashboard is the source of truth over the MCP) and write it into the brief. Only ask the owner for a call that is costly or hard to undo, and ask it as a multiple-choice question.
 
+## Token savers and measuring them
+
+`node imps/stats.mjs` prints the two tables on demand: open issues / bugs / PRs / imp labels per repo, and per-run token use (`--repos`, `--tokens`, `--since 24h|7d|all`, `--json`). Runs killed before a usage report show an estimated input (`~`: tool calls x median input per turn).  First baseline (18 runs, 2026-10-22/23): 10.3M input, median 30k per turn, 36% of it in runs that never passed the gate, 0 cache reads, and reviews averaging 501k input each.
+
+What the kit does about it:
+
+- **Context trim.** Workers start with `--disable-slash-commands --no-session-persistence --tools <only what they use>`. A trivial prompt went from 14.5k to 7.7k input tokens (-47%) with the same answer. `IMPS_NO_TRIM=1` turns it off. Compare `metrics.init` (tool / slash-command / skill counts) in the ledger across versions.
+- **Fail fast.** An imp with 15 tool calls and no Edit/Write is stopped as `killed-no-edit` (vhs#77 burned 41 calls exploring twice). `metrics.firstEditTurn` records when the first edit landed.
+- **One-shot reviews.** `review.mjs` defaults to `--mode chat`: one `/v1/chat/completions` call with the diff, brief and issue in the prompt (about 5k input) instead of a read-only agent session (about 500k). It falls back to the agent session if the answer is unusable. `review.mode` in the ledger tells them apart.
+- **Honest metrics.** Killed runs now record `turns` from tool calls and `unmetered: true` instead of zeros.
+
+What 9router offers that we are not using yet (from its source, v0.5.104):
+
+- **RTK** (on by default) compresses `tool_result` text (`git diff`, `grep`, `ls`) in requests, 20-40% of input per its README; **Headroom** (external `/v1/compress`) and **Caveman** (terse replies, up to 65% fewer output tokens) are off. Header `X-9Router-Token-Saver: off` bypasses all of them for one request. Worth an A/B on a real batch of runs, because our per-turn input is mostly resent context, not tool output.
+- **No cache accounting.** Responses carry only `prompt_tokens` / `completion_tokens` (no cached-token field for the current `MAX` model), so cache hits cannot be measured through 9router today. The dashboard's `/api/usage/*` routes (stats, request-details, history) need a dashboard login, not the API key.
+- **`MAX` is a reasoning model** and may put its reasoning in `content`. Keep `max_tokens` generous for chat calls and parse for the `json` block rather than expecting only JSON.
+- **Baseline cost per call**: a one-line prompt cost 2.8k prompt tokens on `/v1/chat/completions`, so some system text is injected upstream.
+- Other endpoints (`/v1/messages/count_tokens`, `/v1/embeddings`, `/v1/search`, `/v1/web/fetch`, `/v1/models`) are available for cheap pre-checks, issue dedupe and the model probe.
+
 ## Known gaps (next)
 
 - **Baseline tests.** The gate fails on any failing test. It should also run the test command on `baseSha` and only count failures that are new. fire's server fail-fast tests time out locally while main's CI is green.

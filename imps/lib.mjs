@@ -24,7 +24,10 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
         served: [], modelSwitches: 0, turnMs: { max: 0, median: 0 },
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         costEstimateUsd: null, end: 'no-result', isError: true, durationMs: null, finalText: '',
+        // How big the per-turn context was, and how long the worker explored before its first edit.
+        init: null, firstEditTurn: null, unmetered: true,
     };
+    let toolTurn = 0;
     const stamps = [];
     let last = null;
     for (const e of events) {
@@ -36,8 +39,12 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
                 last = model;
             }
             if (e._ts) stamps.push(e._ts);
-            for (const c of e.message?.content || [])
-                if (c.type === 'tool_use') s.tools[c.name] = (s.tools[c.name] || 0) + 1;
+            const uses = (e.message?.content || []).filter((c) => c.type === 'tool_use');
+            if (uses.length) toolTurn++;
+            for (const c of uses) {
+                s.tools[c.name] = (s.tools[c.name] || 0) + 1;
+                if (s.firstEditTurn == null && (c.name === 'Edit' || c.name === 'Write')) s.firstEditTurn = toolTurn;
+            }
         } else if (e.type === 'user') {
             for (const c of e.message?.content || []) {
                 if (c.type !== 'tool_result' || !c.is_error) continue;
@@ -45,6 +52,8 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
                 const k = errorKind(typeof c.content === 'string' ? c.content : JSON.stringify(c.content));
                 s.errorKinds[k] = (s.errorKinds[k] || 0) + 1;
             }
+        } else if (e.type === 'system' && e.subtype === 'init') {
+            s.init = { tools: (e.tools || []).length, slashCommands: (e.slash_commands || []).length, skills: (e.skills || []).length };
         } else if (e.type === 'system' && e.subtype === 'permission_denied') {
             s.denials++;
         } else if (e.type === 'result') {
@@ -55,6 +64,7 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
             s.costEstimateUsd = e.total_cost_usd ?? null;
             s.finalText = String(e.result ?? '').slice(0, 2000);
             const u = e.usage || {};
+            s.unmetered = false;
             s.tokens = {
                 input: u.input_tokens || 0,
                 output: u.output_tokens || 0,
@@ -347,3 +357,61 @@ export function triageWork({ impPRs = [], issues = [], failed = [] }) {
     return { work: reasons.length > 0, reasons, unbriefed: unbriefed.map((i) => `${i.repo}#${i.number}`) };
 }
 
+// ── stats tables (used by stats.mjs) ──
+export function repoTable(issues, prs) {
+    const by = {};
+    const row = (n) => (by[n] ||= { repo: n, issues: 0, bugs: 0, prs: 0, impPrs: 0, ready: 0, failed: 0 });
+    for (const i of issues) {
+        const r = row(i.repository.name);
+        const L = i.labels.map((l) => l.name);
+        r.issues++;
+        if (L.includes('bug')) r.bugs++;
+        if (L.includes('imp:ready')) r.ready++;
+        if (L.includes('imp:failed')) r.failed++;
+    }
+    for (const p of prs) {
+        const r = row(p.repository.name);
+        r.prs++;
+        if (p.labels.some((l) => l.name === 'imp')) r.impPrs++;
+    }
+    const list = Object.values(by).sort((a, b) => b.issues - a.issues || b.prs - a.prs);
+    const total = list.reduce((t, r) => { for (const k of Object.keys(r)) if (k !== 'repo') t[k] += r[k]; return t; }, { repo: 'TOTAL', issues: 0, bugs: 0, prs: 0, impPrs: 0, ready: 0, failed: 0 });
+    return [...list, total];
+}
+
+const median = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0);
+
+export function tokenTable(all, { sinceMs = 0, now = Date.now() } = {}) {
+    const runs = all.filter((r) => r.startedAt && /^imp_\d/.test(r.id) && (!sinceMs || now - Date.parse(r.startedAt) < sinceMs));
+    const metered = runs.filter((r) => r.metrics && !r.metrics.unmetered && r.metrics.tokens?.input);
+    const inPerTurn = median(metered.map((r) => r.metrics.tokens.input / Math.max(1, r.metrics.turns || 1)));
+    const lines = runs.map((r) => {
+        const m = r.metrics || {};
+        const input = m.tokens?.input || 0;
+        const est = !input && (m.toolTurns || m.turns);
+        const turns = m.turns || m.toolTurns || 0;
+        return {
+            id: r.id, issue: `${r.repo}#${r.issue}`, turns, input: input || Math.round((m.toolTurns || 0) * inPerTurn),
+            estimated: !!est, inPerTurn: input ? Math.round(input / Math.max(1, turns)) : Math.round(inPerTurn),
+            minutes: m.durationMs ? +(m.durationMs / 60000).toFixed(1) : null, firstEdit: m.firstEditTurn ?? null,
+            ctxTools: m.init?.tools ?? null, end: m.end, gate: r.gate ? (r.gate.pass ? 'pass' : 'fail') : '-',
+            switches: m.modelSwitches ?? 0,
+        };
+    });
+    const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+    const wasted = lines.filter((l) => l.gate !== 'pass');
+    const rv = runs.map((r) => r.review).filter((v) => v?.tokens);
+    const reviews = {};
+    for (const v of rv) {
+        const k = v.mode || 'agent';
+        reviews[k] ||= { n: 0, input: 0, output: 0 };
+        reviews[k].n++;
+        reviews[k].input += v.tokens.input || 0;
+        reviews[k].output += v.tokens.output || 0;
+    }
+    return {
+        medianInPerTurn: Math.round(inPerTurn), lines,
+        totals: { runs: runs.length, input: sum(lines.map((l) => l.input)), wastedInput: sum(wasted.map((l) => l.input)), wastedRuns: wasted.length, pass: lines.filter((l) => l.gate === 'pass').length },
+        reviews: Object.entries(reviews).map(([mode, v]) => ({ mode, runs: v.n, avgInput: Math.round(v.input / v.n), avgOutput: Math.round(v.output / v.n) })),
+    };
+}

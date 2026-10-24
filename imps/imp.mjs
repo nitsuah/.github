@@ -70,7 +70,7 @@ async function run() {
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
-    const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, transcript: row.transcript });
+    const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
