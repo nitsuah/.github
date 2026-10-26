@@ -295,6 +295,7 @@ EOF
       fi
       ok "installed systemd user timer: imps-label-watch.timer (every 5 min)"
     fi
+    # Check lingering for both timer configurations, not just label-watch
     if ! loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes'; then
       bad "systemd user timers need lingering; run 'loginctl enable-linger $USER' and re-run setup"
       exit 1

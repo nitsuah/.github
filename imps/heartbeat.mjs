@@ -29,7 +29,13 @@ const config = (() => {
 const enabled = config.heartbeat === true || ['1', 'true'].includes(String(process.env.IMPS_HEARTBEAT || '').toLowerCase());
 if (!enabled) process.exit(0);
 
-const machine = config.machine || machineName();
+// Resolve machine name once, shared across all four record types:
+// heartbeat issues, claim comments, ledger rows, dispatch events.
+// Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
+function resolveMachine(config, env) {
+    return env.IMPS_MACHINE || config.machine || machineName();
+}
+const machine = resolveMachine(config, process.env);
 const title = `imps heartbeat: ${machine}`;
 const repo = config.kitRepo || DEFAULTS.kitRepo;
 
@@ -76,6 +82,8 @@ const match = (() => {
     }
 })();
 
+// Edit the existing issue body instead of appending a comment so issue-list
+// queries for heartbeat bodies always show current status.
 const write = match
     ? gh(['issue', 'edit', String(match.number), '-R', repo, '--body', body])
     : gh(['issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', 'imp']);
