@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -263,3 +263,48 @@ test('tokenTable estimates killed runs from the median input per turn and totals
     assert.equal(t.totals.wastedInput, 1_200_000);
 });
 
+
+test('shouldAutoCommit salvages a verified but uncommitted run (#54)', () => {
+    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 0 }), true);
+    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: false, testExit: 0 }), false);
+    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 1 }), false);
+    assert.equal(shouldAutoCommit({ impCommits: 1, dirty: true, testExit: 0 }), false);
+    assert.equal(shouldAutoCommit({}), false);
+});
+
+test('gate collapses uncommitted edits into one reason (#53)', () => {
+    assert.deepEqual(gate({ numstat: '', commits: [], testExit: 0, dirty: true }).reasons, ['edits left uncommitted']);
+    assert.deepEqual(gate({ numstat: '', commits: [], testExit: 0 }).reasons, ['no commits']);
+    assert.deepEqual(gate({ numstat: '', commits: [], testExit: null, dirty: false }).reasons, ['no commits', 'tests not run']);
+    const g = gate({ numstat: '1\t0\ta.js', commits: [], testExit: 0, dirty: true });
+    assert.equal(g.pass, false);
+    assert.deepEqual(g.reasons, ['edits left uncommitted']);
+});
+
+test('gate denies the kit defaults and imps-config at any depth (#57)', () => {
+    const ok = 'fix: x\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>';
+    for (const p of ['.github/imps-config.yml', 'imps/defaults.mjs', 'config/imps-config.yaml']) {
+        const g = gate({ numstat: `1\t0\t${p}`, commits: [ok], testExit: 0 });
+        assert.ok(g.reasons.includes(`denied path ${p}`), `${p} not denied: ${g.reasons.join()}`);
+        assert.equal(g.pass, false);
+    }
+    assert.equal(gate({ numstat: '1\t0\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, true);
+});
+
+test('prGuard refuses a closed or unknown issue (#56)', () => {
+    assert.deepEqual(prGuard({ issue: { number: 54, state: 'CLOSED' } }), { ok: false, reason: 'issue #54 is closed' });
+    assert.deepEqual(prGuard({ issue: { number: 54 } }), { ok: false, reason: 'cannot confirm issue #54 is open' });
+    assert.deepEqual(prGuard({}), { ok: false, reason: 'cannot confirm issue #? is open' });
+    assert.deepEqual(prGuard(), { ok: false, reason: 'cannot confirm issue #? is open' });
+    assert.deepEqual(prGuard({ issue: { number: 54, state: 'OPEN' } }), { ok: true });
+});
+
+test('staleImpLabels strips state labels but keeps imp:pr (#58)', () => {
+    const want = ['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human'];
+    assert.deepEqual(staleImpLabels(want.map((name) => ({ name }))), want);
+    assert.deepEqual(staleImpLabels(want), want);
+    assert.deepEqual(staleImpLabels([{ name: 'imp:pr' }, 'imp:pr', 'bug', { name: 'docs' }, { name: 'imp:ready' }]), ['imp:ready']);
+    assert.deepEqual(staleImpLabels([]), []);
+    assert.deepEqual(staleImpLabels(), []);
+    assert.deepEqual(staleImpLabels(undefined), []);
+});

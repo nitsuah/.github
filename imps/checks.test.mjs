@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
     evaluateChecks,
     checksFingerprint,
+    mergeReady,
     cleanMergesForRepo,
     mayAutoMerge,
     revertedImpNumbers,
@@ -235,4 +236,31 @@ test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {
     assert.equal(DEFAULTS.autoMergeTrust, 3);
     assert.equal(DEFAULTS.kitFolder, '.github');
     assert.equal(DEFAULTS.kitRepo, 'nitsuah/.github');
+});
+
+test('mergeReady requires green checks on the commit actually at the head (#55)', () => {
+    // stash#305: many green checks, one failure
+    const stash305 = [
+        { name: 'Validate packages: SUCCESS', state: 'SUCCESS' },
+        { name: 'Validate packages', state: 'FAILURE' },
+        { name: 'test', state: 'SUCCESS' },
+    ];
+    const g = evaluateChecks(stash305);
+    const bad = mergeReady({ headSha: 'abc', pushedHead: 'abc', checks: stash305 });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.reason, g.reason);
+
+    const moved = mergeReady({ headSha: 'abc', pushedHead: 'def', checks: [{ name: 'test', state: 'SUCCESS' }] });
+    assert.equal(moved.ok, false);
+    assert.equal(moved.reason, 'head moved since the checks ran');
+
+    const none = mergeReady({ headSha: '', pushedHead: '', checks: [] });
+    assert.equal(none.ok, false);
+    assert.equal(none.reason, 'no head sha');
+
+    const empty = mergeReady({ headSha: 'abc', pushedHead: 'abc', checks: [] });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.reason, evaluateChecks([]).reason);
+
+    assert.deepEqual(mergeReady({ headSha: 'abc', pushedHead: 'abc', checks: [{ name: 'test', state: 'SUCCESS' }] }), { ok: true });
 });

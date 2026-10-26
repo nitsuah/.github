@@ -92,14 +92,25 @@ export function errorKind(text = '') {
     return 'other';
 }
 
+// The kit's own defaults and each repo's guardrail config are off limits: an
+// imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
-    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/];
+    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+    /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/];
+
+// An imp that edited and verified but never committed is salvageable: the
+// runner commits for it rather than failing a run whose work is already done (#54).
+export function shouldAutoCommit({ impCommits, dirty, testExit } = {}) {
+    return impCommits === 0 && !!dirty && testExit === 0;
+}
 
 // The pre-push gate. Deterministic: numstat lines from
 // `git diff --numstat <base>..HEAD`, commit messages, and the test exit code.
 // sizeNumstat (optional) is the imp's own commits only, so a runner-side
 // formatter commit counts toward scope but not toward the size budget.
-export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = DEFAULTS.maxLines, allow = [] }) {
+// dirty (optional) collapses "no commits" and the uncommitted edits behind it
+// into one reason, so RSI files one issue instead of three (#53).
+export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -110,7 +121,7 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
     const files = parse(numstat);
     const lines = parse(sizeNumstat).reduce((n, f) => n + f.lines, 0);
     const reasons = [];
-    if (!commits.length) reasons.push('no commits');
+    if (!commits.length) reasons.push(dirty ? 'edits left uncommitted' : 'no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path))) reasons.push(`denied path ${f.path}`);
         if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
@@ -118,8 +129,31 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLin
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
     if (!(lines <= maxLines)) reasons.push(`diff ${lines} lines > ${maxLines}`);
     if (commits.length && !commits.every((c) => /Co-Authored-By: .*imp/i.test(c))) reasons.push('commit missing imp trailer');
-    if (testExit !== 0) reasons.push(testExit == null ? 'tests not run' : `tests exit ${testExit}`);
+    // "tests not run" is not a second fact when there was nothing to run them
+    // on: it is the same uncommitted-edit cause wearing another name (#53).
+    if (testExit !== 0 && !(testExit == null && dirty && !commits.length))
+        reasons.push(testExit == null ? 'tests not run' : `tests exit ${testExit}`);
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
+}
+
+// Refuse to open a PR for an issue that closed while the imp was working (#56).
+// A failed lookup is not proof the issue is open, so it fails closed.
+export function prGuard({ issue } = {}) {
+    const n = issue?.number ?? '?';
+    if (issue?.state === 'CLOSED') return { ok: false, reason: `issue #${n} is closed` };
+    if (!issue?.state) return { ok: false, reason: `cannot confirm issue #${n} is open` };
+    return { ok: true };
+}
+
+// Labels to strip when an issue closes. imp:pr is kept: it records that an imp
+// shipped here, so the dispatcher will not pick the repo up again (#58).
+const STALE_IMP = new Set(['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human']);
+
+export function staleImpLabels(labels = []) {
+    if (!Array.isArray(labels)) return [];
+    return labels
+        .map((l) => (typeof l === 'string' ? l : l?.name))
+        .filter((n) => STALE_IMP.has(n));
 }
 
 // The hourly dispatcher's choice. Pure so it can be tested.
@@ -198,9 +232,46 @@ export const RECLAIM_MARK = '<!-- imp-reclaim -->';
 // than this with no ledger row on this machine is stranded, not slow.
 export const CLAIM_TTL_MS = 3 * 3600_000;
 
-export function claimBody({ machine = '', at = '', id = '' } = {}) {
-    return `${CLAIM_MARK}\nClaimed by \`${machine || '?'}\`${id ? ` as \`${id}\`` : ''} at ${at || new Date().toISOString()}. ` +
-        'Released when the run ends; reclaimed automatically if this machine stops answering.';
+export function claimBody({ machine = '', at = '', id = '', heartbeatAt = '', startedAt = '', pr = null } = {}) {
+    const meta = JSON.stringify({ machine: machine || '?', startedAt: startedAt || at || new Date().toISOString(), heartbeatAt: heartbeatAt || at || new Date().toISOString(), pr });
+    return `${CLAIM_MARK}\n${CLAIM_META_OPEN}${meta}${CLAIM_META_CLOSE}\n` +
+        `Imp claim: **${machine || '?'}**${id ? ` (\`${id}\`)` : ''}, started ${startedAt || at || new Date().toISOString()}` +
+        `${heartbeatAt ? `, heartbeat ${heartbeatAt}` : ''}.` +
+        ' Released when the run ends; reclaimed automatically if the heartbeat stops.';
+}
+
+// The hidden JSON line makes a claim machine-readable (who, when, last heartbeat,
+// PR) without a second comment. Kept as a marker pair so an imp reviewer does
+// not read it as feedback.
+export const CLAIM_META_OPEN = '<!-- imp-claim-meta ';
+export const CLAIM_META_CLOSE = ' -->';
+
+export function parseClaim(body = '') {
+    const s = String(body || '');
+    if (!s.trimStart().startsWith(CLAIM_MARK)) return null;
+    const m = s.match(/<!-- imp-claim-meta (\{[\s\S]*?\}) -->/);
+    if (m) {
+        try {
+            const j = JSON.parse(m[1]);
+            return { machine: j.machine || '', startedAt: j.startedAt || '', heartbeatAt: j.heartbeatAt || j.startedAt || '', pr: j.pr || null, legacy: false };
+        } catch { /* fall through to the prose form */ }
+    }
+    // Claims written before the JSON line existed: keep them usable rather than
+    // dropping them, so #60's sweep still has a clock to read.
+    const who = (s.match(/Claimed by `([^`]+)`/) || s.match(/Imp claim: \*\*([^*]+)\*\*/) || [])[1] || '';
+    const at = ((s.match(/at (\S+?)\.\s/) || [])[1] || '');
+    return { machine: who, startedAt: at, heartbeatAt: at, pr: null, legacy: true };
+}
+
+export const CLAIM_HEARTBEAT_TTL_MS = 90 * 60_000;
+
+// A live run refreshes the claim's heartbeat; a dead one cannot. Age since the
+// last heartbeat is therefore the only honest liveness signal a label has (#69).
+export function claimExpired(claim, now = Date.now(), ttlMs = CLAIM_HEARTBEAT_TTL_MS) {
+    if (!claim) return false;
+    const at = Date.parse(claim.heartbeatAt || claim.startedAt || '');
+    if (!Number.isFinite(at)) return false;
+    return now - at > ttlMs;
 }
 
 // The newest claim comment on an issue, or null. Comments come from the API
@@ -213,17 +284,62 @@ export function latestClaim(comments = []) {
 // imp:working, the newest claim is older than ttl, and this machine has no
 // ledger row for it (a row means a run may still be alive here — the hourly
 // lock already serialises this machine). Returns a reason string or null.
-export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, machine = '', ttl = CLAIM_TTL_MS, now = Date.now() } = {}) {
+export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, machine = '', ttl = CLAIM_HEARTBEAT_TTL_MS, now = Date.now() } = {}) {
     if (!labels.includes('imp:working')) return null;
     if (ledgerHasRow) return null;
     const claim = latestClaim(comments);
     if (!claim) return 'imp:working with no claim comment — pre-lease claim, or the label was set by hand';
-    const at = Date.parse((claim.body.match(/at (\S+?)\.\s/) || [])[1] || claim.createdAt || '');
+    const parsed = parseClaim(claim.body);
+    const at = Date.parse((parsed && (parsed.heartbeatAt || parsed.startedAt)) || claim.createdAt || '');
     if (!Number.isFinite(at)) return `unparseable claim time on ${claim.createdAt || 'comment'}`;
     if (now - at < ttl) return null;
-    const who = (claim.body.match(/Claimed by `([^`]+)`/) || [])[1] || 'unknown';
+    const who = (parsed && parsed.machine) || 'unknown';
     if (who === machine) return null; // ours, and the lock already guards us
-    return `claimed by ${who} ${Math.round((now - at) / 3600_000)}h ago with no run here`;
+    return `claimed by ${who}, no heartbeat for ${Math.round((now - at) / 60_000)}min, and no run here`;
+}
+
+// ── the cycle lock ────────────────────────────────────────────────────────
+// A hard kill or a reboot skips the exit handler, so the lock file survives and
+// every tick skips for three hours. Staleness is therefore decided from what the
+// lock says, not only from its age (#68).
+export function lockBody({ pid = process.pid, host = '', startedAt = new Date().toISOString() } = {}) {
+    return JSON.stringify({ pid, host, startedAt });
+}
+
+export function lockIsStale({ text = '', mtimeMs = 0, now = Date.now(), bootTimeMs = 0, host = '', alive = () => false, maxAgeMs = DEFAULTS.lockMaxAgeMs } = {}) {
+    let lock = null;
+    try {
+        lock = JSON.parse(text);
+    } catch { /* legacy plain-PID lock, or a truncated write */ }
+    if (!lock || typeof lock !== 'object') {
+        // Legacy: a bare PID. Only the mtime is trustworthy.
+        if (bootTimeMs && mtimeMs && mtimeMs < bootTimeMs) return 'before-boot';
+        if (mtimeMs && now - mtimeMs > maxAgeMs) return 'expired';
+        return null;
+    }
+    const started = Date.parse(lock.startedAt || '');
+    if (bootTimeMs && Number.isFinite(started) && started < bootTimeMs) return 'before-boot';
+    // Only this host can answer for its own PID; another machine's lock is judged by age.
+    if (lock.host && host && lock.host === host && Number.isFinite(lock.pid) && !alive(lock.pid)) return 'pid-dead';
+    const since = Number.isFinite(started) ? started : mtimeMs;
+    if (since && now - since > maxAgeMs) return 'expired';
+    return null;
+}
+
+// ── waiting for 9router ───────────────────────────────────────────────────
+// One failed probe used to cost the whole hour, which meant a boot or a provider
+// blip silently skipped a cycle (#65). Backoff is bounded so the lock is held for
+// minutes, not for the hour.
+export function routerWaitDelays({ windowMs = 600_000, firstMs = 15_000, maxMs = 120_000 } = {}) {
+    const out = [];
+    let total = 0;
+    let d = firstMs;
+    while (d > 0 && total + d <= windowMs) {
+        out.push(d);
+        total += d;
+        d = Math.min(d * 2, maxMs);
+    }
+    return out;
 }
 
 // The reviewer's answer is the last ```json block in its final text. The

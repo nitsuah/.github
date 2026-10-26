@@ -44,6 +44,18 @@ export function evaluateChecks(checks = []) {
 }
 
 /**
+ * May the runner merge right now? The checks must describe the commit that is
+ * actually at the head: a push after the poll invalidates the green result (#55).
+ */
+export function mergeReady({ headSha, pushedHead, checks = [] } = {}) {
+    if (!headSha) return { ok: false, reason: 'no head sha' };
+    if (headSha !== pushedHead) return { ok: false, reason: 'head moved since the checks ran' };
+    const ev = evaluateChecks(checks);
+    if (!ev.green) return { ok: false, reason: ev.reason };
+    return { ok: true };
+}
+
+/**
  * Fingerprint a check list so we can require N consecutive identical green polls
  * before merging (late-starting workflows won't be skipped).
  */
