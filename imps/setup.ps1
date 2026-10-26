@@ -350,15 +350,33 @@ if (-not $SkipTask) {
     Write-Host "`nscheduled task:" -ForegroundColor Cyan
     # Unregister any previous task, then recreate (idempotent re-register).
     & schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
-    & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR "conhost.exe --headless cmd.exe /d /c `"$hourly`"" /RL LIMITED /F | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        # Fallback without conhost headless (older Windows)
-        & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR "cmd.exe /d /c `"$hourly`"" /RL LIMITED /F | Out-Null
-    }
-    if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$TaskName' (hourly at :07)" }
-    else {
-        Write-Bad "could not register '$TaskName' (run elevated if needed)"
-        Write-Hint "Manual: schtasks /Create /TN $TaskName /SC HOURLY /ST 00:07 /TR `"cmd.exe /d /c $hourly`""
+    # ONE task, two triggers: hourly at :07 plus 2 min after logon so a reboot or
+    # login dispatches without waiting for the slot (#66). At-logon, not startup:
+    # the runner needs the user profile (~/.claude/settings.json, gh auth). A
+    # second task would trip warlock.mjs's "exactly one dispatch task" check.
+    try {
+        # Next :07, not today's — a past start would fire the task immediately on every re-run.
+        $start = (Get-Date).Date.AddMinutes(7)
+        while ($start -le (Get-Date)) { $start = $start.AddHours(1) }
+        $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+        $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+        $logonTrigger.Delay = 'PT2M'
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c `"$hourly`""
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($hourlyTrigger, $logonTrigger) -Force -ErrorAction Stop | Out-Null
+        Write-Ok "registered task '$TaskName' (hourly at :07 + 2 min after logon)"
+    } catch {
+        # Policy or elevation refused the logon trigger: keep the hourly task anyway.
+        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR "conhost.exe --headless cmd.exe /d /c `"$hourly`"" /RL LIMITED /F 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR "cmd.exe /d /c `"$hourly`"" /RL LIMITED /F 2>$null | Out-Null
+        }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Bad "no at-logon trigger: $($_.Exception.Message)"
+            Write-Hint "task '$TaskName' still runs hourly at :07; add the logon trigger by hand if you want boot dispatch."
+        } else {
+            Write-Bad "could not register '$TaskName' (run elevated if needed)"
+            Write-Hint "Manual: schtasks /Create /TN $TaskName /SC HOURLY /ST 00:07 /TR `"cmd.exe /d /c $hourly`""
+        }
     }
 
     & schtasks /Delete /TN $WatchName /F 2>$null | Out-Null

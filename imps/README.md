@@ -20,7 +20,7 @@ That:
 2. Installs a **detached** kit at `%LOCALAPPDATA%\imps-runner` (override with `-RunnerPath` or `$env:IMPS_RUNNER`).
 3. Clones `nitsuah/.github` into `%USERPROFILE%\code\.github` (`IMPS_CODE`) for **kit self-work** — imps never edit the runner checkout.
 4. Keeps durable state in `%USERPROFILE%\.imps` (ledger, locks, logs, config) — **never** wiped by update/re-run.
-5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07) and `imps-label-watch` (every 5 min).
+5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07, plus 2 min after logon) and `imps-label-watch` (every 5 min).
 
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
 
@@ -37,7 +37,7 @@ gh repo clone nitsuah/.github /tmp/github-kit
 bash /tmp/github-kit/imps/setup.sh
 ```
 
-Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Scheduling is a crontab entry when `crontab` exists, and a **systemd user timer** (`imps-hourly.timer` at :07, `imps-label-watch.timer` every 5 min) otherwise — run `loginctl enable-linger "$USER"` so the timers survive logout. If neither exists, setup says so instead of half-succeeding.
+Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Scheduling is a crontab when `crontab` exists (`7 * * * *` plus `@reboot sleep 120`), and a **systemd user timer** (`imps-hourly.timer` at :07 and 2 min after boot, `imps-label-watch.timer` every 5 min) otherwise — run `loginctl enable-linger "$USER"` so the timers survive logout. If neither exists, setup says so instead of half-succeeding.
 
 ## What lives where
 
@@ -70,8 +70,8 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 
 | Signal | Behaviour |
 | --- | --- |
-| Lock file `~/.imps/dispatch.lock` | Skip if &lt; 3h old (one cycle at a time) |
-| 9router probe | Skip the whole cycle if `MAX` doesn't answer |
+| Lock file `~/.imps/dispatch.lock` | Skip if held by a live pid; a dead pid, a pre-boot lock, or &lt; 3h age is cleared and the cycle runs |
+| 9router probe | Wait up to 10 min with backoff before giving up a cycle (boot, provider blip) |
 | WIP / daily caps | Stop when the review pile or 24h run budget is full |
 | Repo cooldown | 24h pause after two straight gate failures |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |

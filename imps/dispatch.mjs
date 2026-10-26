@@ -10,11 +10,11 @@
 // commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, staleClaim } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
 import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -55,12 +55,34 @@ const gh = (args) => {
 const ghJson = (args) => JSON.parse(gh(args) || 'null');
 
 // ── one cycle at a time ───────────────────────────────────────────────────
+// A crash or a reboot skips the exit handler, and a lock nobody can clear then
+// blocks every tick for three hours. Staleness is decided from the lock's own
+// contents — dead pid, or written before this boot — with age as the backstop (#68).
 const LOCK = join(HOME, 'dispatch.lock');
-if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs < DEFAULTS.lockMaxAgeMs) {
-    log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
-    process.exit(0);
+const alive = (pid) => {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return e.code === 'EPERM'; // exists, owned by someone else
+    }
+};
+if (existsSync(LOCK)) {
+    const why = lockIsStale({
+        text: readFileSync(LOCK, 'utf8'),
+        mtimeMs: statSync(LOCK).mtimeMs,
+        bootTimeMs: Date.now() - uptime() * 1000,
+        host: hostname(),
+        alive,
+    });
+    if (!why) {
+        log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
+        process.exit(0);
+    }
+    log({ event: 'lock-cleared', reason: why, lock: readFileSync(LOCK, 'utf8').slice(0, 200) });
+    if (!dry) rmSync(LOCK, { force: true });
 }
-if (!dry) writeFileSync(LOCK, String(process.pid));
+if (!dry) writeFileSync(LOCK, lockBody({ pid: process.pid, host: hostname() }));
 const unlock = () => { if (!dry) rmSync(LOCK, { force: true }); };
 process.on('exit', unlock);
 
@@ -79,6 +101,21 @@ async function routerUp() {
     } catch {
         return false;
     }
+}
+
+// At boot, and after a provider blip, one failed probe used to cost the whole
+// hour. Wait a bounded time instead — the lock is already held, so label-watch
+// ticks skip rather than pile up behind it (#65).
+async function waitForRouter() {
+    if (await routerUp()) return { up: true, attempts: 1, waitedMs: 0 };
+    const delays = routerWaitDelays();
+    let waited = 0;
+    for (let i = 0; i < delays.length; i++) {
+        await new Promise((r) => setTimeout(r, delays[i]));
+        waited += delays[i];
+        if (await routerUp()) return { up: true, attempts: i + 2, waitedMs: waited };
+    }
+    return { up: false, attempts: delays.length + 1, waitedMs: waited };
 }
 
 // ── labels ────────────────────────────────────────────────────────────────
@@ -101,6 +138,42 @@ function relabel(repo, number, add, remove = []) {
 }
 const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
 
+// ── claim heartbeat ───────────────────────────────────────────────────────
+// A run can take 25 minutes plus gate, PR and review, and while it runs the
+// issue looks identical to one whose imp died. Editing the claim comment on a
+// timer makes liveness visible from the issue alone (#67), and gives the TTL
+// sweep a clock it can trust (#69). Every failure here is logged and dropped:
+// a heartbeat must never fail a run.
+function startClaimBeat(repo, number, id) {
+    const startedAt = new Date().toISOString();
+    let commentId = null;
+    let pr = null;
+    let at = startedAt;
+    const beat = () => {
+        if (dry) return;
+        const body = claimBody({ machine: MACHINE, id, startedAt, heartbeatAt: at, pr });
+        try {
+            if (commentId) gh(['api', '-X', 'PATCH', `repos/${o.owner}/${repo}/issues/comments/${commentId}`, '-f', `body=${body}`]);
+            else {
+                const out = gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
+                commentId = (String(out).match(/issues\/comments\/(\d+)/) || [])[1] || null;
+            }
+        } catch (e) {
+            console.log(`claim heartbeat failed: ${e.message}`);
+        }
+    };
+    beat();
+    const timer = setInterval(() => {
+        at = new Date().toISOString();
+        beat();
+    }, CLAIM_BEAT_MS);
+    timer.unref?.(); // never keep the process alive for a heartbeat
+    return {
+        pr(url) { pr = url || pr; at = new Date().toISOString(); beat(); },
+        stop() { clearInterval(timer); },
+    };
+}
+
 // ── release stranded claims ───────────────────────────────────────────────
 // A claim has no lease in GitHub itself, so a machine that dies mid-run leaves
 // its issue on imp:working and no other machine can release it (runs.jsonl is
@@ -108,20 +181,56 @@ const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(n
 // brief is still valid. See lib.mjs staleClaim and WARLOCK.md.
 async function releaseStrandedClaims() {
     const stranded = [];
-    const liveHere = new Set(ledger().filter((r) => !r.endedAt).map((r) => r.issue));
+    const liveHere = new Set(readLedger().filter((r) => !r.endedAt).map((r) => r.issue));
     for (const issue of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels'])) {
         const repo = issue.repository.name;
         const labels = issue.labels.map((l) => l.name);
         const comments = ghJson(['issue', 'view', String(issue.number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
         const why = staleClaim({ labels, comments, ledgerHasRow: liveHere.has(issue.number), machine: MACHINE });
         if (!why) continue;
-        log({ event: 'reclaim', repo, number: issue.number, why });
+        // A heartbeat that stopped is a dead run even before the claim is old:
+        // release it so a long-but-live run is never stolen (#69).
+        const claim = parseClaim((latestClaim(comments) || {}).body || '');
+        const expired = claimExpired(claim);
+        log({ event: expired ? 'claim-released' : 'reclaim', repo, number: issue.number, why, machine: claim?.machine });
         if (dry) continue;
-        comment(repo, issue.number, `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
+        comment(repo, issue.number, expired
+            ? `<!-- imp-reclaim -->\nReleased: ${claim.machine || 'a machine'}'s claim had no heartbeat since ${claim.heartbeatAt || '?'} (TTL 90 min). Back to \`imp:ready\`.`
+            : `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
         relabel(repo, issue.number, 'imp:ready', ['imp:working']);
         stranded.push(`${repo}#${issue.number}`);
     }
     return stranded;
+}
+
+// ── closed issues keep imp:* state labels forever ─────────────────────────
+// A closed issue still carrying imp:working or imp:failed reads as live queue
+// state to every machine's search, and a human triaging the list sees work
+// that is not real. imp:pr stays: it is the "an imp shipped this" marker (#58).
+async function clearStaleLabels() {
+    const cleared = [];
+    const seen = new Map();
+    for (const label of ['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human']) {
+        let hits = [];
+        try {
+            hits = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'closed', '--label', label, '--limit', '100', '--json', 'repository,number,labels']) || [];
+        } catch (e) {
+            log({ event: 'label-cleanup-error', error: e.message });
+            continue;
+        }
+        for (const i of hits) seen.set(`${i.repository.name}#${i.number}`, i);
+    }
+    for (const issue of seen.values()) {
+        const repo = issue.repository.name;
+        const stale = staleImpLabels(issue.labels);
+        if (!stale.length) continue;
+        log({ event: 'label-cleanup', repo, number: issue.number, removed: stale });
+        if (dry) continue;
+        const r = gh(['issue', 'edit', String(issue.number), '-R', `${o.owner}/${repo}`, ...stale.flatMap((l) => ['--remove-label', l])]);
+        if (r.code) log({ event: 'label-cleanup-error', repo, number: issue.number, out: String(r.out || r.err || '').slice(-300) });
+        else cleared.push(`${repo}#${issue.number}`);
+    }
+    return cleared;
 }
 
 // ── an imp, end to end ────────────────────────────────────────────────────
@@ -133,54 +242,77 @@ const node = (args, script) => new Promise((done) => {
     p.stderr.on('data', (d) => (out += d));
     p.on('close', (code) => done({ code, out }));
 });
-const ledgerRow = (id) => readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).find((r) => r.id === id);
+// The ledger is read fresh each time it is needed: a fix round appended rows
+// while this cycle was running. A missing file is an empty ledger, not a crash.
+function readLedger() {
+    try {
+        return readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch {
+        return [];
+    }
+}
+const ledgerRow = (id) => readLedger().find((r) => r.id === id);
 const MACHINE = machineName();
+// How often a running claim refreshes its heartbeat. Well under the 90 min TTL
+// so a live run always looks alive, and cheap enough to ignore.
+const CLAIM_BEAT_MS = 10 * 60_000;
 
 async function work(issue) {
     const { repo, number } = issue;
     relabel(repo, number, 'imp:working', ['imp:ready']);
-    // A label has no owner, so write one down. Without this a machine that dies
-    // leaves the issue on imp:working for the whole fleet (#60).
-    comment(repo, number, claimBody({ machine: MACHINE }));
-    const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
-    const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
-    if (!id) {
-        relabel(repo, number, 'imp:failed', ['imp:working']);
-        comment(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
-        return log({ event: 'run-error', repo, number, out: run.out.slice(-500) });
-    }
-    await node(['gate', id]);
-    const row = ledgerRow(id);
-    const m = row.metrics || {};
-    const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
-    if (row.gate?.pass) {
-        const pr = await node(['pr', id]);
-        const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
-        if (url) {
-            relabel(repo, number, 'imp:pr', ['imp:working']);
-            comment(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
-            // The review + merge decision live inside `imp.mjs pr`.
-            return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
+    // A label has no owner, so write one down and keep it beating. Without this a
+    // machine that dies leaves the issue on imp:working for the whole fleet, and
+    // a live run is indistinguishable from a dead one (#60, #67).
+    const claim = startClaimBeat(repo, number);
+    try {
+        const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
+        const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
+        if (!id) {
+            relabel(repo, number, 'imp:failed', ['imp:working']);
+            comment(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
+            return log({ event: 'run-error', repo, number, out: run.out.slice(-500) });
+        }
+        await node(['gate', id]);
+        const row = ledgerRow(id);
+        const m = row.metrics || {};
+        const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
+        if (row.gate?.pass) {
+            const pr = await node(['pr', id]);
+            const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
+            if (url) {
+                claim.pr(url);
+                relabel(repo, number, 'imp:pr', ['imp:working']);
+                comment(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
+                // The review + merge decision live inside `imp.mjs pr`.
+                return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
+            }
+            relabel(repo, number, 'imp:failed', ['imp:working']);
+            comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
+            return log({ event: 'pr-error', repo, number, id, out: pr.out.slice(-500) });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
-        return log({ event: 'pr-error', repo, number, id, out: pr.out.slice(-500) });
+        comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}\n\nNeeds a new brief or a human.`);
+        log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
+    } finally {
+        claim.stop();
     }
-    relabel(repo, number, 'imp:failed', ['imp:working']);
-    comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}\n\nNeeds a new brief or a human.`);
-    log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
 }
 
 // ── the cycle ─────────────────────────────────────────────────────────────
-if (!(await routerUp())) {
-    log({ event: 'skip', reason: '9router did not answer a MAX probe' });
+const router = await waitForRouter();
+if (!router.up) {
+    log({ event: 'skip', reason: '9router not up after 10 min', attempts: router.attempts, waitedMs: router.waitedMs });
     process.exit(0);
 }
+if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, waitedMs: router.waitedMs });
 
 // Release claims left behind by a machine that stopped mid-run, before picking
 // anything: otherwise the queue looks emptier than it is (#60).
 const reclaimed = await releaseStrandedClaims();
 if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
+
+const labelCleared = await clearStaleLabels();
+if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelCleared.length}: ${labelCleared.join(', ')}`);
 
 // Sweep the open imp PRs first (owner-approved 2026-10-22): answer review
 // feedback and red CI with a 9router fix round. fix.mjs pushes only to the
@@ -188,7 +320,7 @@ if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.jo
 // imp:needs-human. A PR with nothing to act on costs only gh calls.
 const openImp = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels'])
     .filter((p) => !p.labels.some((l) => l.name === 'imp:needs-human'));
-const ledger = readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+const ledger = readLedger();
 for (const p of openImp) {
     const row = ledger.find((r) => r.pr === p.url);
     if (!row) continue; // opened from another machine's ledger
