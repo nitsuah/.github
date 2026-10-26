@@ -196,6 +196,27 @@ export function loadBrief(path, wt) {
 // command the model types are the same string.
 export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`;
 
+// ── model pool ────────────────────────────────────────────────────────────
+// Which models a run may use. `prefer` orders the free combos 9router rotates
+// through; `fallback` is the paid floor. Quota is a shared counter next to the
+// code, so concurrent runs decrement the same file.
+export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
+const QUOTA = join(HERE, 'model_quota.json');
+const readQuota = () => { try { return JSON.parse(readFileSync(QUOTA, 'utf8')); } catch { return {}; } };
+
+export function pickModel(pool = MODEL_POOL, strategy = 'fallback') {
+    const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
+    const quota = readQuota();
+    return order.find((m) => (quota[m] ?? 1) > 0) || order[0];
+}
+
+export function decrementQuota(model) {
+    const quota = readQuota();
+    if (!(model in quota)) return;
+    quota[model] = Math.max(0, quota[model] - 1);
+    writeFileSync(QUOTA, JSON.stringify(quota, null, 2) + '\n');
+}
+
 // What an imp may do in its worktree: edit, read-only and commit git, and
 // RUNTEST. Never a general docker/npm/node permission (they could mount
 // ~/.ssh or the Docker socket), and nothing that pushes.

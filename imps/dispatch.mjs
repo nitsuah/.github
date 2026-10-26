@@ -127,10 +127,9 @@ async function work(issue) {
         if (url) {
             relabel(repo, number, 'imp:pr', ['imp:working']);
             comment(repo, number, `An imp opened a draft PR: ${url} (run \`${id}\`: ${stats}). It stays a draft until a human marks it ready.`);
-            // One read-only review through 9router, posted as a COMMENT. A failed
-            // review never blocks the PR; it's logged and the human reviews anyway.
-            const rv = await node(['review', id], 'review.mjs');
-            return log({ event: 'pr', repo, number, id, url, review: (rv.out.match(/posted (\w+)/) || [])[1] || 'failed' });
+            // The review runs inside `imp.mjs pr` (one place, so the auto-merge
+            // decision sees the verdict). Nothing left to do here but log it.
+            return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
         comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);

@@ -19,11 +19,13 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL } from './runner.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -37,16 +39,25 @@ const { values: o, positionals: pos } = parseArgs({
         budget: { type: 'string', default: '15' },
         worktree: { type: 'string' },
         slack: { type: 'string', default: '0' },
+        modelStrategy: { type: 'string', default: 'fallback' },
     },
 });
 
 // ── commands ──────────────────────────────────────────────────────────────
+/**
+ * Validate brief front‑matter.
+ * Ensures required `repo` and `issue` fields exist and that `maxLines` is numeric.
+ * Throws on validation errors.
+ */
 async function validateBrief(meta) {
     if (!meta.repo) throw new Error('Brief must specify repo');
     if (!meta.issue) throw new Error('Brief must specify issue');
     if (meta.maxLines && isNaN(Number(meta.maxLines))) throw new Error('Brief maxLines must be numeric');
     // add more checks as needed
 }
+
+// ── run command ─────────────────────────────────────────────────────────────
+async function run() {
     // Docker readiness check – abort if Docker Desktop not running
     const dockerInfo = spawnSync('docker', ['info'], { encoding: 'utf8', windowsHide: true });
     if (dockerInfo.status !== 0) {
@@ -136,7 +147,7 @@ function runGate(id) {
         numstat, commits, testExit,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
-        maxLines: Number(meta.maxLines || 80) + Number(o.slack),
+        maxLines: Number(meta.maxLines || 15) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
     if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);
@@ -145,23 +156,7 @@ function runGate(id) {
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, { gate: { ...g, formatted, lintExit, head, at: new Date().toISOString() } });
-    if (g.pass) {
-        // Auto‑review after a passing gate
-        const reviewScript = join(HERE, 'review.mjs');
-        const rev = spawnSync('node', [reviewScript, id, '--model', o.model, '--dry-run'], { encoding: 'utf8', windowsHide: true });
-        if (rev.status === 0) {
-            const output = rev.stdout.trim();
-            if (output.includes('posted approve')) {
-                // Auto‑merge the draft PR if review approved
-                const pr = rows().find((x) => x.id === id).pr;
-                const merge = sh('gh', ['pr', 'merge', pr, '--admin', '--squash', '--delete-branch']);
-                if (merge.code) console.error('auto‑merge failed:', merge.err);
-                else console.log('auto‑merged PR after approve');
-            }
-        } else {
-            console.error('auto‑review failed:', rev.stderr);
-        }
-    }
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
 function openPr(id) {
@@ -179,7 +174,7 @@ function openPr(id) {
     const body = [
         `Fixes #${r.issue}`, '',
         '> **Imp PR.** Written by a headless worker through 9router, then gated by the runner (tests in Docker, diff size, scope, trailer). ' +
-        'It stays a draft until @nitsuah marks it ready, and it is never auto-merged.', '',
+        'It stays a draft until @nitsuah marks it ready. If the imp reviewer approves *and* CI is green, the runner arms a squash auto-merge; nothing merges with a failing check or an open review thread.', '',
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
@@ -192,6 +187,16 @@ function openPr(id) {
     if (pr.code) throw new Error(pr.err);
     update(id, { pr: pr.out, outcome: 'open' });
     console.log(pr.out);
+    // Auto-review, then auto-merge only on approve *and* green CI.
+    // `--auto` so branch protection is still honoured (no --admin bypass).
+    const rev = spawnSync(process.execPath, [join(HERE, 'review.mjs'), id, '--model', o.model], { encoding: 'utf8', windowsHide: true });
+    if (rev.code) return console.error('auto-review failed:', rev.stderr.trim());
+    console.log(rev.stdout.trim().split('\n').pop());
+    if (!/posted approve/.test(rev.stdout)) return;
+    const checks = sh('gh', ['pr', 'checks', pr.out, '--json', 'name,state', '--jq', '[.[] | select(.state == "FAILURE" or .state == "ERROR")] | length']);
+    if (checks.code || Number(checks.out) > 0) return console.log('review approved; CI not green, leaving the PR open');
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--auto', '--squash', '--delete-branch']);
+    console.log(merge.code ? `auto-merge not armed: ${merge.err}` : 'auto-merge armed (squash)');
 }
 
 function outcome(id) {
