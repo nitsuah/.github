@@ -41,10 +41,10 @@ if (!runner) {
     check('runner has imps/dispatch.mjs', existsSync(dispatch), existsSync(dispatch) ? dispatch : `${dispatch} is missing`);
 
     if (isRepo) {
-        const st = git(['status', '--porcelain'], runner);
-        const dirty = (st.stdout || '').trim();
-        // model_quota.json is written by the kit itself and is expected churn.
-        const real = dirty.split('\n').filter((l) => l.trim() && !l.includes('model_quota.json'));
+        // Tracked changes only, matching what update/setup actually refuse on:
+        // an untracked file survives `reset --hard` and blocks nothing (#59).
+        const st = git(['status', '--porcelain', '--untracked-files=no'], runner);
+        const real = (st.stdout || '').trim().split('\n').filter((l) => l.trim());
         check('runner has no local edits', !real.length, real.length ? `${real.length} changed file(s) — setup.ps1 will refuse to reset: ${real[0].trim()}` : 'clean');
 
         const branch = (git(['rev-parse', '--abbrev-ref', 'HEAD'], runner).stdout || '').trim();

@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to IMPS_HOME/model_quota.json to start a machine with partial quota. Absent = full quota for the current window. Per machine state; never in the runner checkout.",
+  "MAX": { "used": 0, "window": 0 },
+  "openrouter/free": { "used": 0, "window": 0 }
+}

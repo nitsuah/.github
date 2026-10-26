@@ -224,25 +224,52 @@ export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`
 
 // ── model pool ────────────────────────────────────────────────────────────
 // Which models a run may use. `prefer` orders the free combos 9router rotates
-// through; `fallback` is the paid floor. Quota is a shared counter next to the
-// code, so concurrent runs decrement the same file.
+// through; `fallback` is the paid floor.
+//
+// Quota is machine state, not code: it lives in IMPS_HOME, because the runner
+// checkout is hard-reset to origin/main before every cycle. Keeping it in the
+// checkout meant a reset (a) wiped the counter back to its committed value and
+// (b) dirty-tree'd the checkout so update.ps1/setup.ps1 refused to run at all
+// (#59). One counter per machine also matches what it measures — this
+// machine's spend — and a per-machine home is what a second machine gets.
 export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
-const QUOTA = join(HERE, 'model_quota.json');
-const readQuota = () => { try { return JSON.parse(readFileSync(QUOTA, 'utf8')); } catch { return {}; } };
+const QUOTA = join(HOME, 'model_quota.json');
+
+// Counters refill on a rolling window. Without one, a counter that can finally
+// persist would run to 0 and stop the fleet permanently with no way back.
+const QUOTA_WINDOW_MS = DEFAULTS.quotaWindowMs;
+const QUOTA_DEFAULT = DEFAULTS.quotaPerWindow;
+const windowStart = (now) => Math.floor(now / QUOTA_WINDOW_MS) * QUOTA_WINDOW_MS;
+
+const readQuota = () => {
+    try {
+        return JSON.parse(readFileSync(QUOTA, 'utf8'));
+    } catch {
+        return {};
+    }
+};
+
+// { model: { used, window } } — a stale window counts as unused.
+const counter = (raw, model, now) => {
+    const c = raw[model];
+    if (!c || c.window !== windowStart(now)) return { used: 0, window: windowStart(now) };
+    return { used: c.used || 0, window: c.window };
+};
 
 // Returns null when every model in the order is out of quota: the caller must
 // stop rather than silently spend past the limit.
-export function pickModel(pool = MODEL_POOL, strategy = 'fallback') {
+export function pickModel(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
     const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
-    const quota = readQuota();
-    return order.find((m) => (quota[m] ?? 1) > 0) || null;
+    const raw = readQuota();
+    return order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT) || null;
 }
 
-export function decrementQuota(model) {
-    const quota = readQuota();
-    if (!(model in quota)) return;
-    quota[model] = Math.max(0, quota[model] - 1);
-    writeFileSync(QUOTA, JSON.stringify(quota, null, 2) + '\n');
+export function decrementQuota(model, now = Date.now()) {
+    const raw = readQuota();
+    const c = counter(raw, model, now);
+    raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
+    mkdirSync(HOME, { recursive: true });
+    writeFileSync(QUOTA, JSON.stringify(raw, null, 2) + '\n');
 }
 
 // What an imp may do in its worktree: edit, read-only and commit git, and

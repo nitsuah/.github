@@ -26,6 +26,12 @@ export const DEFAULTS = {
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
 
+    // Model quota: runs allowed per model per window, per machine. Lives in
+    // IMPS_HOME (not the runner checkout) and refills every window, so a
+    // counter that can finally persist cannot stop the fleet for good (#59).
+    quotaPerWindow: 1000,
+    quotaWindowMs: 24 * 3600_000,
+
     // Auto-merge: require this many clean merged imp PRs for the repo
     // (max of local ledger + GitHub-seeded history) before the runner will merge.
     autoMergeTrust: 3,

@@ -185,6 +185,47 @@ export function briefFromComments(comments = []) {
     return (fenced ? fenced[1] : body).trim() + '\n';
 }
 
+// ── claim lease ───────────────────────────────────────────────────────────
+// `imp:ready` → `imp:working` is the queue lock across machines, but a label
+// has no owner and no expiry: a machine that dies mid-run leaves the issue on
+// imp:working for everyone, and no other machine can release it because
+// runs.jsonl is per machine (#60). So a claim is written as a comment carrying
+// who took it and when, and the dispatcher reclaims stale ones.
+export const CLAIM_MARK = '<!-- imp-claim -->';
+export const RECLAIM_MARK = '<!-- imp-reclaim -->';
+
+// Generous: an imp run is `--minutes 25`, plus gate, PR, review. A claim older
+// than this with no ledger row on this machine is stranded, not slow.
+export const CLAIM_TTL_MS = 3 * 3600_000;
+
+export function claimBody({ machine = '', at = '', id = '' } = {}) {
+    return `${CLAIM_MARK}\nClaimed by \`${machine || '?'}\`${id ? ` as \`${id}\`` : ''} at ${at || new Date().toISOString()}. ` +
+        'Released when the run ends; reclaimed automatically if this machine stops answering.';
+}
+
+// The newest claim comment on an issue, or null. Comments come from the API
+// in creation order.
+export function latestClaim(comments = []) {
+    return [...comments].reverse().find((c) => (c.body || '').trimStart().startsWith(CLAIM_MARK)) || null;
+}
+
+// Is the claim on this issue stale? Staleness needs all three: the issue is on
+// imp:working, the newest claim is older than ttl, and this machine has no
+// ledger row for it (a row means a run may still be alive here — the hourly
+// lock already serialises this machine). Returns a reason string or null.
+export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, machine = '', ttl = CLAIM_TTL_MS, now = Date.now() } = {}) {
+    if (!labels.includes('imp:working')) return null;
+    if (ledgerHasRow) return null;
+    const claim = latestClaim(comments);
+    if (!claim) return 'imp:working with no claim comment — pre-lease claim, or the label was set by hand';
+    const at = Date.parse((claim.body.match(/at (\S+?)\.\s/) || [])[1] || claim.createdAt || '');
+    if (!Number.isFinite(at)) return `unparseable claim time on ${claim.createdAt || 'comment'}`;
+    if (now - at < ttl) return null;
+    const who = (claim.body.match(/Claimed by `([^`]+)`/) || [])[1] || 'unknown';
+    if (who === machine) return null; // ours, and the lock already guards us
+    return `claimed by ${who} ${Math.round((now - at) / 3600_000)}h ago with no run here`;
+}
+
 // The reviewer's answer is the last ```json block in its final text. The
 // verdict is recomputed from the findings, so a model that says "approve"
 // with a blocker in its list can't wave a PR through.

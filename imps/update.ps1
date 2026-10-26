@@ -24,7 +24,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $RunnerPath '.git'))) {
 }
 Push-Location $RunnerPath
 try {
-    $dirty = & git status --porcelain
+    # Tracked changes only: `reset --hard` never deletes untracked files, so an
+    # untracked file is not something this command can lose. model_quota.json
+    # used to be tracked and is now machine state in IMPS_HOME (#59) — after an
+    # upgrade it survives as an untracked leftover and must not block updates.
+    $dirty = & git status --porcelain --untracked-files=no
     if ($LASTEXITCODE -ne 0) { throw 'git status failed' }
     if ($dirty) { throw "$RunnerPath has local changes; refusing to reset. Use a dedicated runner path." }
     git fetch -q origin $Branch

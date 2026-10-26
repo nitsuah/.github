@@ -8,7 +8,11 @@ fi
 RUNNER="${RUNNER:-${XDG_DATA_HOME:-$HOME/.local/share}/imps-runner}"
 BRANCH="${IMPS_KIT_BRANCH:-main}"
 [[ -d "$RUNNER/.git" ]] || { echo "Not a kit checkout: $RUNNER (run setup.sh first)" >&2; exit 1; }
-if [[ -n "$(git -C "$RUNNER" status --porcelain)" ]]; then
+# Tracked changes only: `reset --hard` never deletes untracked files, so an
+# untracked file is not something this command can lose. model_quota.json used
+# to be tracked and is now machine state in IMPS_HOME (#59) — after an upgrade
+# it survives as an untracked leftover and must not block updates.
+if [[ -n "$(git -C "$RUNNER" status --porcelain --untracked-files=no)" ]]; then
   echo "$RUNNER has local changes; refusing to reset" >&2
   exit 1
 fi

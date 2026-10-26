@@ -10,11 +10,11 @@
 // commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, staleClaim } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -98,6 +98,29 @@ function relabel(repo, number, add, remove = []) {
 }
 const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
 
+// ── release stranded claims ───────────────────────────────────────────────
+// A claim has no lease in GitHub itself, so a machine that dies mid-run leaves
+// its issue on imp:working and no other machine can release it (runs.jsonl is
+// per machine). Reclaim rather than escalate: the work is idempotent and the
+// brief is still valid. See lib.mjs staleClaim and WARLOCK.md.
+async function releaseStrandedClaims() {
+    const stranded = [];
+    const liveHere = new Set(ledger().filter((r) => !r.endedAt).map((r) => r.issue));
+    for (const issue of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels'])) {
+        const repo = issue.repository.name;
+        const labels = issue.labels.map((l) => l.name);
+        const comments = ghJson(['issue', 'view', String(issue.number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
+        const why = staleClaim({ labels, comments, ledgerHasRow: liveHere.has(issue.number), machine: MACHINE });
+        if (!why) continue;
+        log({ event: 'reclaim', repo, number: issue.number, why });
+        if (dry) continue;
+        comment(repo, issue.number, `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
+        relabel(repo, issue.number, 'imp:ready', ['imp:working']);
+        stranded.push(`${repo}#${issue.number}`);
+    }
+    return stranded;
+}
+
 // ── an imp, end to end ────────────────────────────────────────────────────
 const IMP = join(HERE, 'imp.mjs');
 const node = (args, script) => new Promise((done) => {
@@ -108,10 +131,14 @@ const node = (args, script) => new Promise((done) => {
     p.on('close', (code) => done({ code, out }));
 });
 const ledgerRow = (id) => readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).find((r) => r.id === id);
+const MACHINE = hostname();
 
 async function work(issue) {
     const { repo, number } = issue;
     relabel(repo, number, 'imp:working', ['imp:ready']);
+    // A label has no owner, so write one down. Without this a machine that dies
+    // leaves the issue on imp:working for the whole fleet (#60).
+    comment(repo, number, claimBody({ machine: MACHINE }));
     const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
     const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
     if (!id) {
@@ -146,6 +173,11 @@ if (!(await routerUp())) {
     log({ event: 'skip', reason: '9router did not answer a MAX probe' });
     process.exit(0);
 }
+
+// Release claims left behind by a machine that stopped mid-run, before picking
+// anything: otherwise the queue looks emptier than it is (#60).
+const reclaimed = await releaseStrandedClaims();
+if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
 
 // Sweep the open imp PRs first (owner-approved 2026-10-22): answer review
 // feedback and red CI with a 9router fix round. fix.mjs pushes only to the
