@@ -226,11 +226,12 @@ if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
 fi
 export IMPS_CODE="$CODE"
 export IMPS_KIT_PATH="$RUNNER"
+export IMPS_KIT_BRANCH="$BRANCH"
 cd "$RUNNER"
 # set -e covers these, but only merged kit code may run unattended, and only if
 # the reset actually worked — a failed reset used to run stale code silently (#62).
-git fetch -q origin $BRANCH || { echo "git fetch failed"; exit 1; }
-git reset -q --hard origin/$BRANCH || { echo "git reset failed"; exit 1; }
+git fetch -q origin \$IMPS_KIT_BRANCH || { echo "git fetch failed"; exit 1; }
+git reset -q --hard origin/\$IMPS_KIT_BRANCH || { echo "git reset failed"; exit 1; }
 node imps/preflight.mjs >>"\$IMPS_HOME/label-watch.log" 2>&1
 node imps/dispatch.mjs \${IMPS_DRY_RUN:+--dry-run} >>"\$IMPS_HOME/label-watch.log" 2>&1
 EOF
@@ -263,7 +264,7 @@ Description=imps dispatcher (one warlock cycle — see WARLOCK.md)
 
 [Service]
 Type=oneshot
-ExecStart="${HOURLY}"
+ExecStart="\"${HOURLY}\""
 EOF
     cat >"$UNIT_DIR/imps-hourly.timer" <<EOF
 [Unit]
@@ -291,7 +292,7 @@ Description=imps label watch
 
 [Service]
 Type=oneshot
-ExecStart="${WATCH}"
+ExecStart="\"${WATCH}\""
 EOF
       cat >"$UNIT_DIR/imps-label-watch.timer" <<EOF
 [Unit]
