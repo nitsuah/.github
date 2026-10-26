@@ -17,13 +17,15 @@
 // State lives outside any repo: $IMPS_HOME (default ~/.imps): runs.jsonl
 // (the ledger), runs/<id>.jsonl (transcripts).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL } from './runner.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -37,14 +39,40 @@ const { values: o, positionals: pos } = parseArgs({
         budget: { type: 'string', default: '15' },
         worktree: { type: 'string' },
         slack: { type: 'string', default: '0' },
+        modelStrategy: { type: 'string', default: 'fallback' },
     },
 });
 
 // ── commands ──────────────────────────────────────────────────────────────
+/**
+ * Validate brief front‑matter.
+ * Ensures required `repo` and `issue` fields exist and that `maxLines` is numeric.
+ * Throws on validation errors.
+ */
+function validateBrief(meta) {
+    if (!meta.repo) throw new Error('Brief must specify repo');
+    if (!meta.issue) throw new Error('Brief must specify issue');
+    if (meta.maxLines && isNaN(Number(meta.maxLines))) throw new Error('Brief maxLines must be numeric');
+    // add more checks as needed
+}
+
+// ── run command ─────────────────────────────────────────────────────────────
 async function run() {
+    // Docker readiness check – abort if Docker Desktop not running
+    const dockerInfo = spawnSync('docker', ['info'], { encoding: 'utf8', windowsHide: true });
+    if (dockerInfo.status !== 0) {
+        console.error('Docker not available – ensure Docker Desktop is running.');
+        process.exit(1);
+    }
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
-    if (!meta.repo || !meta.issue) throw new Error('brief front matter needs repo and issue');
-    const id = `imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
+    validateBrief(meta);
+    // Pick before the worktree exists: an exhausted pool must cost nothing.
+    const chosenModel = pickModel(MODEL_POOL, o.modelStrategy || 'fallback');
+    if (!chosenModel) {
+        console.error(`every model in the pool is out of quota (${join(HERE, 'model_quota.json')}); run stopped`);
+        process.exit(1);
+    }
+    const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
     const repoDir = join(CODE, meta.repo);
     const fetch = sh('git', ['-C', repoDir, 'fetch', '-q', 'origin']);
     if (fetch.code) throw new Error(`git fetch failed: ${fetch.err}`);
@@ -70,7 +98,9 @@ async function run() {
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
-    const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
+    decrementQuota(chosenModel);
+    console.log(`using model ${chosenModel}`);
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
@@ -121,7 +151,7 @@ function runGate(id) {
         numstat, commits, testExit,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
-        maxLines: Number(meta.maxLines || 80) + Number(o.slack),
+        maxLines: Number(meta.maxLines || 15) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
     if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);
@@ -130,7 +160,28 @@ function runGate(id) {
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, { gate: { ...g, formatted, lintExit, head, at: new Date().toISOString() } });
-    console.log(g.pass ? `gate PASS (${g.lines} lines: ${g.files.join(', ')})` : `gate FAIL: ${g.reasons.join('; ')}`);
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}` : `gate failed: ${g.reasons.join('; ')}`);
+}
+
+// Poll `gh pr checks --json` until no check is pending (max ~10 min). Returns
+// { green, reason }. Green means every check state is SUCCESS/SKIPPED/NEUTRAL.
+function waitForChecks(url, tries = 20) {
+    for (let i = 0; i < tries; i++) {
+        const r = sh('gh', ['pr', 'checks', url, '--json', 'name,state']);
+        if (r.code) return { green: false, reason: `unreadable (${r.err})` };
+        let checks = [];
+        try { checks = JSON.parse(r.out); } catch { return { green: false, reason: 'unreadable' }; }
+        if (!checks.length) return { green: false, reason: 'has no checks yet' };
+        const pending = checks.filter((c) => c.state === 'PENDING' || c.state === 'QUEUED' || c.state === 'IN_PROGRESS');
+        if (pending.length) {
+            if (i === tries - 1) return { green: false, reason: `still running (${pending.map((c) => c.name).join(', ')})` };
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+            continue;
+        }
+        const bad = checks.filter((c) => !['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(c.state));
+        return bad.length ? { green: false, reason: `not green (${bad.map((c) => `${c.name}:${c.state}`).join(', ')})` } : { green: true };
+    }
+    return { green: false, reason: 'timed out' };
 }
 
 function openPr(id) {
@@ -148,7 +199,7 @@ function openPr(id) {
     const body = [
         `Fixes #${r.issue}`, '',
         '> **Imp PR.** Written by a headless worker through 9router, then gated by the runner (tests in Docker, diff size, scope, trailer). ' +
-        'It stays a draft until @nitsuah marks it ready, and it is never auto-merged.', '',
+        'If the imp reviewer approves *and* every check passes, the runner marks it ready and arms a squash auto-merge; nothing merges with a failing check or an open review thread.', '',
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
@@ -157,10 +208,25 @@ function openPr(id) {
     ].join('\n');
     const repoSlug = git(r.worktree, 'remote', 'get-url', 'origin').out.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
-    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--draft', '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
+    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
     update(id, { pr: pr.out, outcome: 'open' });
     console.log(pr.out);
+    // Auto-review, then auto-merge only on approve *and* green CI.
+    // `--auto` so branch protection is still honoured (no --admin bypass).
+    const rev = spawnSync(process.execPath, [join(HERE, 'review.mjs'), id, '--model', o.model], { encoding: 'utf8', windowsHide: true });
+    if (rev.code) return console.error('auto-review failed:', rev.stderr.trim());
+    console.log(rev.stdout.trim().split('\n').pop());
+    if (!/posted approve/.test(rev.stdout)) return;
+    // Every check must be finished and successful. `gh pr checks --json` exits 0
+    // even while checks are pending, so the states are inspected, not the exit code.
+    const w = waitForChecks(pr.out);
+    if (!w.green) return console.log(`review approved; CI ${w.reason}, leaving the PR open`);
+    // A draft cannot be armed for auto-merge, so the approval flips it ready first.
+    const ready = sh('gh', ['pr', 'ready', pr.out]);
+    if (ready.code) return console.log(`could not mark ready: ${ready.err}`);
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--auto', '--squash', '--delete-branch']);
+    console.log(merge.code ? `auto-merge not armed: ${merge.err}` : 'auto-merge armed (squash)');
 }
 
 function outcome(id) {
@@ -174,6 +240,7 @@ function outcome(id) {
 
 function ingest(transcript) {
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    validateBrief(meta);
     const events = readFileSync(transcript, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
     const session = events.find((e) => e.session_id)?.session_id || createHash('sha1').update(resolve(transcript)).digest('hex');
     const id = `imp_manual_${session.slice(0, 6)}_${meta.issue}`;
