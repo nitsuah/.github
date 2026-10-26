@@ -3,7 +3,7 @@
 // Everything that talks to a model goes through runClaude, so both workers
 // get the same guardrails (clean env, 9router only, no shell splitting).
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,18 +35,18 @@ export function update(id, patch) {
 }
 
 // ── processes ─────────────────────────────────────────────────────────────
+const LOG_FILE = join(HOME, 'logs', 'tool-errors.log');
+mkdirSync(dirname(LOG_FILE), { recursive: true });
 export const sh = (bin, args, opts = {}) => {
     const start = Date.now();
     const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, ...opts });
     const entry = {
         timestamp: new Date().toISOString(),
-        command: `${bin} ${args.map(a=>a.replace(/\s+/g,'')).join(' ')}`,
+        command: `${bin} ${JSON.stringify(args)}`,
         exit: r.status,
         durationMs: Date.now() - start,
     };
-    // Append to tool error log
-    const logPath = join(HOME, 'logs', 'tool-errors.log');
-    try { writeFileSync(logPath, JSON.stringify(entry) + '\n', { flag: 'a' }); } catch (_) {}
+    try { appendFileSync(LOG_FILE, JSON.stringify(entry) + '\n'); } catch (_) {}
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
@@ -204,10 +204,12 @@ export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
 const QUOTA = join(HERE, 'model_quota.json');
 const readQuota = () => { try { return JSON.parse(readFileSync(QUOTA, 'utf8')); } catch { return {}; } };
 
+// Returns null when every model in the order is out of quota: the caller must
+// stop rather than silently spend past the limit.
 export function pickModel(pool = MODEL_POOL, strategy = 'fallback') {
     const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
     const quota = readQuota();
-    return order.find((m) => (quota[m] ?? 1) > 0) || order[0];
+    return order.find((m) => (quota[m] ?? 1) > 0) || null;
 }
 
 export function decrementQuota(model) {
