@@ -189,15 +189,17 @@ if (Test-Path -LiteralPath $gitDir) {
     try {
         # Tracked changes only — `reset --hard` cannot lose an untracked file (#59).
         # Before reset, migrate tracked model_quota.json to IMPS_HOME if present (#59).
-        # If the file was modified locally, preserve the working-tree file; if not, the
-        # reset will remove it. Copy only if destination is absent to avoid overwriting.
+        # If the file was modified locally, preserve the working-tree file by copying it
+        # only when destination is absent; then restore the tracked path so the dirty
+        # check passes. If the copy or restore fails, the setup fails.
         if (& git ls-files --error-unmatch imps/model_quota.json 2>$null) {
             $status = & git status --porcelain imps/model_quota.json
             if ($LASTEXITCODE -eq 0 -and $status) {
                 if (-not (Test-Path -LiteralPath (Join-Path $HomePath 'model_quota.json'))) {
-                    Copy-Item -LiteralPath (Join-Path $RunnerPath 'imps\model_quota.json') -Destination (Join-Path $HomePath 'model_quota.json')
+                    Copy-Item -LiteralPath (Join-Path $RunnerPath 'imps\model_quota.json') -Destination (Join-Path $HomePath 'model_quota.json') -ErrorAction Stop
                 }
                 & git checkout -- imps/model_quota.json
+                if ($LASTEXITCODE -ne 0) { throw "failed to restore tracked model_quota.json" }
                 Write-Host "migrated tracked model_quota.json to $HomePath/model_quota.json" -ForegroundColor Green
             }
         }
@@ -209,11 +211,12 @@ if (Test-Path -LiteralPath $gitDir) {
         & git fetch -q origin $Branch
         if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
         # Protect untracked files that would be overwritten by the target commit (#64).
-        $untracked = & git ls-files --others --exclude-standard
+        # Use NUL-delimited paths so spaces/newlines in filenames don't break the loop.
+        $untracked = & git ls-files -z --others --exclude-standard
         if ($LASTEXITCODE -eq 0 -and $untracked) {
             $overwritten = @()
-            foreach ($f in $untracked) {
-                if (& git cat-file -t "origin/$Branch:$f" 2>$null) {
+            foreach ($f in $untracked.Split([char]0)) {
+                if ($f -and (& git cat-file -t "origin/$Branch:`$f" 2>$null)) {
                     $overwritten += $f
                 }
             }
@@ -354,6 +357,7 @@ REM Kill switches: IMPS_LABEL_WATCH=0/false, or config.json "labelWatch": false.
 if /I "%IMPS_LABEL_WATCH%"=="0" exit /b 0
 if /I "%IMPS_LABEL_WATCH%"=="false" exit /b 0
 set IMPS_HOME=$HomePath
+if defined IMPS_DRY_RUN set IMPS_DRY_ARGS=--dry-run
 node -e "try{var c=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.exit(c.labelWatch===false?0:1)}catch(e){process.exit(1)}" "%IMPS_HOME%\config.json" && exit /b 0
 set IMPS_CODE=$CodePath
 set IMPS_KIT_PATH=$RunnerPath
@@ -387,14 +391,14 @@ if (-not $SkipTask) {
         $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
         $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
         $logonTrigger.Delay = 'PT2M'
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c \`"$hourly\`""
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c \`"{0}\`"" -f $hourly)
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($hourlyTrigger, $logonTrigger) -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07 + 2 min after logon)"
     } catch {
         # Policy or elevation refused the logon trigger: keep the hourly task anyway.
-        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR "conhost.exe --headless cmd.exe /d /c \`"$hourly\`"" /RL LIMITED /F 2>$null | Out-Null
+        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR "cmd.exe /d /c \`"$hourly\`"" /RL LIMITED /F 2>$null | Out-Null
+            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR ("cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Bad "no at-logon trigger: $($_.Exception.Message)"

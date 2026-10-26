@@ -92,7 +92,7 @@ async function run() {
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
     const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
     if (!chosenModel) {
-        console.error(`every model in the pool is out of quota (${join(HERE, 'model_quota.json')}); run stopped`);
+        console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
     }
     const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
@@ -126,7 +126,7 @@ async function run() {
         // Which kit produced this row. Without it, a behaviour change after a
         // kit fix is unattributable — you cannot tell a bad brief from a
         // machine 40 commits behind (#61).
-        kitSha: kitSha(), machine: machineName(),
+        kitSha: kitSha(), kitDirty: isGitDirty(HERE), machine: machineName(),
         pid: process.pid,
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };

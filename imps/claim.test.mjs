@@ -169,3 +169,14 @@ test('backoff doubles, caps, and never overruns the window', () => {
 test('a zero window means no waiting', () => {
     assert.deepEqual(routerWaitDelays({ windowMs: 0 }), []);
 });
+
+test('a claim with a PR is not reclaimed', () => {
+    const now = 10 * HOUR;
+    const comments = claimed(now - 48 * HOUR, 'A');
+    // Add a PR to the claim body
+    const claimWithPr = [{
+        body: claimBody({ machine: 'A', at: at(now - 48 * HOUR), startedAt: at(now - 48 * HOUR), heartbeatAt: at(now - 48 * HOUR), pr: 'https://github.com/nitsuah/.github/pull/123' }),
+        createdAt: at(now - 48 * HOUR),
+    }];
+    assert.equal(staleClaim({ labels: ['imp:working'], comments: claimWithPr, machine: 'B', now }), null);
+});

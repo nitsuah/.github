@@ -123,14 +123,17 @@ if [[ -d "$RUNNER/.git" ]]; then
   fi
   # Protect untracked files that would be overwritten by the target commit (#59, #64).
   # Check if any untracked files exist in the target commit and fail if they would be lost.
+  # Use NUL-delimited paths so spaces/newlines in filenames don't break the loop.
   git -C "$RUNNER" fetch -q origin "$BRANCH"
-  UNTRACKED=$(git -C "$RUNNER" ls-files --others --exclude-standard)
-  if [[ -n "$UNTRACKED" ]]; then
-    OVERWRITTEN=$(echo "$UNTRACKED" | while read -r f; do git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1 && echo "$f"; done)
-    if [[ -n "$OVERWRITTEN" ]]; then
-      bad "untracked files would be overwritten by reset: $OVERWRITTEN"
-      exit 1
+  OVERWRITTEN=""
+  while IFS= read -r -d '' f; do
+    if git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1; then
+      OVERWRITTEN="${OVERWRITTEN}${OVERWRITTEN:+ }$f"
     fi
+  done < <(git -C "$RUNNER" ls-files -z --others --exclude-standard)
+  if [[ -n "$OVERWRITTEN" ]]; then
+    bad "untracked files would be overwritten by reset: $OVERWRITTEN"
+    exit 1
   fi
   git -C "$RUNNER" checkout -q "$BRANCH"
   git -C "$RUNNER" reset -q --hard "origin/$BRANCH"
@@ -314,7 +317,7 @@ EOF
     fi
     # Check lingering for both timer configurations, not just label-watch
     if ! loginctl show-user "$(id -un)" 2>/dev/null | grep -q 'Linger=yes'; then
-      bad "systemd user timers need lingering; run 'loginctl enable-linger $USER' and re-run setup"
+      bad "systemd user timers need lingering; run 'loginctl enable-linger $(id -un)' and re-run setup"
       exit 1
     fi
   else

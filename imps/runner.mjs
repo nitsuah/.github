@@ -62,6 +62,15 @@ export function resolveMachine(config = {}, env = process.env) {
     return env.IMPS_MACHINE || config.machine || hostname();
 }
 export const machineName = () => resolveMachine({}, process.env);
+// Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
+export function isGitDirty(path) {
+    try {
+        const r = spawnSync('git', ['-C', path, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true });
+        return r.status === 0 && r.stdout.trim().length > 0;
+    } catch {
+        return false;
+    }
+}
 // Atomic: a crash mid-write must not truncate the run history.
 export const save = (all) => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;
@@ -280,8 +289,15 @@ const readQuota = () => {
 };
 
 // { model: { used, window } } — a stale window counts as unused.
+// Legacy: model_quota.json once stored plain numbers (remaining quota).
+// Convert them so existing files don't reset the counter.
 const counter = (raw, model, now) => {
     const c = raw[model];
+    if (typeof c === 'number') {
+        // Legacy numeric value = remaining quota in that window.
+        // Convert to consumed: used = DEFAULT - remaining.
+        return { used: Math.max(0, QUOTA_DEFAULT - c), window: windowStart(now) };
+    }
     if (!c || c.window !== windowStart(now)) return { used: 0, window: windowStart(now) };
     return { used: c.used || 0, window: c.window };
 };

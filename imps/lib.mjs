@@ -295,6 +295,7 @@ export function isPidAlive(pid) {
 // ledger row for it (a row means a run may still be alive here — the hourly
 // lock already serialises this machine). Returns a reason string or null.
 // ledgerRow can be the full row to check endedAt; if true, treat as row without endedAt.
+// If the claim has a PR (claim.pr), do not reclaim — the PR is the delivery artifact.
 export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, ledgerRow = null, machine = '', ttl = CLAIM_HEARTBEAT_TTL_MS, now = Date.now() } = {}) {
     if (!labels.includes('imp:working')) return null;
     // A ledger row only exempts the claim if the run is still alive (no endedAt).
@@ -304,6 +305,8 @@ export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, l
     const claim = latestClaim(comments);
     if (!claim) return 'imp:working with no claim comment — pre-lease claim, or the label was set by hand';
     const parsed = parseClaim(claim.body);
+    // If the claim has an associated PR, don't reclaim — the work has been delivered.
+    if (parsed?.pr) return null;
     const at = Date.parse((parsed && (parsed.heartbeatAt || parsed.startedAt)) || claim.createdAt || '');
     if (!Number.isFinite(at)) return `unparseable claim time on ${claim.createdAt || 'comment'}`;
     if (now - at < ttl) return null;

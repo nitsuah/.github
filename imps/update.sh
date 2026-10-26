@@ -11,15 +11,16 @@ IMPS_HOME="${IMPS_HOME:-$HOME/.imps}"
 [[ -d "$RUNNER/.git" ]] || { echo "Not a kit checkout: $RUNNER (run setup.sh first)" >&2; exit 1; }
 
 # Before reset, migrate tracked model_quota.json to IMPS_HOME if present (#59).
-# If the file was modified locally, preserve the working-tree file; if not, the
-# reset will remove it. Copy only if destination is absent to avoid overwriting.
+# If the file was modified locally, preserve the working-tree file by copying it
+# only when destination is absent; then restore the tracked path so the dirty
+# check passes. If the copy or restore fails, the update fails.
 if git -C "$RUNNER" ls-files --error-unmatch imps/model_quota.json >/dev/null 2>&1; then
   if [[ -n "$(git -C "$RUNNER" status --porcelain imps/model_quota.json)" ]]; then
     mkdir -p "$IMPS_HOME"
     if [[ ! -e "$IMPS_HOME/model_quota.json" ]]; then
-      cp "$RUNNER/imps/model_quota.json" "$IMPS_HOME/model_quota.json"
+      cp "$RUNNER/imps/model_quota.json" "$IMPS_HOME/model_quota.json" || { echo "failed to copy model_quota.json" >&2; exit 1; }
     fi
-    git -C "$RUNNER" checkout -- imps/model_quota.json
+    git -C "$RUNNER" checkout -- imps/model_quota.json || { echo "failed to restore tracked model_quota.json" >&2; exit 1; }
     echo "migrated tracked model_quota.json to $IMPS_HOME/model_quota.json"
   fi
 fi
@@ -29,14 +30,19 @@ fi
 # to be tracked and is now machine state in IMPS_HOME (#59) — after an upgrade
 # it survives as an untracked leftover and must not block updates.
 # Also protect untracked files that would be overwritten by the target commit (#64).
+# Use NUL-delimited paths so spaces/newlines in filenames don't break the loop,
+# and run in the current shell (no subshell) so `set -euo pipefail` doesn't
+# cause an early exit on a missing final path.
 git -C "$RUNNER" fetch -q origin "$BRANCH"
-UNTRACKED=$(git -C "$RUNNER" ls-files --others --exclude-standard)
-if [[ -n "$UNTRACKED" ]]; then
-  OVERWRITTEN=$(echo "$UNTRACKED" | while read -r f; do git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1 && echo "$f"; done)
-  if [[ -n "$OVERWRITTEN" ]]; then
-    echo "untracked files would be overwritten by reset: $OVERWRITTEN" >&2
-    exit 1
+OVERWRITTEN=""
+while IFS= read -r -d '' f; do
+  if git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1; then
+    OVERWRITTEN="${OVERWRITTEN}${OVERWRITTEN:+ }$f"
   fi
+done < <(git -C "$RUNNER" ls-files -z --others --exclude-standard)
+if [[ -n "$OVERWRITTEN" ]]; then
+  echo "untracked files would be overwritten by reset: $OVERWRITTEN" >&2
+  exit 1
 fi
 if [[ -n "$(git -C "$RUNNER" status --porcelain --untracked-files=no)" ]]; then
   echo "$RUNNER has local changes; refusing to reset" >&2
