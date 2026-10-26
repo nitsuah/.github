@@ -55,7 +55,13 @@ export const kitSha = () => {
         return null;
     }
 };
-export const machineName = () => process.env.IMPS_MACHINE || hostname();
+// Resolve machine name once, shared across all four record types:
+// heartbeat issues, claim comments, ledger rows, dispatch events.
+// Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
+export function resolveMachine(config = {}, env = process.env) {
+    return env.IMPS_MACHINE || config.machine || hostname();
+}
+export const machineName = () => resolveMachine({}, process.env);
 // Atomic: a crash mid-write must not truncate the run history.
 export const save = (all) => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;

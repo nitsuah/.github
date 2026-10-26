@@ -110,7 +110,10 @@ if [[ -d "$RUNNER/.git" ]]; then
   if git -C "$RUNNER" ls-files --error-unmatch imps/model_quota.json >/dev/null 2>&1; then
     if [[ -n "$(git -C "$RUNNER" status --porcelain imps/model_quota.json)" ]]; then
       mkdir -p "$IMPS_HOME_DIR"
-      git -C "$RUNNER" show HEAD:imps/model_quota.json >"$IMPS_HOME_DIR/model_quota.json" 2>/dev/null || true
+      if [[ ! -e "$IMPS_HOME_DIR/model_quota.json" ]]; then
+        cp "$RUNNER/imps/model_quota.json" "$IMPS_HOME_DIR/model_quota.json"
+      fi
+      git -C "$RUNNER" checkout -- imps/model_quota.json
       ok "migrated tracked model_quota.json to $IMPS_HOME_DIR/model_quota.json"
     fi
   fi
@@ -186,8 +189,8 @@ export IMPS_KIT_PATH="$RUNNER"
 cd "$RUNNER"
 # set -e covers these, but only merged kit code may run unattended, and only if
 # the reset actually worked — a failed reset used to run stale code silently (#62).
-git fetch -q origin $BRANCH
-git reset -q --hard origin/$BRANCH
+git fetch -q origin $BRANCH || { echo "git fetch failed"; exit 1; }
+git reset -q --hard origin/$BRANCH || { echo "git reset failed"; exit 1; }
 node imps/preflight.mjs >>"\$IMPS_HOME/hourly.log" 2>&1
 node imps/dispatch.mjs \${IMPS_DRY_RUN:+--dry-run} >>"\$IMPS_HOME/hourly.log" 2>&1
 EOF
@@ -213,8 +216,10 @@ fi
 export IMPS_CODE="$CODE"
 export IMPS_KIT_PATH="$RUNNER"
 cd "$RUNNER"
-git fetch -q origin $BRANCH
-git reset -q --hard origin/$BRANCH
+# set -e covers these, but only merged kit code may run unattended, and only if
+# the reset actually worked — a failed reset used to run stale code silently (#62).
+git fetch -q origin $BRANCH || { echo "git fetch failed"; exit 1; }
+git reset -q --hard origin/$BRANCH || { echo "git reset failed"; exit 1; }
 node imps/preflight.mjs >>"\$IMPS_HOME/label-watch.log" 2>&1
 node imps/dispatch.mjs \${IMPS_DRY_RUN:+--dry-run} >>"\$IMPS_HOME/label-watch.log" 2>&1
 EOF

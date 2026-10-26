@@ -188,6 +188,19 @@ if (Test-Path -LiteralPath $gitDir) {
     Push-Location $RunnerPath
     try {
         # Tracked changes only — `reset --hard` cannot lose an untracked file (#59).
+        # Before reset, migrate tracked model_quota.json to IMPS_HOME if present (#59).
+        # If the file was modified locally, preserve the working-tree file; if not, the
+        # reset will remove it. Copy only if destination is absent to avoid overwriting.
+        if (& git ls-files --error-unmatch imps/model_quota.json 2>$null) {
+            $status = & git status --porcelain imps/model_quota.json
+            if ($LASTEXITCODE -eq 0 -and $status) {
+                if (-not (Test-Path -LiteralPath (Join-Path $HomePath 'model_quota.json'))) {
+                    Copy-Item -LiteralPath (Join-Path $RunnerPath 'imps\model_quota.json') -Destination (Join-Path $HomePath 'model_quota.json')
+                }
+                & git checkout -- imps/model_quota.json
+                Write-Host "migrated tracked model_quota.json to $HomePath/model_quota.json" -ForegroundColor Green
+            }
+        }
         $dirty = & git status --porcelain --untracked-files=no
         if ($LASTEXITCODE -ne 0) { throw "git status failed" }
         if ($dirty) { throw "$RunnerPath has local changes; refusing to reset. Use a dedicated runner path (default %LOCALAPPDATA%\imps-runner)." }
@@ -361,14 +374,14 @@ if (-not $SkipTask) {
         $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
         $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
         $logonTrigger.Delay = 'PT2M'
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c \"$hourly\""
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c \`"$hourly\`""
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($hourlyTrigger, $logonTrigger) -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07 + 2 min after logon)"
     } catch {
         # Policy or elevation refused the logon trigger: keep the hourly task anyway.
-        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR "conhost.exe --headless cmd.exe /d /c \"$hourly\"" /RL LIMITED /F 2>$null | Out-Null
+        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR "conhost.exe --headless cmd.exe /d /c \`"$hourly\`"" /RL LIMITED /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR "cmd.exe /d /c \"$hourly\"" /RL LIMITED /F 2>$null | Out-Null
+            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR "cmd.exe /d /c \`"$hourly\`"" /RL LIMITED /F 2>$null | Out-Null
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Bad "no at-logon trigger: $($_.Exception.Message)"

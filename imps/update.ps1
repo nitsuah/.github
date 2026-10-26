@@ -24,6 +24,19 @@ if (-not (Test-Path -LiteralPath (Join-Path $RunnerPath '.git'))) {
 }
 Push-Location $RunnerPath
 try {
+    # Before reset, migrate tracked model_quota.json to IMPS_HOME if present (#59).
+    # If the file was modified locally, preserve the working-tree file; if not, the
+    # reset will remove it. Copy only if destination is absent to avoid overwriting.
+    if (& git ls-files --error-unmatch imps/model_quota.json 2>$null) {
+        $status = & git status --porcelain imps/model_quota.json
+        if ($LASTEXITCODE -eq 0 -and $status) {
+            if (-not (Test-Path -LiteralPath (Join-Path $HomePath 'model_quota.json'))) {
+                Copy-Item -LiteralPath (Join-Path $RunnerPath 'imps\model_quota.json') -Destination (Join-Path $HomePath 'model_quota.json')
+            }
+            & git checkout -- imps/model_quota.json
+            Write-Host "migrated tracked model_quota.json to $HomePath/model_quota.json" -ForegroundColor Green
+        }
+    }
     # Tracked changes only: `reset --hard` never deletes untracked files, so an
     # untracked file is not something this command can lose. model_quota.json
     # used to be tracked and is now machine state in IMPS_HOME (#59) — after an

@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired, rows } from './lib.mjs';
 import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -198,8 +198,9 @@ async function releaseStrandedClaims(ledgerRows) {
             comments = ghJson(['issue', 'view', String(number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
         } catch (e) {
             log({ event: 'label-cleanup-error', repo, number, error: e.message });
+            continue;
         }
-        const row = ledgerRows.find((r) => `${r.repo}#${r.issue}` === key && !r.endedAt);
+        const row = ledgerRows.filter((r) => `${r.repo}#${r.issue}` === key).at(-1);
         const why = staleClaim({ labels, comments, ledgerHasRow: !!row, ledgerRow: row || null, machine: MACHINE });
         if (!why) continue;
         // A heartbeat that stopped is a dead run even before the claim is old:
@@ -288,6 +289,9 @@ async function work(issue) {
     // Without this a machine that dies leaves the issue on imp:working for the whole
     // fleet, and a live run is indistinguishable from a dead one (#60, #67).
     const claim = startClaimBeat(repo, number);
+    // Post the claim comment before exposing imp:working, so another dispatcher
+    // sees the claim and does not reclaim it while this run is starting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     try {
         relabel(repo, number, 'imp:working', ['imp:ready']);
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);

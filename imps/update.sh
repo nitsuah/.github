@@ -11,11 +11,15 @@ IMPS_HOME="${IMPS_HOME:-$HOME/.imps}"
 [[ -d "$RUNNER/.git" ]] || { echo "Not a kit checkout: $RUNNER (run setup.sh first)" >&2; exit 1; }
 
 # Before reset, migrate tracked model_quota.json to IMPS_HOME if present (#59).
-# If the file was modified locally, preserve it; if not, the reset will remove it.
+# If the file was modified locally, preserve the working-tree file; if not, the
+# reset will remove it. Copy only if destination is absent to avoid overwriting.
 if git -C "$RUNNER" ls-files --error-unmatch imps/model_quota.json >/dev/null 2>&1; then
   if [[ -n "$(git -C "$RUNNER" status --porcelain imps/model_quota.json)" ]]; then
     mkdir -p "$IMPS_HOME"
-    git -C "$RUNNER" show HEAD:imps/model_quota.json >"$IMPS_HOME/model_quota.json" 2>/dev/null || true
+    if [[ ! -e "$IMPS_HOME/model_quota.json" ]]; then
+      cp "$RUNNER/imps/model_quota.json" "$IMPS_HOME/model_quota.json"
+    fi
+    git -C "$RUNNER" checkout -- imps/model_quota.json
     echo "migrated tracked model_quota.json to $IMPS_HOME/model_quota.json"
   fi
 fi
