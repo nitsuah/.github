@@ -43,7 +43,7 @@ A feature without a screenshot or spot shows up as a gap in `vigil showcase audi
 ```jsonc
 {
   "product": "fire",
-  "live": "https://lifefire.netlify.app/",          // deployed app (▶ LIVE), or null
+  "live": "https://fire.nitsuah.io",                // deployed app (▶ LIVE), or null
   "page": "https://nitsuah.github.io/fire/",        // Pages site (▣ PAGE), or null
   "pagesDir": "site",                               // folder the Pages workflow uploads
   "frontend": true,                                 // false = no UI; screenshots are generated visuals
