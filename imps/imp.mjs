@@ -1,31 +1,40 @@
 #!/usr/bin/env node
-// imps: headless `claude -p` workers that take one GitHub issue to a draft PR.
+// imps: headless `claude -p` workers that take one GitHub issue to one PR.
 // The imp edits and commits in its own worktree; this runner gates the result,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
-// Contract: imps/STANDARD.md.
+// Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
 //   node imp.mjs run     --brief <brief.md> [--model MAX] [--minutes 25] [--budget 15]
 //   node imp.mjs gate    <run-id>          tests in Docker + diff/scope/trailer checks
-//   node imp.mjs pr      <run-id>          gate must have passed; opens a draft PR labelled `imp`
+//   node imp.mjs pr      <run-id>          gate must have passed; opens an `imp` PR (auto-merge when trusted)
 //   node imp.mjs outcome <run-id>          records merged / closed / open from GitHub
 //   node imp.mjs note    <run-id> "<text>" an observation for the next RSI pass
 //   node imp.mjs verdict <run-id> pass|fail "<reason>"   a gate decided by hand
 //   node imp.mjs report                    RSI table over every run
 //   node imp.mjs ingest  <transcript.jsonl> --brief <brief.md> [--worktree <dir>]   backfill a run made by hand
-//   (hourly queue: dispatch.mjs; PR review: review.mjs)
+//   (hourly queue: dispatch.mjs; PR review: review.mjs; RSI: rsi.mjs)
 //
 // State lives outside any repo: $IMPS_HOME (default ~/.imps): runs.jsonl
-// (the ledger), runs/<id>.jsonl (transcripts).
+// (the ledger), runs/<id>.jsonl (transcripts). Kit code lives in the detached
+// imps-runner checkout (see setup.ps1 / STANDARD.md § Install).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
+import { DEFAULTS } from './defaults.mjs';
+import { evaluateChecks, checksFingerprint, mayAutoMerge } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+function loadHomeConfig() {
+    try {
+        const p = join(HOME, 'config.json');
+        return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
+    } catch { return {}; }
+}
 
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -151,7 +160,7 @@ function runGate(id) {
         numstat, commits, testExit,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
-        maxLines: Number(meta.maxLines || 15) + Number(o.slack),
+        maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
     if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);
@@ -163,23 +172,34 @@ function runGate(id) {
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
-// Poll `gh pr checks --json` until no check is pending (max ~10 min). Returns
-// { green, reason }. Green means every check state is SUCCESS/SKIPPED/NEUTRAL.
-function waitForChecks(url, tries = 20) {
+// Poll `gh pr checks --json` until every check (required *and* optional) is
+// finished and green for `DEFAULTS.checkStablePolls` consecutive identical
+// polls. Never returns green on pending, red, or an empty list. Returns
+// { green, reason }. Does not use --required: that was the stash#305 failure mode.
+function waitForChecks(url, tries = DEFAULTS.checkTries) {
+    let lastFp = null;
+    let stable = 0;
     for (let i = 0; i < tries; i++) {
         const r = sh('gh', ['pr', 'checks', url, '--json', 'name,state']);
-        if (r.code) return { green: false, reason: `unreadable (${r.err})` };
+        if (r.code && !r.out) return { green: false, reason: `unreadable (${r.err})` };
         let checks = [];
-        try { checks = JSON.parse(r.out); } catch { return { green: false, reason: 'unreadable' }; }
-        if (!checks.length) return { green: false, reason: 'has no checks yet' };
-        const pending = checks.filter((c) => c.state === 'PENDING' || c.state === 'QUEUED' || c.state === 'IN_PROGRESS');
-        if (pending.length) {
-            if (i === tries - 1) return { green: false, reason: `still running (${pending.map((c) => c.name).join(', ')})` };
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+        try { checks = JSON.parse(r.out || '[]'); } catch { return { green: false, reason: 'unreadable' }; }
+        const ev = evaluateChecks(checks);
+        if (!ev.green) {
+            stable = 0;
+            lastFp = null;
+            if (i === tries - 1) return { green: false, reason: ev.reason };
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DEFAULTS.checkPollMs);
             continue;
         }
-        const bad = checks.filter((c) => !['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(c.state));
-        return bad.length ? { green: false, reason: `not green (${bad.map((c) => `${c.name}:${c.state}`).join(', ')})` } : { green: true };
+        const fp = checksFingerprint(checks);
+        if (fp === lastFp) stable++;
+        else {
+            lastFp = fp;
+            stable = 1;
+        }
+        if (stable >= DEFAULTS.checkStablePolls) return { green: true };
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DEFAULTS.checkPollMs);
     }
     return { green: false, reason: 'timed out' };
 }
@@ -199,7 +219,8 @@ function openPr(id) {
     const body = [
         `Fixes #${r.issue}`, '',
         '> **Imp PR.** Written by a headless worker through 9router, then gated by the runner (tests in Docker, diff size, scope, trailer). ' +
-        'If the imp reviewer approves *and* every check passes, the runner marks it ready and arms a squash auto-merge; nothing merges with a failing check or an open review thread.', '',
+        'If the imp reviewer approves, every check (required *and* optional) is green, and the repo has earned auto-merge trust, ' +
+        'the runner squash-merges immediately. Nothing merges on red or pending CI.', '',
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
@@ -212,21 +233,33 @@ function openPr(id) {
     if (pr.code) throw new Error(pr.err);
     update(id, { pr: pr.out, outcome: 'open' });
     console.log(pr.out);
-    // Auto-review, then auto-merge only on approve *and* green CI.
-    // `--auto` so branch protection is still honoured (no --admin bypass).
+    // Auto-review, then merge only on approve + all checks green + earned trust.
+    // Merge immediately (no `gh pr merge --auto`): GitHub auto-merge only waits
+    // for *required* checks, which let stash#305 merge while Products CI was red.
     const rev = spawnSync(process.execPath, [join(HERE, 'review.mjs'), id, '--model', o.model], { encoding: 'utf8', windowsHide: true });
     if (rev.code) return console.error('auto-review failed:', rev.stderr.trim());
     console.log(rev.stdout.trim().split('\n').pop());
-    if (!/posted approve/.test(rev.stdout)) return;
-    // Every check must be finished and successful. `gh pr checks --json` exits 0
-    // even while checks are pending, so the states are inspected, not the exit code.
+    const verdict = (rev.stdout.match(/posted (\w+)/) || [])[1];
+    const cfg = loadHomeConfig();
+    const trust = mayAutoMerge({
+        repo: r.repo,
+        reviewVerdict: verdict,
+        rows: rows(),
+        trust: Number(cfg.autoMergeTrust ?? DEFAULTS.autoMergeTrust),
+    });
+    if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);
     if (!w.green) return console.log(`review approved; CI ${w.reason}, leaving the PR open`);
-    // A draft cannot be armed for auto-merge, so the approval flips it ready first.
-    const ready = sh('gh', ['pr', 'ready', pr.out]);
-    if (ready.code) return console.log(`could not mark ready: ${ready.err}`);
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--auto', '--squash', '--delete-branch']);
-    console.log(merge.code ? `auto-merge not armed: ${merge.err}` : 'auto-merge armed (squash)');
+    // Re-read once more right before merge (checks can flip in the last second).
+    const final = sh('gh', ['pr', 'checks', pr.out, '--json', 'name,state']);
+    let finalChecks = [];
+    try { finalChecks = JSON.parse(final.out || '[]'); } catch { /* fall through */ }
+    const finalEv = evaluateChecks(finalChecks);
+    if (!finalEv.green) return console.log(`pre-merge recheck failed: ${finalEv.reason}, leaving the PR open`);
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch']);
+    if (merge.code) return console.log(`merge refused: ${merge.err}`);
+    update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
+    console.log('merged (squash); every check was green');
 }
 
 function outcome(id) {

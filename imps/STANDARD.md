@@ -1,6 +1,6 @@
 # Imps
 
-Imps are headless `claude -p` workers, run through 9router, that each take **one GitHub issue to one draft PR**. This kit is the smoke-test version: it runs by hand from a Claude Code session, and every run is measured so the prompt and the gate improve before imps move into motor-pool loops. The target architecture is `motor-pool/docs/IMPS-PLAN.md`.
+Imps are headless `claude -p` workers, run through 9router, that each take **one GitHub issue to one small PR**. Install and recover with [`setup.ps1`](./setup.ps1) (see [`README.md`](./README.md)). Every default that used to drift between docs and code lives in [`defaults.mjs`](./defaults.mjs) — run `node imps/check-defaults.mjs` to keep this file honest. The long-term home is `motor-pool/docs/IMPS-PLAN.md`.
 
 ## Flow
 
@@ -11,9 +11,10 @@ brief.md ──► imp.mjs run ──► worktree + claude -p (clean env, 9route
               (tests in Docker, diff size, scope, deny paths, trailer)
                   │ pass                       │ fail
                   ▼                            ▼
-              imp.mjs pr  → draft PR, label `imp`     ledger row + note → next RSI pass
+              imp.mjs pr  → PR labelled `imp`          ledger → rsi.mjs / next RSI pass
                   │
-              CodeRabbit + @nitsuah review → imp.mjs outcome
+              review.mjs → (earned trust + every check green) → squash merge
+                           else leave open for a human / fix.mjs
 ```
 
 ## A brief
@@ -44,45 +45,72 @@ GitHub issues are the queue; labels are the state.
 | --- | --- | --- |
 | `imp:ready` | Opus triage (daily) | The issue has a brief comment and may be taken |
 | `imp:working` | dispatcher | An imp is on it now |
-| `imp:pr` | dispatcher | A draft PR is open (the issue comment links it) |
+| `imp:pr` | dispatcher | An imp PR is open (the issue comment links it) |
 | `imp:failed` | dispatcher | Gate failed; reasons are commented. It needs a new brief or a human |
+| `imp:needs-human` | fix.mjs | Open PR needs a human (max fix rounds, conflict, or gate fail on fix) |
 
 **The brief** is an issue comment whose first line is `<!-- imp-brief -->`, followed by the brief (front matter + body, optionally in a ```` ```markdown ```` fence). The newest such comment wins. Writing it on the issue keeps every brief reviewable, and the dispatcher needs no local state.
 
 **`dispatch.mjs`** runs hourly with no LLM of its own:
-1. It skips the cycle if the previous one is still running, or if 9router doesn't answer a `MAX` probe.
-2. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 2` per repo (counting its open imp PRs)**, and never past `--wip 8` open imp PRs in total. Your review is the bottleneck, so the dispatcher stops when the review pile is full.
-3. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
-4. It runs `--concurrency 3` imps at once through `imp.mjs run → gate → pr`, then relabels and comments the result on the issue.
+1. It skips the cycle if the previous one is still running (`dispatch.lock` &lt; 3h), or if 9router doesn't answer a `MAX` probe.
+2. It sweeps open `imp` PRs with `fix.mjs` first (skip `imp:needs-human`).
+3. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 4` per repo (counting its open imp PRs)**, and never past `--wip 8` open imp PRs in total. Review + CI are the bottleneck, so the dispatcher stops when the pile is full.
+4. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
+5. It runs `--concurrency 4` repos at once through `imp.mjs run → gate → pr` (same-repo imps stay sequential so `imp-nm-<repo>` volumes don't race), then relabels and comments the result on the issue.
+6. Optional `--rsi` (or `IMPS_RSI=1`) runs `rsi.mjs` after the cycle.
 
 Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-run` prints the picks and changes nothing.
 
-**Scheduling (Windows).** The Task Scheduler task `imps-dispatch` runs `~/.imps/hourly.cmd` at :07 every hour. It launches through `conhost.exe --headless cmd.exe /d /c "…\hourly.cmd"`, so no console window appears (the same pattern as `Sync 9router fork`). Every process the kit spawns also passes `windowsHide: true`. The wrapper first resets a dedicated checkout (`~/code/imps-runner`) to `origin/main`, so **only merged, reviewed kit code runs unattended**. Output goes to `~/.imps/hourly.log`. When this moves into motor-pool (IMPS-PLAN PR 3), the same loop becomes the `imp-runner` service, and a second runner on the desktop just claims from the same labels.
+## Install, update, recover
 
-**Triage stays with the hypervisor.** Opus reads new issues once a day and either posts a brief and adds `imp:ready`, or labels the issue for a human. It also re-briefs `imp:failed` issues, using the gate reasons and the PREAMBLE lessons. The hourly loop never calls a paid model.
+**Default locations** (no personal paths committed):
+
+| What | Windows default | Unix default | Env override |
+| --- | --- | --- | --- |
+| Kit checkout (code only) | `%LOCALAPPDATA%\imps-runner` | `~/.local/share/imps-runner` | `IMPS_RUNNER` / `IMPS_KIT_PATH` |
+| Durable state | `%USERPROFILE%\.imps` | `~/.imps` | `IMPS_HOME` |
+| Repo checkouts / worktrees | `%USERPROFILE%\code` | `~/code` | `IMPS_CODE` |
+
+```powershell
+pwsh -File imps/setup.ps1                          # doctor + clone/repair + hourly task
+pwsh -File imps/setup.ps1 -RunnerPath 'D:\imps-runner' -EnableLabelWatch
+pwsh -File imps/update.ps1                         # git fetch/reset kit only
+pwsh -File imps/uninstall.ps1                      # tasks gone; state kept
+pwsh -File imps/doctor.ps1
+```
+
+`setup` is idempotent: re-running repairs the checkout and re-registers the task without clobbering locks, logs, stats, ledger, or `config.json`. Bash twins: `setup.sh` / `update.sh` / `uninstall.sh`.
+
+**Scheduling (Windows).** Task `imps-dispatch` runs `~/.imps/hourly.cmd` hourly at :07 via `conhost.exe --headless`. The wrapper resets the runner checkout to `origin/main` so **only merged kit code runs unattended**, then `node imps/dispatch.mjs`. Logs: `~/.imps/hourly.log`. Optional `-EnableLabelWatch` adds `imps-label-watch` every 5 minutes (same entrypoint; the lock prevents overlap) — a cheap stand-in for a webhook on new `imp:ready` labels.
+
+**Triage stays with the hypervisor (and RSI).** Opus can still brief by hand; `rsi.mjs` may also file capped `imp:ready` issues from ledger/journey signals. The hourly loop never calls a paid model.
 
 ## Limits (so an unattended day stays boring)
 
+Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this table drifts.
+
 | Limit | Value | Where |
 | --- | --- | --- |
-| Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })`. Enforced by the runner, because this CLI ignores `--max-turns`. Runs end `killed-max-turns` |
+| Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
-| Imps per cycle | 5, up to 2 per repo, at most 3 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--concurrency` |
-| Open imp PRs | 8 in total, 2 per repo | `--wip`, `--per-repo`, `pickIssues` |
-| Imp runs per 24 h | 15 | `--daily-cap`, `loopBudget` |
+| Imps per cycle | 5, up to 4 per repo, at most 4 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
+| Open imp PRs | 8 in total, 4 per repo | `--wip`, `--per-repo`, `pickIssues` |
+| Imp runs per 24 h / `--daily-cap` | 15 | `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
+| Auto-merge earned trust | 3 clean merged imp PRs per repo | `defaults.autoMergeTrust`, `checks.mjs` |
+| RSI issues per day | 3 | `defaults.rsiDailyIssueCap` |
 
-Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for that repo need a look (daily triage) before more model time goes there.
+Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for that repo need a look before more model time goes there.
 
 ## Guardrails
 
 - **Clean environment.** The imp gets PATH and the 9router URL and key, nothing else. No Claude session tokens, no GitHub token.
-- **No push.** The worktree's push URL is `no_push`. Only `imp.mjs pr` pushes, and only after the gate passes.
-- **Tool allowlist.** Read, Edit, Write, Glob, Grep, `git status|diff|add|commit|log|checkout --`, `docker run`. No `gh`, no host npm/node.
+- **No push.** The worktree's push URL is `no_push`. Only `imp.mjs pr` / `fix.mjs` push, and only after the gate passes.
+- **Tool allowlist.** Read, Edit, Write, Glob, Grep, limited `git …`, and `node …/runtest.mjs` only. No raw `docker run` / host npm for the model (the **gate** runs the brief's Docker test/lint). No `gh` in the sandbox.
 - **Formatting is the runner's job.** If the brief has `format:`, the gate runs it first and commits any change as a separate `style: … (imp runner)` commit. The model never spends turns on whitespace.
-- **Gate.** Tests (filter by path prefix, not exact filename) and `lint:` exit 0 in Docker, at least one commit, every commit has the imp trailer, no uncommitted leftovers, the diff is within `maxLines` (default 80), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles.
-- **Review.** Imp PRs open as **drafts** labelled `imp`, saying `Fixes #n`. They're never auto-merged. Marking the draft "ready for review" is your +1, and CodeRabbit reviews it like any other PR. Once imps run unattended, they move to a GitHub App identity (IMPS-PLAN D5), so a ruleset can require your approval on `imp` PRs; you can't approve PRs pushed under your own account.
+- **Gate.** Tests and `lint:` exit 0 (usually in Docker via the brief), at least one commit, every *imp* commit has the trailer, no uncommitted leftovers, the diff is within `maxLines` (default **15** when the brief omits it — briefs should set a realistic number), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles.
+- **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust** (`autoMergeTrust` clean merges in the ledger). Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
 
 ## What gets measured
 
@@ -102,11 +130,26 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
 
 ## RSI
 
+Two layers:
+
+### Automated (`rsi.mjs`)
+
+Bounded, gated self-improvement. Reads the ledger, `dispatch.jsonl`, and open `bot:journey` / `bot:review` issues; files at most `rsiDailyIssueCap` `imp:ready` issues per day (with briefs) against the kit or the product repo. Dedupes by title/key. Never proposes touching `.github/workflows/` or secrets. Journeys that are pure stale baselines are skipped (human/runner work).
+
+```bash
+node imps/rsi.mjs --dry-run
+node imps/dispatch.mjs --rsi          # or IMPS_RSI=1 on the hourly tick
+```
+
+**Kill switch:** `IMPS_RSI=0` or `~/.imps/config.json` → `{"rsi": false}`.
+
+### Manual (hypervisor)
+
 After every few runs, and weekly once imps are routine:
 
-1. `node imps/imp.mjs report` prints a per-run table plus the tool-error kinds and gate failures that recur.
+1. `node imps/imp.mjs report` / `node imps/stats.mjs` print the tables.
 2. Each recurring failure becomes **one line** under "Lessons from earlier runs" in `PREAMBLE.md`, or one gate rule in `lib.mjs`. Each lesson line cites the run ids it came from.
-3. That change goes in its own PR. Because the brief hash changes, the next runs show whether it helped.
+3. That change goes in its own PR (or an RSI-filed imp). Because the brief hash changes, the next runs show whether it helped.
 4. Delete a lesson once ~10 runs pass without hitting that failure. The preamble stays short.
 
 ### Token review (hypervisor)
@@ -116,14 +159,30 @@ The paid-model daily pass is the one cost we control, so review it on the same c
 1. Read the `usage-start` / `usage-end` lines and the `tool calls ~n` totals in `stash/agent/logs/imps-triage.log`. Which sections spent the most?
 2. For each, ask in order: can a **deterministic script** do it (like `precheck.mjs`, which skips the model on quiet days)? If not, can a **free 9router model** do it (summaries, label checks, dedupe by error signature, templated briefs)? Only judgment calls (a brief for a new kind of bug, a conflict, an oversight call) stay on the paid model.
 3. Move one thing per review: write it as a kit script with a test, in its own PR, and delete that step from the triage prompt. Log the saving (calls or % of the 5-hour limit) next to the change.
-4. Add the next candidate to the 'Known gaps' list below so it isn't forgotten. Current candidates: merge passing imp PRs as a script, auto-bump `maxLines` on `diff N > M` gate failures, brief lint at post time, dedupe journey issues with the same error signature.
+4. Add the next candidate to the 'Known gaps' list below so it isn't forgotten. Current candidates: auto-bump `maxLines` on `diff N > M` gate failures, brief lint at post time, dedupe journey issues with the same error signature, webhook-driven `imp:ready` instead of label-watch polling.
 
 
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
 
+## Stash (and other thin wrappers)
+
+Repos such as `nitsuah/stash` may call this kit through:
+
+- `scripts/imp-run.ps1` → `node <kit>/imps/imp.mjs …`
+- `scripts/imp-add-trailer.ps1`
+- `.github/imps-config.yml` (`kit_path` left empty in git)
+- `.github/imps-path.txt` (docs) / local `.imps/kit-path.txt`
+
+**Contract this PR expects from stash (no wrapper CLI change if already portable):**
+
+1. Resolve kit path as: `IMPS_KIT_PATH` → `<repo>/.imps/kit-path.txt` → config `kit_path`.
+2. Point that path at the **detached runner** from `setup.ps1` (not a path inside the stash worktree).
+3. Do not commit machine-specific paths. After setup, copy `~/.imps/kit-path.txt` into the repo's ignored `.imps/kit-path.txt` or set `IMPS_KIT_PATH` in the user environment / Task Scheduler.
+4. Optional config keys in `imps-config.yml` (`max_diff_lines`, etc.) are **stash-local**; the kit gate still reads `maxLines` from the brief / `defaults.mjs`. If stash wants a higher brief default, put it in the brief front matter when filing issues.
+
 ## Review
 
-After the dispatcher opens a draft PR, **`review.mjs`** runs one read-only `claude -p` pass through 9router in the imp's worktree and posts the result as a single GitHub **COMMENT** review. It never approves, never blocks, and never merges.
+After the dispatcher opens a PR, **`review.mjs`** runs one read-only pass through 9router in the imp's worktree and posts the result as a single GitHub **COMMENT** review. It never posts a GitHub APPROVE event and never merges by itself — `imp.mjs pr` owns the merge decision.
 
 - **Inputs:** the issue, the brief, and the diff (capped at 60 KB; the reviewer can Read the rest).
 - **Tools:** Read, Grep, Glob, plus the read-only git commands Claude Code allows by default. Edit and Write are denied, and so are PowerShell, web access and subagents (`runner.mjs` ALWAYS_DENY). Running tests or builds is denied.
