@@ -339,7 +339,7 @@ if errorlevel 1 exit /b 1
 node imps\preflight.mjs >> "%IMPS_HOME%\label-watch.log" 2>&1
 if errorlevel 1 exit /b 1
 REM Cheap tick: dispatch no-ops under the lock if a cycle is already running.
-node imps\dispatch.mjs >> "%IMPS_HOME%\label-watch.log" 2>&1
+node imps\dispatch.mjs %IMPS_DRY_ARGS% >> "%IMPS_HOME%\label-watch.log" 2>&1
 "@
     Set-Content -LiteralPath $watch -Value $watchBody -Encoding ascii
     Write-Ok "wrote $watch (5-min label watch; lock prevents overlap)"
@@ -361,7 +361,7 @@ if (-not $SkipTask) {
         $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
         $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
         $logonTrigger.Delay = 'PT2M'
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c `"$hourly`""
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c `"`$hourly`""
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($hourlyTrigger, $logonTrigger) -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07 + 2 min after logon)"
     } catch {

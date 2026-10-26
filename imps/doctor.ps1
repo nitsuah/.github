@@ -90,6 +90,15 @@ if (Test-Path -LiteralPath $warlock) {
     if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 } else { Info 'warlock.mjs not present (older kit); topology unchecked' }
 
+# Preflight: fail fast if the checkout is a stub or missing files. This replaces
+# the old implicit success on incomplete checkouts (#62).
+$preflight = Join-Path $PSScriptRoot 'preflight.mjs'
+if (Test-Path -LiteralPath $preflight) {
+    Write-Host '  preflight:' -ForegroundColor DarkGray
+    & node $preflight
+    if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+} else { Bad 'preflight.mjs missing — kit is incomplete (re-run setup.ps1)' }
+
 if ($failed) { Write-Host 'doctor: FAIL' -ForegroundColor Red; exit 1 }
 Write-Host 'doctor: OK' -ForegroundColor Green
 exit 0

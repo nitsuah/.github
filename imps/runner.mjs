@@ -277,12 +277,30 @@ export function pickModel(pool = MODEL_POOL, strategy = 'fallback', now = Date.n
     return order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT) || null;
 }
 
+// Reserve quota atomically: pick + decrement as one operation so concurrent
+// runs cannot both see the same available slot and both execute (#64).
+export function reserveQuota(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
+    const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
+    const raw = readQuota();
+    const model = order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT);
+    if (!model) return null;
+    const c = counter(raw, model, now);
+    raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
+    mkdirSync(HOME, { recursive: true });
+    const tmp = `${QUOTA}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+    renameSync(tmp, QUOTA);
+    return model;
+}
+
 export function decrementQuota(model, now = Date.now()) {
     const raw = readQuota();
     const c = counter(raw, model, now);
     raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
     mkdirSync(HOME, { recursive: true });
-    writeFileSync(QUOTA, JSON.stringify(raw, null, 2) + '\n');
+    const tmp = `${QUOTA}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+    renameSync(tmp, QUOTA);
 }
 
 // What an imp may do in its worktree: edit, read-only and commit git, and

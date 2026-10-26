@@ -77,7 +77,7 @@ const match = (() => {
 })();
 
 const write = match
-    ? gh(['issue', 'comment', String(match.number), '-R', repo, '-b', body])
+    ? gh(['issue', 'edit', String(match.number), '-R', repo, '--body', body])
     : gh(['issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', 'imp']);
 
 if (write.status !== 0) {

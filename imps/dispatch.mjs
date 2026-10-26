@@ -179,26 +179,28 @@ function startClaimBeat(repo, number, id) {
 // its issue on imp:working and no other machine can release it (runs.jsonl is
 // per machine). Reclaim rather than escalate: the work is idempotent and the
 // brief is still valid. See lib.mjs staleClaim and WARLOCK.md.
-async function releaseStrandedClaims() {
+async function releaseStrandedClaims(ledgerRows) {
     const stranded = [];
-    const liveHere = new Set(readLedger().filter((r) => !r.endedAt).map((r) => r.issue));
+    const liveHere = new Set(ledgerRows.filter((r) => !r.endedAt).map((r) => `${r.repo}#${r.issue}`));
     for (const issue of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels'])) {
         const repo = issue.repository.name;
+        const number = issue.number;
+        const key = `${repo}#${number}`;
         const labels = issue.labels.map((l) => l.name);
-        const comments = ghJson(['issue', 'view', String(issue.number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
-        const why = staleClaim({ labels, comments, ledgerHasRow: liveHere.has(issue.number), machine: MACHINE });
+        const comments = ghJson(['issue', 'view', String(number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
+        const why = staleClaim({ labels, comments, ledgerHasRow: liveHere.has(key), machine: MACHINE });
         if (!why) continue;
         // A heartbeat that stopped is a dead run even before the claim is old:
         // release it so a long-but-live run is never stolen (#69).
         const claim = parseClaim((latestClaim(comments) || {}).body || '');
         const expired = claimExpired(claim);
-        log({ event: expired ? 'claim-released' : 'reclaim', repo, number: issue.number, why, machine: claim?.machine });
+        log({ event: expired ? 'claim-released' : 'reclaim', repo, number, why, machine: claim?.machine });
         if (dry) continue;
-        comment(repo, issue.number, expired
+        comment(repo, number, expired
             ? `<!-- imp-reclaim -->\nReleased: ${claim.machine || 'a machine'}'s claim had no heartbeat since ${claim.heartbeatAt || '?'} (TTL 90 min). Back to \`imp:ready\`.`
             : `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
-        relabel(repo, issue.number, 'imp:ready', ['imp:working']);
-        stranded.push(`${repo}#${issue.number}`);
+        relabel(repo, number, 'imp:ready', ['imp:working']);
+        stranded.push(key);
     }
     return stranded;
 }
@@ -259,11 +261,11 @@ const CLAIM_BEAT_MS = 10 * 60_000;
 
 async function work(issue) {
     const { repo, number } = issue;
-    relabel(repo, number, 'imp:working', ['imp:ready']);
-    // A label has no owner, so write one down and keep it beating. Without this a
-    // machine that dies leaves the issue on imp:working for the whole fleet, and
-    // a live run is indistinguishable from a dead one (#60, #67).
+    // A label has no owner, so write one down and keep it beating BEFORE relabeling.
+    // Without this a machine that dies leaves the issue on imp:working for the whole
+    // fleet, and a live run is indistinguishable from a dead one (#60, #67).
     const claim = startClaimBeat(repo, number);
+    relabel(repo, number, 'imp:working', ['imp:ready']);
     try {
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
@@ -308,7 +310,8 @@ if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, wa
 
 // Release claims left behind by a machine that stopped mid-run, before picking
 // anything: otherwise the queue looks emptier than it is (#60).
-const reclaimed = await releaseStrandedClaims();
+const ledger = readLedger();
+const reclaimed = await releaseStrandedClaims(ledger);
 if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
 
 const labelCleared = await clearStaleLabels();

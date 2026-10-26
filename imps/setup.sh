@@ -193,8 +193,8 @@ if [[ "$WANT_LABEL_WATCH" -eq 1 ]]; then
 set -euo pipefail
 # Kill switches: IMPS_LABEL_WATCH=0/false, or config.json "labelWatch": false.
 case "\${IMPS_LABEL_WATCH:-}" in 0|false) exit 0 ;; esac
-export PATH="$PATH"
-export IMPS_HOME="$IMPS_HOME_DIR"
+export PATH="\$PATH"
+export IMPS_HOME="\$IMPS_HOME_DIR"
 if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
   const fs = require("fs");
   const config = JSON.parse(fs.readFileSync(process.env.IMPS_HOME + "/config.json", "utf8"));
@@ -202,16 +202,16 @@ if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
 '; then
   exit 0
 fi
-export IMPS_CODE="$CODE"
-export IMPS_KIT_PATH="$RUNNER"
-cd "$RUNNER"
-git fetch -q origin $BRANCH
-git reset -q --hard origin/$BRANCH
+export IMPS_CODE="\$CODE"
+export IMPS_KIT_PATH="\$RUNNER"
+cd "\$RUNNER"
+git fetch -q origin \$BRANCH
+git reset -q --hard origin/\$BRANCH
 node imps/preflight.mjs >>"\$IMPS_HOME/label-watch.log" 2>&1
-node imps/dispatch.mjs >>"\$IMPS_HOME/label-watch.log" 2>&1
+node imps/dispatch.mjs \${IMPS_DRY_RUN:+--dry-run} >>"\$IMPS_HOME/label-watch.log" 2>&1
 EOF
-  chmod +x "$WATCH"
-  ok "wrote $WATCH (5-min label watch; lock prevents overlap)"
+  chmod +x "\$WATCH"
+  ok "wrote \$WATCH (5-min label watch; lock prevents overlap)"
 fi
 
 if [[ "$SKIP_CRON" != "1" ]]; then
@@ -239,7 +239,7 @@ Description=imps dispatcher (one warlock cycle — see WARLOCK.md)
 
 [Service]
 Type=oneshot
-ExecStart=$HOURLY
+ExecStart="$HOURLY"
 EOF
     cat >"$UNIT_DIR/imps-hourly.timer" <<EOF
 [Unit]
@@ -264,7 +264,7 @@ Description=imps label watch
 
 [Service]
 Type=oneshot
-ExecStart=$WATCH
+ExecStart="$WATCH"
 EOF
       cat >"$UNIT_DIR/imps-label-watch.timer" <<EOF
 [Unit]
@@ -280,6 +280,8 @@ EOF
       systemctl --user daemon-reload
       systemctl --user enable --now imps-label-watch.timer >/dev/null 2>&1 || hint "could not enable imps-label-watch.timer"
       ok "installed systemd user timer: imps-label-watch.timer (every 5 min)"
+    fi
+    if ! loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes'; then
       hint "run 'loginctl enable-linger $USER' so the timers survive logout"
     fi
   else

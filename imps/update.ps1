@@ -37,6 +37,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'git checkout failed' }
     git reset -q --hard "origin/$Branch"
     if ($LASTEXITCODE -ne 0) { throw 'git reset failed' }
+    # Verify the checkout is usable after reset (#62).
+    & node imps\preflight.mjs
+    if ($LASTEXITCODE -ne 0) { throw "$RunnerPath does not look like a usable imps kit after update" }
     Write-Host "updated $RunnerPath → origin/$Branch" -ForegroundColor Green
     git log -1 --oneline
 } finally { Pop-Location }

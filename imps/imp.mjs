@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -89,8 +89,8 @@ async function run() {
     }
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
     validateBrief(meta);
-    // Pick before the worktree exists: an exhausted pool must cost nothing.
-    const chosenModel = pickModel(MODEL_POOL, o.modelStrategy || 'fallback');
+    // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
+    const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
     if (!chosenModel) {
         console.error(`every model in the pool is out of quota (${join(HERE, 'model_quota.json')}); run stopped`);
         process.exit(1);

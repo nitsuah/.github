@@ -19,5 +19,7 @@ fi
 git -C "$RUNNER" fetch -q origin "$BRANCH"
 git -C "$RUNNER" checkout -q "$BRANCH"
 git -C "$RUNNER" reset -q --hard "origin/$BRANCH"
+# Verify the checkout is usable after reset (#62).
+node "$RUNNER/imps/preflight.mjs" || { echo "$RUNNER does not look like a usable imps kit after update" >&2; exit 1; }
 echo "updated $RUNNER → origin/$BRANCH"
 git -C "$RUNNER" log -1 --oneline
