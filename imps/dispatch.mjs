@@ -2,12 +2,12 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 8] [--per-repo 2] [--concurrency 3] [--owner nitsuah] [--dry-run]
+//   node dispatch.mjs [--max 5] [--wip 8] [--per-repo 4] [--concurrency 4] [--owner nitsuah] [--dry-run] [--rsi]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
-// BRIEF_MARK in lib.mjs; Opus triage writes them). Each issue moves to
-// `imp:working`, then `imp:pr` (draft PR opened) or `imp:failed` (gate
-// reasons commented, needs a new brief). Contract: imps/STANDARD.md.
+// BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
+// `imp:working`, then `imp:pr` (PR opened) or `imp:failed` (gate reasons
+// commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -15,18 +15,20 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { pickIssues, briefFromComments, loopBudget } from './lib.mjs';
+import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 const { values: o } = parseArgs({
     options: {
-        max: { type: 'string', default: '5' },
-        wip: { type: 'string', default: '8' },
-        'per-repo': { type: 'string', default: '4' },
-        concurrency: { type: 'string', default: '4' },
-        'daily-cap': { type: 'string', default: '15' },
-        owner: { type: 'string', default: 'nitsuah' },
+        max: { type: 'string', default: String(DEFAULTS.max) },
+        wip: { type: 'string', default: String(DEFAULTS.wip) },
+        'per-repo': { type: 'string', default: String(DEFAULTS.perRepo) },
+        concurrency: { type: 'string', default: String(DEFAULTS.concurrency) },
+        'daily-cap': { type: 'string', default: String(DEFAULTS.dailyCap) },
+        owner: { type: 'string', default: DEFAULTS.owner },
         'dry-run': { type: 'boolean', default: false },
+        rsi: { type: 'boolean', default: false },
     },
 });
 const perRepo = Number(o['per-repo']);
@@ -51,7 +53,7 @@ const ghJson = (args) => JSON.parse(gh(args) || 'null');
 
 // ── one cycle at a time ───────────────────────────────────────────────────
 const LOCK = join(HOME, 'dispatch.lock');
-if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs < 3 * 3600_000) {
+if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs < DEFAULTS.lockMaxAgeMs) {
     log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
     process.exit(0);
 }
@@ -80,7 +82,7 @@ async function routerUp() {
 const LABELS = {
     'imp:ready': ['0e8a16', 'Has an imp brief; the hourly dispatcher may take it'],
     'imp:working': ['fbca04', 'An imp is working on this now'],
-    'imp:pr': ['6f42c1', 'An imp opened a draft PR for this'],
+    'imp:pr': ['6f42c1', 'An imp opened a PR for this'],
     'imp:failed': ['b60205', 'The imp did not pass the gate; needs a new brief or a human'],
 };
 const ensured = new Set();
@@ -126,9 +128,8 @@ async function work(issue) {
         const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
         if (url) {
             relabel(repo, number, 'imp:pr', ['imp:working']);
-            comment(repo, number, `An imp opened a draft PR: ${url} (run \`${id}\`: ${stats}). It stays a draft until a human marks it ready.`);
-            // The review runs inside `imp.mjs pr` (one place, so the auto-merge
-            // decision sees the verdict). Nothing left to do here but log it.
+            comment(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
+            // The review + merge decision live inside `imp.mjs pr`.
             return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
@@ -213,3 +214,14 @@ await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.leng
     }
 }));
 log({ event: 'done' });
+
+// Optional RSI pass (also runnable via `node rsi.mjs`). Off by default on the
+// hourly tick; enable with --rsi or IMPS_RSI=1. Kill switch: IMPS_RSI=0.
+if (o.rsi || process.env.IMPS_RSI === '1') {
+    if (process.env.IMPS_RSI === '0') {
+        log({ event: 'rsi-skip', reason: 'IMPS_RSI=0' });
+    } else {
+        const rsi = await node(['rsi', ...(dry ? ['--dry-run'] : [])], 'rsi.mjs');
+        log({ event: 'rsi', code: rsi.code, out: rsi.out.trim().split('\n').slice(-5) });
+    }
+}

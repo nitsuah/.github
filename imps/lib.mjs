@@ -1,5 +1,6 @@
 // Pure helpers for imps: brief parsing, run metrics, the pre-push gate and
-// the RSI report. No I/O, no deps. Tested in lib.test.mjs (node --test).
+// the RSI report. No I/O beyond defaults.mjs. Tested in lib.test.mjs (node --test).
+import { DEFAULTS } from './defaults.mjs';
 
 // A brief is markdown with an optional `---` front matter of `key: value`
 // lines (repo, issue, test, maxLines, allow). Returns { meta, body }.
@@ -98,7 +99,7 @@ const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
 // `git diff --numstat <base>..HEAD`, commit messages, and the test exit code.
 // sizeNumstat (optional) is the imp's own commits only, so a runner-side
 // formatter commit counts toward scope but not toward the size budget.
-export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = 15, allow = [] }) {
+export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = DEFAULTS.maxLines, allow = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -146,7 +147,12 @@ export function loopBudget(rows, now = Date.now()) {
     return { runsLast24h, cooldown };
 }
 
-export function pickIssues({ candidates, repos, max = 5, wip = 8, perRepo = 1, quietHours = 6, dailyCap = Infinity, runsLast24h = 0, cooldown = {} }) {
+export function pickIssues({
+    candidates, repos,
+    max = DEFAULTS.max, wip = DEFAULTS.wip, perRepo = 1,
+    quietHours = DEFAULTS.quietHours, dailyCap = Infinity,
+    runsLast24h = 0, cooldown = {},
+}) {
     const openImp = Object.values(repos).reduce((n, r) => n + (r.impPRs || 0), 0);
     const room = Math.max(0, Math.min(max, wip - openImp, dailyCap - runsLast24h));
     const kind = (i) => (i.labels.includes('bot:review') ? 0 : i.labels.includes('bug') ? 1 : 2);
