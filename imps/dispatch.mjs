@@ -288,10 +288,11 @@ async function work(issue) {
     // A label has no owner, so write one down and keep it beating BEFORE relabeling.
     // Without this a machine that dies leaves the issue on imp:working for the whole
     // fleet, and a live run is indistinguishable from a dead one (#60, #67).
-    const claim = startClaimBeat(repo, number);
-    // Post the claim comment before exposing imp:working, so another dispatcher
+    // Post the claim comment BEFORE relabeling to imp:working, so another dispatcher
     // sees the claim and does not reclaim it while this run is starting.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const claim = startClaimBeat(repo, number);
+    // startClaimBeat posts the initial claim synchronously (gh uses spawnSync).
+    // No yield here — the claim is visible before we change the label.
     try {
         relabel(repo, number, 'imp:working', ['imp:ready']);
     } catch (e) {

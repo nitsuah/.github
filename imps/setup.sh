@@ -121,8 +121,17 @@ if [[ -d "$RUNNER/.git" ]]; then
     bad "$RUNNER has local changes; refusing to reset. Use a dedicated runner path."
     exit 1
   fi
-  git -C "$RUNNER" remote set-url origin "https://github.com/${KIT_REPO}.git"
+  # Protect untracked files that would be overwritten by the target commit (#59, #64).
+  # Check if any untracked files exist in the target commit and fail if they would be lost.
   git -C "$RUNNER" fetch -q origin "$BRANCH"
+  UNTRACKED=$(git -C "$RUNNER" ls-files --others --exclude-standard)
+  if [[ -n "$UNTRACKED" ]]; then
+    OVERWRITTEN=$(echo "$UNTRACKED" | while read -r f; do git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1 && echo "$f"; done)
+    if [[ -n "$OVERWRITTEN" ]]; then
+      bad "untracked files would be overwritten by reset: $OVERWRITTEN"
+      exit 1
+    fi
+  fi
   git -C "$RUNNER" checkout -q "$BRANCH"
   git -C "$RUNNER" reset -q --hard "origin/$BRANCH"
   ok "reset $RUNNER to origin/$BRANCH"

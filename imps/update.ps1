@@ -46,6 +46,17 @@ try {
     if ($dirty) { throw "$RunnerPath has local changes; refusing to reset. Use a dedicated runner path." }
     git fetch -q origin $Branch
     if ($LASTEXITCODE -ne 0) { throw 'git fetch failed' }
+    # Protect untracked files that would be overwritten by the target commit (#64).
+    $untracked = & git ls-files --others --exclude-standard
+    if ($LASTEXITCODE -eq 0 -and $untracked) {
+        $overwritten = @()
+        foreach ($f in $untracked) {
+            if (& git cat-file -t "origin/$Branch:$f" 2>$null) {
+                $overwritten += $f
+            }
+        }
+        if ($overwritten) { throw "untracked files would be overwritten by reset: $($overwritten -join ', ')" }
+    }
     git checkout -q $Branch
     if ($LASTEXITCODE -ne 0) { throw 'git checkout failed' }
     git reset -q --hard "origin/$Branch"

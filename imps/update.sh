@@ -28,6 +28,16 @@ fi
 # untracked file is not something this command can lose. model_quota.json used
 # to be tracked and is now machine state in IMPS_HOME (#59) — after an upgrade
 # it survives as an untracked leftover and must not block updates.
+# Also protect untracked files that would be overwritten by the target commit (#64).
+git -C "$RUNNER" fetch -q origin "$BRANCH"
+UNTRACKED=$(git -C "$RUNNER" ls-files --others --exclude-standard)
+if [[ -n "$UNTRACKED" ]]; then
+  OVERWRITTEN=$(echo "$UNTRACKED" | while read -r f; do git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1 && echo "$f"; done)
+  if [[ -n "$OVERWRITTEN" ]]; then
+    echo "untracked files would be overwritten by reset: $OVERWRITTEN" >&2
+    exit 1
+  fi
+fi
 if [[ -n "$(git -C "$RUNNER" status --porcelain --untracked-files=no)" ]]; then
   echo "$RUNNER has local changes; refusing to reset" >&2
   exit 1

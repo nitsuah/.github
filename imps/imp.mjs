@@ -127,6 +127,7 @@ async function run() {
         // kit fix is unattributable — you cannot tell a bad brief from a
         // machine 40 commits behind (#61).
         kitSha: kitSha(), machine: machineName(),
+        pid: process.pid,
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };
     appendFileSync(LEDGER, JSON.stringify(row) + '\n');
@@ -360,6 +361,7 @@ function ingest(transcript) {
         id, repo: meta.repo, issue: Number(meta.issue), model: o.model, brief: resolve(o.brief),
         briefHash: createHash('sha1').update(readFileSync(o.brief)).digest('hex'), transcript: resolve(transcript),
         worktree: o.worktree ? resolve(o.worktree) : null, metrics, ingested: true,
+        pid: process.pid,
     };
     const prev = rows().find((x) => x.id === id);
     save([...rows().filter((x) => x.id !== id), { ...prev, ...row }]);
