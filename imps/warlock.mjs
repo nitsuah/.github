@@ -81,7 +81,44 @@ if (!hourlyBody) {
 
 // ── exactly one warlock per machine ───────────────────────────────────────
 if (process.platform !== 'win32') {
-    check('exactly one dispatch task', true, 'skipped (non-Windows: check your cron/systemd units by hand)');
+    // Check cron for hourly.sh
+    let cronExists = false;
+    let cronCurrent = false;
+    try {
+        const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
+        if (cron.status === 0) {
+            const lines = (cron.stdout || '').split('\n');
+            const hourlyLine = lines.find(l => l.includes('hourly.sh'));
+            cronExists = Boolean(hourlyLine);
+            // Check if the crontab line points to the correct hourly.sh path
+            cronCurrent = hourlyLine ? hourlyLine.includes(hourly) : false;
+        }
+    } catch { /* crontab not available */ }
+
+    // Check systemd timers
+    let systemdExists = false;
+    let systemdCurrent = false;
+    try {
+        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+        if (timer.status === 0) {
+            const lines = (timer.stdout || '').split('\n');
+            const impsTimer = lines.find(l => l.includes('imps-hourly'));
+            systemdExists = Boolean(impsTimer);
+            // Check the service ExecStart
+            if (impsTimer) {
+                const svc = spawnSync('systemctl', ['--user', 'show', 'imps-hourly.service', '-p', 'ExecStart'], { encoding: 'utf8', windowsHide: true });
+                const execStart = (svc.stdout || '').trim().replace('ExecStart=', '');
+                systemdCurrent = execStart.includes(hourly);
+            }
+        }
+    } catch { /* systemctl not available */ }
+
+    const ok = cronExists || systemdExists;
+    const detail = ok
+        ? (cronExists && cronCurrent ? 'cron: hourly.sh' : cronExists ? `cron: ${hourly} (mismatch)` : '') +
+          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '')
+        : 'no crontab entry for hourly.sh and no systemd imps-hourly.timer — nothing is reading the queue';
+    check('exactly one dispatch task', ok, detail);
 } else {
     const ps = [
         'Get-ScheduledTask | Where-Object { $_.Actions | Where-Object { "$($_.Execute) $($_.Arguments)" -match "hourly\\.cmd|dispatch\\.mjs" } }',

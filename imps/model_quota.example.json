@@ -1,5 +1,5 @@
 {
-  "_comment": "File schema: { [model]: { used: number, window: number } }. 'window' is the start of the current rolling window (epoch ms). This is a schema example — copying this file gives each model full quota (used=0, window=0 is stale). To create a partial quota, set a nonzero 'used' and the current window start for MAX and openrouter/free. Absent models = full quota for the current window. Per machine state; never in the runner checkout.",
+  "_comment": "File schema: { [model]: { used: number, window: number } }. 'window' is the start of the current rolling window (epoch ms). This is a schema example only — do not copy this file into IMPS_HOME. A fresh machine starts with no model_quota.json (full quota). To create a partial quota, write a valid JSON with nonzero 'used' and the current window start for specific models. Absent models = full quota for the current window. Per machine state; never in the runner checkout.",
   "MAX": { "used": 0, "window": 0 },
   "openrouter/free": { "used": 0, "window": 0 }
 }

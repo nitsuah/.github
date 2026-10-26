@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HOME, LEDGER, rows, kitSha, machineName } from './runner.mjs';
+import { resolveMachine } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const dry = process.argv.includes('--dry-run');
@@ -32,7 +33,7 @@ if (!enabled) process.exit(0);
 // Resolve machine name once, shared across all four record types:
 // heartbeat issues, claim comments, ledger rows, dispatch events.
 // Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
-const machine = resolveMachine(config, process.env);
+const machine = machineName();
 const title = `imps heartbeat: ${machine}`;
 const repo = config.kitRepo || DEFAULTS.kitRepo;
 

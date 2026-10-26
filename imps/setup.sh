@@ -252,7 +252,7 @@ Description=imps dispatcher (one warlock cycle — see WARLOCK.md)
 
 [Service]
 Type=oneshot
-ExecStart="$HOURLY"
+ExecStart="${HOURLY}"
 EOF
     cat >"$UNIT_DIR/imps-hourly.timer" <<EOF
 [Unit]
@@ -280,7 +280,7 @@ Description=imps label watch
 
 [Service]
 Type=oneshot
-ExecStart="$WATCH"
+ExecStart="${WATCH}"
 EOF
       cat >"$UNIT_DIR/imps-label-watch.timer" <<EOF
 [Unit]
@@ -301,7 +301,7 @@ EOF
       ok "installed systemd user timer: imps-label-watch.timer (every 5 min)"
     fi
     # Check lingering for both timer configurations, not just label-watch
-    if ! loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes'; then
+    if ! loginctl show-user "$(id -un)" 2>/dev/null | grep -q 'Linger=yes'; then
       bad "systemd user timers need lingering; run 'loginctl enable-linger $USER' and re-run setup"
       exit 1
     fi

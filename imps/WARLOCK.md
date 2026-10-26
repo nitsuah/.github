@@ -69,7 +69,7 @@ Machines are independent. Each has its own warlock, its own runner, its own
   `<!-- imp-claim -->` comment naming the machine. A machine that dies mid-run
   would otherwise strand the issue on `imp:working` for the whole fleet — and
   no other machine could release it, because the ledger is local. Each cycle
-  therefore reclaims claims older than 3 h from another machine with no run
+  therefore reclaims claims older than **90 min** from another machine with no run
   here, putting the issue back on `imp:ready`.
 - **The ledger is per-machine.** `~/.imps/runs.jsonl` is local. A warlock
   cannot fix-sweep a PR opened from another machine's ledger — it logs the PR
