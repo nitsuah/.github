@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -123,6 +123,10 @@ async function run() {
     const row = {
         id, repo: meta.repo, issue: Number(meta.issue), base, baseSha: git(wt, 'rev-parse', 'HEAD').out,
         branch, worktree: wt, brief: resolve(o.brief), briefHash: hash, model: o.model,
+        // Which kit produced this row. Without it, a behaviour change after a
+        // kit fix is unattributable — you cannot tell a bad brief from a
+        // machine 40 commits behind (#61).
+        kitSha: kitSha(), machine: machineName(),
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };
     appendFileSync(LEDGER, JSON.stringify(row) + '\n');

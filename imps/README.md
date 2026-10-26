@@ -25,12 +25,31 @@ That:
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
 
 ```powershell
-pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check
+pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check (incl. topology)
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\update.ps1    # pull latest kit into the runner
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\uninstall.ps1 # remove tasks; keeps state
 ```
 
-Unix (cheap equivalent): `./imps/setup.sh`, `update.sh`, `uninstall.sh`.
+## Fresh machine (macOS / Linux)
+
+```bash
+gh repo clone nitsuah/.github /tmp/github-kit
+bash /tmp/github-kit/imps/setup.sh
+```
+
+Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Scheduling is a crontab entry when `crontab` exists, and a **systemd user timer** (`imps-hourly.timer` at :07, `imps-label-watch.timer` every 5 min) otherwise — run `loginctl enable-linger "$USER"` so the timers survive logout. If neither exists, setup says so instead of half-succeeding.
+
+## What lives where
+
+| Path | What | Reset by updates? |
+| --- | --- | --- |
+| runner checkout (`imps-runner`) | the kit — code only | **yes**, `reset --hard origin/main` every cycle |
+| `IMPS_CODE` clone (`~/code/.github`) | base for kit self-work worktrees | no (fetched only) |
+| `~/.imps` (`IMPS_HOME`) | ledger, logs, locks, `config.json`, `model_quota.json` | **never** — machine state |
+
+Quota is machine state on purpose: the runner is reset every cycle, so a counter there could neither survive a cycle nor stop the fleet. It refills on a rolling window (`quotaPerWindow` / `quotaWindowMs`).
+
+**Deploying several machines:** the wrappers pull `origin/main` themselves, so a merged kit change reaches every machine on its next cycle. A failed reset aborts non-zero, and `imps/preflight.mjs` runs first, so a stub or truncated checkout fails loudly instead of no-op'ing. The two things auto-update does *not* cover — the generated `hourly.*` wrapper (re-run setup when `warlock.mjs` says it is stale) and `~/.imps` state — are both checked by `warlock.mjs`. Turn on `"heartbeat": true` in `config.json` (or `IMPS_HEARTBEAT=1`) and each machine updates one issue, `imps heartbeat: <machine>`, so "alive and current" is one `gh issue list`.
 
 ## How it runs (event-driven design)
 

@@ -223,6 +223,16 @@ if (-not (Test-Path -LiteralPath $Dispatch)) {
     exit 1
 }
 
+# Existence is not enough: a stub dispatch.mjs satisfied the check above and
+# no-op'd every hour (#62). Fail the install instead of succeeding into that.
+& node (Join-Path $RunnerPath 'imps\preflight.mjs')
+if ($LASTEXITCODE -ne 0) {
+    Write-Bad "$RunnerPath does not look like a usable imps kit (see above)"
+    Write-Hint 'Move it aside and re-run with a fresh -RunnerPath.'
+    exit 1
+}
+Write-Ok "preflight: $RunnerPath is a real kit"
+
 # Pointer file for stash wrappers (IMPS_KIT_PATH / .imps/kit-path.txt)
 $env:IMPS_KIT_PATH = $RunnerPath
 $kitPointer = Join-Path $HomePath 'kit-path.txt'

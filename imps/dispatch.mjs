@@ -10,11 +10,12 @@
 // commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { pickIssues, briefFromComments, loopBudget, claimBody, staleClaim } from './lib.mjs';
+import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -39,8 +40,10 @@ if (!Number.isInteger(perRepo) || perRepo < 1) {
 const dry = o['dry-run'];
 mkdirSync(join(HOME, 'briefs'), { recursive: true });
 const LOG = join(HOME, 'dispatch.jsonl');
+// Every event carries which machine and which kit commit produced it (#61).
+const PROVENANCE = { machine: machineName(), kitSha: kitSha() };
 const log = (ev) => {
-    const line = { at: new Date().toISOString(), ...ev };
+    const line = { at: new Date().toISOString(), ...PROVENANCE, ...ev };
     console.log(JSON.stringify(line));
     if (!dry) appendFileSync(LOG, JSON.stringify(line) + '\n');
 };
@@ -131,7 +134,7 @@ const node = (args, script) => new Promise((done) => {
     p.on('close', (code) => done({ code, out }));
 });
 const ledgerRow = (id) => readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).find((r) => r.id === id);
-const MACHINE = hostname();
+const MACHINE = machineName();
 
 async function work(issue) {
     const { repo, number } = issue;
@@ -257,3 +260,8 @@ if (o.rsi || process.env.IMPS_RSI === '1') {
         log({ event: 'rsi', code: rsi.code, out: rsi.out.trim().split('\n').slice(-5) });
     }
 }
+
+// Tell the fleet this machine is alive and what it is running. Off unless
+// explicitly enabled, and never fatal — see heartbeat.mjs (#61).
+const beat = await node(['heartbeat', ...(dry ? ['--dry-run'] : [])], 'heartbeat.mjs');
+if (beat.out.trim()) console.log(beat.out.trim());

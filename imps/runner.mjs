@@ -4,7 +4,7 @@
 // get the same guardrails (clean env, 9router only, no shell splitting).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -43,6 +43,19 @@ export function resolveVaultPrompt(config = {}, env = process.env) {
 
 // ── ledger ────────────────────────────────────────────────────────────────
 export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
+
+// ── provenance ────────────────────────────────────────────────────────────
+// Which kit commit and which machine produced a run. Every ledger row and
+// dispatch cycle carries these, so "this behaved differently" can be answered
+// without guessing which machine was running what (#61).
+export const kitSha = () => {
+    try {
+        return spawnSync('git', ['-C', HERE, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', windowsHide: true }).stdout.trim() || null;
+    } catch {
+        return null;
+    }
+};
+export const machineName = () => process.env.IMPS_MACHINE || hostname();
 // Atomic: a crash mid-write must not truncate the run history.
 export const save = (all) => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;

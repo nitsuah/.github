@@ -125,6 +125,8 @@ else
 fi
 
 [[ -f "$RUNNER/imps/dispatch.mjs" ]] || { bad "missing imps/dispatch.mjs"; exit 1; }
+# Existence is not enough: a stub satisfied the check above and no-op'd forever (#62).
+node "$RUNNER/imps/preflight.mjs" || { bad "$RUNNER does not look like a usable imps kit"; hint "Move it aside and re-run with a fresh runner path."; exit 1; }
 printf '%s\n' "$RUNNER" >"$IMPS_HOME_DIR/kit-path.txt"
 ok "kit pointer → $IMPS_HOME_DIR/kit-path.txt"
 
@@ -223,8 +225,60 @@ if [[ "$SKIP_CRON" != "1" ]]; then
       fi
     } | grep -v '^$' | crontab -
     ok "installed crontab: hourly + $([[ "$WANT_LABEL_WATCH" -eq 1 ]] && echo '5-min label-watch' || echo 'no label-watch')"
+  elif command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+    # Headless boxes frequently have no crontab at all. Without this the install
+    # half-succeeded and nothing ever ran (#63).
+    UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    mkdir -p "$UNIT_DIR"
+    cat >"$UNIT_DIR/imps-hourly.service" <<EOF
+[Unit]
+Description=imps dispatcher (one warlock cycle — see WARLOCK.md)
+
+[Service]
+Type=oneshot
+ExecStart=$HOURLY
+EOF
+    cat >"$UNIT_DIR/imps-hourly.timer" <<EOF
+[Unit]
+Description=imps dispatcher, hourly
+
+[Timer]
+OnCalendar=*-*-* *:07:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now imps-hourly.timer >/dev/null 2>&1 || hint "could not enable imps-hourly.timer; enable it yourself"
+    ok "installed systemd user timer: imps-hourly.timer (hourly at :07)"
+    if [[ "$WANT_LABEL_WATCH" -eq 1 ]]; then
+      cat >"$UNIT_DIR/imps-label-watch.service" <<EOF
+[Unit]
+Description=imps label watch
+
+[Service]
+Type=oneshot
+ExecStart=$WATCH
+EOF
+      cat >"$UNIT_DIR/imps-label-watch.timer" <<EOF
+[Unit]
+Description=imps label watch, every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+      systemctl --user daemon-reload
+      systemctl --user enable --now imps-label-watch.timer >/dev/null 2>&1 || hint "could not enable imps-label-watch.timer"
+      ok "installed systemd user timer: imps-label-watch.timer (every 5 min)"
+      hint "run 'loginctl enable-linger $USER' so the timers survive logout"
+    fi
   else
-    hint "crontab not available; run $HOURLY from your own scheduler"
+    hint "no crontab and no systemd --user; run $HOURLY from your own scheduler"
   fi
 fi
 
