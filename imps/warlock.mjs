@@ -113,10 +113,48 @@ if (process.platform !== 'win32') {
         }
     } catch { /* systemctl not available */ }
 
+    // Also check label-watch wrapper (optional but if present, should point to the right runner)
+    const watch = join(HOME, 'label-watch.sh');
+    const watchBody = read(watch);
+    let watchCronExists = false;
+    let watchCronCurrent = false;
+    let watchSystemdExists = false;
+    let watchSystemdCurrent = false;
+    if (watchBody) {
+        // Check cron for label-watch.sh
+        try {
+            const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
+            if (cron.status === 0) {
+                const lines = (cron.stdout || '').split('\n');
+                const watchLine = lines.find(l => l.includes('label-watch.sh'));
+                watchCronExists = Boolean(watchLine);
+                watchCronCurrent = watchLine ? watchLine.includes(watch) : false;
+            }
+        } catch { /* crontab not available */ }
+        // Check systemd for label-watch
+        try {
+            const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+            if (timer.status === 0) {
+                const lines = (timer.stdout || '').split('\n');
+                const watchTimer = lines.find(l => l.includes('imps-label-watch'));
+                watchSystemdExists = Boolean(watchTimer);
+                if (watchTimer) {
+                    const svc = spawnSync('systemctl', ['--user', 'show', 'imps-label-watch.service', '-p', 'ExecStart'], { encoding: 'utf8', windowsHide: true });
+                    const execStart = (svc.stdout || '').trim().replace('ExecStart=', '');
+                    watchSystemdCurrent = execStart.includes(watch);
+                }
+            }
+        } catch { /* systemctl not available */ }
+    }
+
     const ok = cronExists || systemdExists;
     const detail = ok
         ? (cronExists && cronCurrent ? 'cron: hourly.sh' : cronExists ? `cron: ${hourly} (mismatch)` : '') +
-          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '')
+          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '') +
+          (watchBody ? (
+            (watchCronExists && watchCronCurrent ? ' + cron: label-watch.sh' : watchCronExists ? ` + cron: ${watch} (mismatch)` : '') +
+            (watchSystemdExists && watchSystemdCurrent ? ' + systemd: imps-label-watch.timer' : watchSystemdExists ? ` + systemd: ${watch} (mismatch)` : '')
+          ) : '')
         : 'no crontab entry for hourly.sh and no systemd imps-hourly.timer — nothing is reading the queue';
     check('exactly one dispatch task', ok, detail);
 } else {
