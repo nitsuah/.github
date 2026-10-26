@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired, rows } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
 import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
