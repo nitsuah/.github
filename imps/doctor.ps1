@@ -56,6 +56,16 @@ $runner = if ($env:IMPS_RUNNER) { $env:IMPS_RUNNER }
 if (Test-Path -LiteralPath (Join-Path $runner 'imps\dispatch.mjs')) { Ok "runner kit at $runner" }
 else { Bad "runner kit missing at $runner (run setup.ps1)" }
 
+$codeDir = if ($env:IMPS_CODE) { $env:IMPS_CODE } else { Join-Path $env:USERPROFILE 'code' }
+$codeKit = Join-Path $codeDir '.github'
+if (Test-Path -LiteralPath (Join-Path $codeKit 'imps\dispatch.mjs')) {
+    $runnerFull = (Resolve-Path -LiteralPath $runner -ErrorAction SilentlyContinue).Path
+    $codeFull = (Resolve-Path -LiteralPath $codeKit -ErrorAction SilentlyContinue).Path
+    if ($runnerFull -and $codeFull -and ($runnerFull -eq $codeFull)) {
+        Bad "IMPS_CODE\.github is the runner checkout — kit self-work needs a separate clone"
+    } else { Ok "kit self-work clone at $codeKit" }
+} else { Bad "kit self-work clone missing at $codeKit (re-run setup.ps1)" }
+
 if (Test-Path -LiteralPath $stateDir) { Ok "state dir $stateDir" } else { Bad "state dir missing $stateDir" }
 
 $vault = $env:IMPS_VAULT_PROMPT

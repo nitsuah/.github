@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
-import { evaluateChecks, checksFingerprint, mayAutoMerge } from './checks.mjs';
+import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +34,20 @@ function loadHomeConfig() {
         const p = join(HOME, 'config.json');
         return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
     } catch { return {}; }
+}
+
+/** Kit self-work and product work both use IMPS_CODE/<repo>, never the detached runner. */
+function assertCodeRepoBase(repoDir) {
+    const runner = process.env.IMPS_KIT_PATH || process.env.IMPS_RUNNER || '';
+    if (!runner) return;
+    const a = resolve(repoDir).replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+    const b = resolve(runner).replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+    if (a === b || a.startsWith(`${b}/`)) {
+        throw new Error(
+            `refusing to use the imps-runner checkout as a worktree base (${repoDir}). ` +
+            `Clone ${DEFAULTS.kitRepo} under IMPS_CODE/${DEFAULTS.kitFolder} and work in a separate worktree.`,
+        );
+    }
 }
 
 
@@ -83,6 +97,14 @@ async function run() {
     }
     const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
     const repoDir = join(CODE, meta.repo);
+    if (!existsSync(repoDir)) {
+        throw new Error(
+            `missing checkout ${repoDir}. Setup clones ${DEFAULTS.kitRepo} into IMPS_CODE/${DEFAULTS.kitFolder}; ` +
+            `other repos must live under IMPS_CODE alongside it.`,
+        );
+    }
+    assertCodeRepoBase(repoDir);
+    // Always a separate worktree — never the main CODE/<repo> checkout, never the runner.
     const fetch = sh('git', ['-C', repoDir, 'fetch', '-q', 'origin']);
     if (fetch.code) throw new Error(`git fetch failed: ${fetch.err}`);
     const base = meta.base || git(repoDir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').out.replace(/^origin\//, '') || 'main';
@@ -241,11 +263,28 @@ function openPr(id) {
     console.log(rev.stdout.trim().split('\n').pop());
     const verdict = (rev.stdout.match(/posted (\w+)/) || [])[1];
     const cfg = loadHomeConfig();
+    const trustThreshold = Number(cfg.autoMergeTrust ?? DEFAULTS.autoMergeTrust);
+    const ledgerRows = rows();
+    const ledgerCount = cleanMergesForRepo(ledgerRows, r.repo);
+    // Seed from GitHub history when the local ledger alone is short of trust.
+    // Fail closed on seed errors (never treat a fetch failure as zero trust).
+    let githubCount = 0;
+    let githubSeedError = null;
+    if (!(Number.isFinite(trustThreshold) && ledgerCount >= trustThreshold)) {
+        const seed = fetchGithubSeedTrust(repoSlug, {
+            run: (args) => sh('gh', args),
+            need: trustThreshold,
+        });
+        githubCount = seed.count;
+        githubSeedError = seed.error;
+    }
     const trust = mayAutoMerge({
         repo: r.repo,
         reviewVerdict: verdict,
-        rows: rows(),
-        trust: Number(cfg.autoMergeTrust ?? DEFAULTS.autoMergeTrust),
+        rows: ledgerRows,
+        trust: trustThreshold,
+        githubCount,
+        githubSeedError,
     });
     if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);

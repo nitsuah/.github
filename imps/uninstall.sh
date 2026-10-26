@@ -17,11 +17,12 @@ fi
 RUNNER="${RUNNER:-${XDG_DATA_HOME:-$HOME/.local/share}/imps-runner}"
 HOURLY="$IMPS_HOME_DIR/hourly.sh"
 
+WATCH="$IMPS_HOME_DIR/label-watch.sh"
 if command -v crontab >/dev/null; then
-  crontab -l 2>/dev/null | grep -vF "$HOURLY" | crontab - || true
+  crontab -l 2>/dev/null | grep -vF "$HOURLY" | grep -vF "$WATCH" | crontab - || true
   echo "removed imps crontab lines (if any)"
 fi
-rm -f "$HOURLY" "$IMPS_HOME_DIR/label-watch.sh"
+rm -f "$HOURLY" "$WATCH"
 if [[ "$REMOVE_RUNNER" -eq 1 && -d "$RUNNER" ]]; then
   if [[ -d "$RUNNER/.git" && -f "$RUNNER/imps/dispatch.mjs" ]]; then
     case "$RUNNER" in
