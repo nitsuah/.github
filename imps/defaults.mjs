@@ -7,7 +7,7 @@
 /** @type {const} */
 export const DEFAULTS = {
     // Gate: brief may override; this is the fallback when maxLines is omitted.
-    maxLines: 15,
+    maxLines: 40,
 
     // Hourly dispatcher pick/run limits
     max: 5,
@@ -26,8 +26,8 @@ export const DEFAULTS = {
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
 
-    // Auto-merge: require this many clean merged imp PRs for the repo (ledger)
-    // before the runner will merge. Below that, PR stays open for a human.
+    // Auto-merge: require this many clean merged imp PRs for the repo
+    // (max of local ledger + GitHub-seeded history) before the runner will merge.
     autoMergeTrust: 3,
 
     // waitForChecks: consecutive all-green polls before merge (catches late starters)
@@ -42,15 +42,19 @@ export const DEFAULTS = {
 
     // Kit / state locations (overridable by env). Runner is code; HOME is state.
     // Windows setup uses %LOCALAPPDATA%\imps-runner; Unix uses ~/.local/share/imps-runner.
+    // Kit self-work uses IMPS_CODE/<kitFolder> (a normal clone), never the runner checkout.
     kitRepo: 'nitsuah/.github',
+    kitFolder: '.github',
     kitBranch: 'main',
     owner: 'nitsuah',
 
-    // Scheduled task
+    // Scheduled tasks. Label watch is ON by default; kill with IMPS_LABEL_WATCH=0
+    // or config.json "labelWatch": false.
     taskName: 'imps-dispatch',
     taskMinute: 7,
     labelWatchTaskName: 'imps-label-watch',
     labelWatchMinutes: 5,
+    labelWatchDefault: true,
 };
 
 /** Human-readable table for docs / doctor output. */

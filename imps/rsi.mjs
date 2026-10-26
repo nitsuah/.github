@@ -2,7 +2,7 @@
 // Bounded self-improvement (RSI): turn ledger + journey findings into
 // `imp:ready` issues with briefs, so imps fix their own recurring failure modes.
 //
-//   node rsi.mjs [--dry-run] [--owner nitsuah] [--kit-repo .github]
+//   node rsi.mjs [--dry-run] [--owner nitsuah] [--kit-repo .github]  # kitFolder under IMPS_CODE
 //
 // Kill switch (any of these disables filing):
 //   IMPS_RSI=0
@@ -27,7 +27,7 @@ const { values: o } = parseArgs({
     options: {
         'dry-run': { type: 'boolean', default: false },
         owner: { type: 'string', default: DEFAULTS.owner },
-        'kit-repo': { type: 'string', default: '.github' },
+        'kit-repo': { type: 'string', default: DEFAULTS.kitFolder },
         json: { type: 'boolean', default: false },
     },
 });

@@ -67,21 +67,24 @@ Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-ru
 
 | What | Windows default | Unix default | Env override |
 | --- | --- | --- | --- |
-| Kit checkout (code only) | `%LOCALAPPDATA%\imps-runner` | `~/.local/share/imps-runner` | `IMPS_RUNNER` / `IMPS_KIT_PATH` |
+| Kit checkout (runner; code only) | `%LOCALAPPDATA%\imps-runner` | `~/.local/share/imps-runner` | `IMPS_RUNNER` / `IMPS_KIT_PATH` |
 | Durable state | `%USERPROFILE%\.imps` | `~/.imps` | `IMPS_HOME` |
 | Repo checkouts / worktrees | `%USERPROFILE%\code` | `~/code` | `IMPS_CODE` |
+| Kit self-work clone | `%USERPROFILE%\code\.github` | `~/code/.github` | under `IMPS_CODE` / `defaults.kitFolder` |
 
 ```powershell
-pwsh -File imps/setup.ps1                          # doctor + clone/repair + hourly task
-pwsh -File imps/setup.ps1 -RunnerPath 'D:\imps-runner' -EnableLabelWatch
-pwsh -File imps/update.ps1                         # git fetch/reset kit only
+pwsh -File imps/setup.ps1                          # doctor + runner + CODE/.github + hourly + label-watch
+pwsh -File imps/setup.ps1 -RunnerPath 'D:\imps-runner' -SkipLabelWatch
+pwsh -File imps/update.ps1                         # git fetch/reset runner only
 pwsh -File imps/uninstall.ps1                      # tasks gone; state kept
 pwsh -File imps/doctor.ps1
 ```
 
-`setup` is idempotent: re-running repairs the checkout and re-registers the task without clobbering locks, logs, stats, ledger, or `config.json`. Bash twins: `setup.sh` / `update.sh` / `uninstall.sh`.
+`setup` is idempotent: re-running repairs the runner checkout, ensures `IMPS_CODE/.github` exists (fetch only — no hard reset on that clone), and re-registers tasks without clobbering locks, logs, stats, ledger, or `config.json`. Bash twins: `setup.sh` / `update.sh` / `uninstall.sh`.
 
-**Scheduling (Windows).** Task `imps-dispatch` runs `~/.imps/hourly.cmd` hourly at :07 via `conhost.exe --headless`. The wrapper resets the runner checkout to `origin/main` so **only merged kit code runs unattended**, then `node imps/dispatch.mjs`. Logs: `~/.imps/hourly.log`. Optional `-EnableLabelWatch` adds `imps-label-watch` every 5 minutes (same entrypoint; the lock prevents overlap) — a cheap stand-in for a webhook on new `imp:ready` labels.
+**Scheduling (Windows).** Task `imps-dispatch` runs `~/.imps/hourly.cmd` hourly at :07 via `conhost.exe --headless`. The wrapper resets the **runner** checkout to `origin/main` so **only merged kit code runs unattended**, then `node imps/dispatch.mjs`. Logs: `~/.imps/hourly.log`. Task `imps-label-watch` is **on by default** (every 5 minutes, same entrypoint; the lock prevents overlap) — a cheap stand-in for a webhook on new `imp:ready` labels. Kill: `-SkipLabelWatch`, `IMPS_LABEL_WATCH=0`, or `config.json` → `"labelWatch": false`.
+
+**Kit self-work loop.** `nitsuah/.github` is a first-class target under `IMPS_CODE/.github`. When an imp or RSI improves the kit (ledger failures, gate rejections, prompt weaknesses), it works in its **own separate git worktree** of that clone — never the detached `imps-runner` checkout and never the main `CODE/.github` working tree — then opens a normal PR under the same gate and auto-merge rules. After merge, `update.ps1` / the hourly reset pulls `main` into the runner so the next cycle runs the improved kit. Goal: each run makes the next one better.
 
 **Triage stays with the hypervisor (and RSI).** Opus can still brief by hand; `rsi.mjs` may also file capped `imp:ready` issues from ledger/journey signals. The hourly loop never calls a paid model.
 
@@ -98,7 +101,8 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Imp runs per 24 h / `--daily-cap` | 15 | `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
-| Auto-merge earned trust | 3 clean merged imp PRs per repo | `defaults.autoMergeTrust`, `checks.mjs` |
+| Auto-merge earned trust | 3 clean merges/repo (`max(ledger, GitHub seed)`) | `defaults.autoMergeTrust`, `checks.mjs` |
+| Label-watch poll | every 5 min (default on) | `defaults.labelWatchDefault`, `IMPS_LABEL_WATCH=0` |
 | RSI issues per day | 3 | `defaults.rsiDailyIssueCap` |
 
 Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for that repo need a look before more model time goes there.
@@ -109,8 +113,8 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
 - **No push.** The worktree's push URL is `no_push`. Only `imp.mjs pr` / `fix.mjs` push, and only after the gate passes.
 - **Tool allowlist.** Read, Edit, Write, Glob, Grep, limited `git …`, and `node …/runtest.mjs` only. No raw `docker run` / host npm for the model (the **gate** runs the brief's Docker test/lint). No `gh` in the sandbox.
 - **Formatting is the runner's job.** If the brief has `format:`, the gate runs it first and commits any change as a separate `style: … (imp runner)` commit. The model never spends turns on whitespace.
-- **Gate.** Tests and `lint:` exit 0 (usually in Docker via the brief), at least one commit, every *imp* commit has the trailer, no uncommitted leftovers, the diff is within `maxLines` (default **15** when the brief omits it — briefs should set a realistic number), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles.
-- **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust** (`autoMergeTrust` clean merges in the ledger). Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
+- **Gate.** Tests and `lint:` exit 0 (usually in Docker via the brief), at least one commit, every *imp* commit has the trailer, no uncommitted leftovers, the diff is within `maxLines` (default **40** when the brief omits it — briefs should set a realistic number), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles. Kit self-work still denies `.github/workflows/` and secrets inside the `.github` repo itself.
+- **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust**: `max(ledger clean merges, GitHub-seeded count of past merged imp PRs that passed checks and were not reverted)`. Seed query errors fail closed. Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
 
 ## What gets measured
 
@@ -159,7 +163,7 @@ The paid-model daily pass is the one cost we control, so review it on the same c
 1. Read the `usage-start` / `usage-end` lines and the `tool calls ~n` totals in `stash/agent/logs/imps-triage.log`. Which sections spent the most?
 2. For each, ask in order: can a **deterministic script** do it (like `precheck.mjs`, which skips the model on quiet days)? If not, can a **free 9router model** do it (summaries, label checks, dedupe by error signature, templated briefs)? Only judgment calls (a brief for a new kind of bug, a conflict, an oversight call) stay on the paid model.
 3. Move one thing per review: write it as a kit script with a test, in its own PR, and delete that step from the triage prompt. Log the saving (calls or % of the 5-hour limit) next to the change.
-4. Add the next candidate to the 'Known gaps' list below so it isn't forgotten. Current candidates: auto-bump `maxLines` on `diff N > M` gate failures, brief lint at post time, dedupe journey issues with the same error signature, webhook-driven `imp:ready` instead of label-watch polling.
+4. Add the next candidate to the 'Known gaps' list below so it isn't forgotten. Current candidates: auto-bump `maxLines` on `diff N > M` gate failures, brief lint at post time, dedupe journey issues with the same error signature, replace the 5-min label-watch poll with a webhook on `imp:ready`.
 
 
 Don't draw conclusions from runs served by a fallback model; note them and rerun on the intended model.
