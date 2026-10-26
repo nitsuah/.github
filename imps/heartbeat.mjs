@@ -14,7 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { HOME, LEDGER, rows, kitSha, resolveMachine } from './runner.mjs';
+import { HOME, LEDGER, rows, kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const dry = process.argv.includes('--dry-run');

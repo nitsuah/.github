@@ -388,7 +388,7 @@ if (-not $SkipTask) {
             Write-Hint "task '$TaskName' still runs hourly at :07; add the logon trigger by hand if you want boot dispatch."
         } else {
             Write-Bad "could not register '$TaskName' (run elevated if needed)"
-            Write-Hint "Manual: schtasks /Create /TN $TaskName /SC HOURLY /ST 00:07 /TR `\"cmd.exe /d /c $hourly`\""
+            Write-Hint "Manual: schtasks /Create /TN $TaskName /SC HOURLY /ST 00:07 /TR \`"cmd.exe /d /c $hourly\`""
             exit 1
         }
     }

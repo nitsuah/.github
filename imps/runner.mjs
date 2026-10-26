@@ -297,18 +297,31 @@ export function pickModel(pool = MODEL_POOL, strategy = 'fallback', now = Date.n
 
 // Reserve quota atomically: pick + decrement as one operation so concurrent
 // runs cannot both see the same available slot and both execute (#64).
+// Uses a retry loop with verification to handle concurrent callers.
 export function reserveQuota(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
     const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
-    const raw = readQuota();
-    const model = order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT);
-    if (!model) return null;
-    const c = counter(raw, model, now);
-    raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
-    mkdirSync(HOME, { recursive: true });
-    const tmp = `${QUOTA}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
-    renameSync(tmp, QUOTA);
-    return model;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const raw = readQuota();
+        const model = order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT);
+        if (!model) return null;
+        const c = counter(raw, model, now);
+        const expectedUsed = c.used;
+        raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
+        mkdirSync(HOME, { recursive: true });
+        const tmp = `${QUOTA}.${process.pid}.tmp`;
+        writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+        renameSync(tmp, QUOTA);
+
+        // Verify the write wasn't stomped by another process
+        const verify = readQuota();
+        if (verify[model]?.used === expectedUsed + 1 && verify[model]?.window === c.window) {
+            return model;
+        }
+        // Another process modified the file; retry
+    }
+    // Too many retries — treat as quota exhausted to avoid live lock
+    return null;
 }
 
 export function decrementQuota(model, now = Date.now()) {

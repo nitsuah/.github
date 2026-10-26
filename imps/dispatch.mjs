@@ -294,6 +294,12 @@ async function work(issue) {
     await new Promise((resolve) => setTimeout(resolve, 0));
     try {
         relabel(repo, number, 'imp:working', ['imp:ready']);
+    } catch (e) {
+        // If relabel fails, stop the heartbeat and rethrow so the caller sees the error.
+        claim.stop();
+        throw e;
+    }
+    try {
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
         if (!id) {

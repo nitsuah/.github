@@ -280,6 +280,16 @@ export function latestClaim(comments = []) {
     return [...comments].reverse().find((c) => (c.body || '').trimStart().startsWith(CLAIM_MARK)) || null;
 }
 
+// Check if a PID is alive (cross-platform).
+export function isPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return e.code === 'EPERM'; // exists, owned by someone else
+    }
+}
+
 // Is the claim on this issue stale? Staleness needs all three: the issue is on
 // imp:working, the newest claim is older than ttl, and this machine has no
 // ledger row for it (a row means a run may still be alive here — the hourly
@@ -302,7 +312,13 @@ export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, l
     // the claim is stranded and recoverable — the lock only guards a live run.
     if (who === machine && rowEnded) return `claimed by ${machine}, run ended — claim stranded`;
     if (who === machine && !ledgerHasRow) return `claimed by ${machine}, no local row — machine likely crashed before row creation`;
-    if (who === machine) return null; // ours and row exists without endedAt → lock guards us
+    // If the claim is from this machine and a row exists, check if the local run is still alive.
+    // A run is alive if it has no endedAt AND the process is still running (PID exists).
+    if (who === machine && ledgerHasRow && !rowEnded) {
+        const pid = ledgerRow?.pid;
+        if (pid && isPidAlive(pid)) return null; // our run is still alive, claim is valid
+        return `claimed by ${machine}, run ${pid || 'unknown pid'} not alive — claim stranded`;
+    }
     return `claimed by ${who}, no heartbeat for ${Math.round((now - at) / 60_000)}min, and no run here`;
 }
 
