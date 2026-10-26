@@ -27,7 +27,7 @@ issue: 166
 test: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 sh -c "npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run --config config/vitest.config.ts"
 format: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs --fix app/lib
 lint: docker run --rm -v {wt}://app -v imp-nm-fire://app/node_modules -w //app node:22 npx eslint --config config/eslint.config.mjs app/lib
-maxLines: 40
+maxLines: 60
 allow: app/lib/, docs/CHANGELOG.md
 ---
 ## Issue nitsuah/fire#166
