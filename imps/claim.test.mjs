@@ -35,13 +35,31 @@ test('a long run that keeps its heartbeat is never stolen', () => {
 test('this machine is never reclaimed, however old the claim', () => {
     const now = 10 * HOUR;
     const comments = claimed(now - 48 * HOUR, 'B');
-    assert.equal(staleClaim({ labels: ['imp:working'], comments, machine: 'B', now }), null);
+    assert.equal(staleClaim({ labels: ['imp:working'], comments, ledgerHasRow: true, machine: 'B', now }), null);
 });
 
 test('a ledger row here keeps the claim alive while the run may still be going', () => {
     const now = 10 * HOUR;
     const comments = claimed(now - CLAIM_HEARTBEAT_TTL_MS - HOUR, 'A');
     assert.equal(staleClaim({ labels: ['imp:working'], comments, ledgerHasRow: true, machine: 'B', now }), null);
+});
+
+test('a ledger row with endedAt does not protect the claim from another machine', () => {
+    const now = 10 * HOUR;
+    const comments = claimed(now - CLAIM_HEARTBEAT_TTL_MS - HOUR, 'A');
+    assert.match(staleClaim({ labels: ['imp:working'], comments, ledgerHasRow: true, ledgerRow: { endedAt: new Date().toISOString() }, machine: 'B', now }), /claimed by A/);
+});
+
+test('a claim from this machine with no local row is reclaimable (crashed before row creation)', () => {
+    const now = 10 * HOUR;
+    const comments = claimed(now - CLAIM_HEARTBEAT_TTL_MS - HOUR, 'B');
+    assert.match(staleClaim({ labels: ['imp:working'], comments, ledgerHasRow: false, machine: 'B', now }), /no local row/);
+});
+
+test('a claim from this machine with a row that has endedAt is reclaimable (run finished)', () => {
+    const now = 10 * HOUR;
+    const comments = claimed(now - CLAIM_HEARTBEAT_TTL_MS - HOUR, 'B');
+    assert.match(staleClaim({ labels: ['imp:working'], comments, ledgerHasRow: true, ledgerRow: { endedAt: new Date().toISOString() }, machine: 'B', now }), /run ended/);
 });
 
 test('imp:working with no claim comment is reclaimed once stale — pre-lease claims', () => {

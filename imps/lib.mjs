@@ -284,9 +284,13 @@ export function latestClaim(comments = []) {
 // imp:working, the newest claim is older than ttl, and this machine has no
 // ledger row for it (a row means a run may still be alive here — the hourly
 // lock already serialises this machine). Returns a reason string or null.
-export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, machine = '', ttl = CLAIM_HEARTBEAT_TTL_MS, now = Date.now() } = {}) {
+// ledgerRow can be the full row to check endedAt; if true, treat as row without endedAt.
+export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, ledgerRow = null, machine = '', ttl = CLAIM_HEARTBEAT_TTL_MS, now = Date.now() } = {}) {
     if (!labels.includes('imp:working')) return null;
-    if (ledgerHasRow) return null;
+    // A ledger row only exempts the claim if the run is still alive (no endedAt).
+    // If the row exists but endedAt is set, the run finished and the claim is stranded.
+    const rowEnded = ledgerRow && ledgerRow.endedAt;
+    if (ledgerHasRow && !rowEnded) return null;
     const claim = latestClaim(comments);
     if (!claim) return 'imp:working with no claim comment — pre-lease claim, or the label was set by hand';
     const parsed = parseClaim(claim.body);
@@ -294,7 +298,11 @@ export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, m
     if (!Number.isFinite(at)) return `unparseable claim time on ${claim.createdAt || 'comment'}`;
     if (now - at < ttl) return null;
     const who = (parsed && parsed.machine) || 'unknown';
-    if (who === machine) return null; // ours, and the lock already guards us
+    // If the claim is from this machine but the local run has ended (or never started a row),
+    // the claim is stranded and recoverable — the lock only guards a live run.
+    if (who === machine && rowEnded) return `claimed by ${machine}, run ended — claim stranded`;
+    if (who === machine && !ledgerHasRow) return `claimed by ${machine}, no local row — machine likely crashed before row creation`;
+    if (who === machine) return null; // ours and row exists without endedAt → lock guards us
     return `claimed by ${who}, no heartbeat for ${Math.round((now - at) / 60_000)}min, and no run here`;
 }
 

@@ -60,7 +60,11 @@ if (!hourlyBody) {
     check(`${process.platform === 'win32' ? 'hourly.cmd' : 'hourly.sh'} exists`, false, `${hourly} missing — run setup.ps1 or setup.sh`);
 } else {
     const m = hourlyBody.match(/set IMPS_KIT_PATH=(.+)/i) || hourlyBody.match(/export IMPS_KIT_PATH=(.+)/i);
-    const pointed = m ? m[1].trim().replace(/\r$/, '') : null;
+    let pointed = m ? m[1].trim().replace(/\r$/, '') : null;
+    // Setup may quote the value (Unix wrapper). Strip surrounding quotes.
+    if (pointed && ((pointed.startsWith('"') && pointed.endsWith('"')) || (pointed.startsWith("'") && pointed.endsWith("'")))) {
+        pointed = pointed.slice(1, -1);
+    }
     check(`${process.platform === 'win32' ? 'hourly.cmd' : 'hourly.sh'} points at the runner`, Boolean(pointed) && pointed === runner, pointed ? pointed : 'no IMPS_KIT_PATH line — it will run whatever cwd it inherits');
 
     // The generated wrapper is stamped with the setup sha it came from. An old

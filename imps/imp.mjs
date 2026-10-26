@@ -133,7 +133,6 @@ async function run() {
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
-    decrementQuota(chosenModel);
     console.log(`using model ${chosenModel}`);
     const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });

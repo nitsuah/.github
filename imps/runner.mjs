@@ -256,9 +256,20 @@ const windowStart = (now) => Math.floor(now / QUOTA_WINDOW_MS) * QUOTA_WINDOW_MS
 
 const readQuota = () => {
     try {
-        return JSON.parse(readFileSync(QUOTA, 'utf8'));
-    } catch {
-        return {};
+        const content = readFileSync(QUOTA, 'utf8');
+        const parsed = JSON.parse(content);
+        // Reject non-plain-object roots (null, array, primitive) — damaged quota
+        // state must not silently reset the spend limit.
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('model_quota.json root is not a plain object');
+        }
+        return parsed;
+    } catch (e) {
+        // Missing file is normal on a fresh machine — return empty quota.
+        if (e.code === 'ENOENT') return {};
+        // Propagate other errors so the caller fails closed instead of treating
+        // invalid state as unused quota.
+        throw new Error(`invalid model_quota.json: ${e.message}`);
     }
 };
 
@@ -270,7 +281,8 @@ const counter = (raw, model, now) => {
 };
 
 // Returns null when every model in the order is out of quota: the caller must
-// stop rather than silently spend past the limit.
+// stop rather than silently spend past the limit. Throws on invalid quota state
+// so a damaged quota file cannot reset the spend limit.
 export function pickModel(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
     const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
     const raw = readQuota();

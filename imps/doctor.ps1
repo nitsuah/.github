@@ -100,5 +100,3 @@ if (Test-Path -LiteralPath $preflight) {
 } else { Bad 'preflight.mjs missing — kit is incomplete (re-run setup.ps1)' }
 
 if ($failed) { Write-Host 'doctor: FAIL' -ForegroundColor Red; exit 1 }
-Write-Host 'doctor: OK' -ForegroundColor Green
-exit 0

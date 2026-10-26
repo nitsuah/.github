@@ -1,5 +1,5 @@
 {
-  "_comment": "File schema: { [model]: { used: number, window: number } }. 'window' is the start of the current rolling window (epoch ms). Absent models = full quota for the current window. Per machine state; never in the runner checkout.",
+  "_comment": "File schema: { [model]: { used: number, window: number } }. 'window' is the start of the current rolling window (epoch ms). To create a partial quota, set a nonzero 'used' and the current window start. Absent models = full quota for the current window. Per machine state; never in the runner checkout.",
   "MAX": { "used": 0, "window": 0 },
   "openrouter/free": { "used": 0, "window": 0 }
 }

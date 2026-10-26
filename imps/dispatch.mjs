@@ -156,7 +156,7 @@ function startClaimBeat(repo, number, id) {
             if (commentId) gh(['api', '-X', 'PATCH', `repos/${o.owner}/${repo}/issues/comments/${commentId}`, '-f', `body=${body}`]);
             else {
                 const out = gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
-                commentId = (String(out).match(/issues\/comments\/(\d+)/) || [])[1] || null;
+                commentId = (String(out).match(/issuecomment-(\d+)/) || [])[1] || null;
             }
         } catch (e) {
             console.log(`claim heartbeat failed: ${e.message}`);
@@ -182,13 +182,25 @@ function startClaimBeat(repo, number, id) {
 async function releaseStrandedClaims(ledgerRows) {
     const stranded = [];
     const liveHere = new Set(ledgerRows.filter((r) => !r.endedAt).map((r) => `${r.repo}#${r.issue}`));
-    for (const issue of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels'])) {
+    let issues = [];
+    try {
+        issues = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels']) || [];
+    } catch (e) {
+        log({ event: 'label-cleanup-error', error: e.message });
+    }
+    for (const issue of issues) {
         const repo = issue.repository.name;
         const number = issue.number;
         const key = `${repo}#${number}`;
         const labels = issue.labels.map((l) => l.name);
-        const comments = ghJson(['issue', 'view', String(number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
-        const why = staleClaim({ labels, comments, ledgerHasRow: liveHere.has(key), machine: MACHINE });
+        let comments = [];
+        try {
+            comments = ghJson(['issue', 'view', String(number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
+        } catch (e) {
+            log({ event: 'label-cleanup-error', repo, number, error: e.message });
+        }
+        const row = ledgerRows.find((r) => `${r.repo}#${r.issue}` === key && !r.endedAt);
+        const why = staleClaim({ labels, comments, ledgerHasRow: !!row, ledgerRow: row || null, machine: MACHINE });
         if (!why) continue;
         // A heartbeat that stopped is a dead run even before the claim is old:
         // release it so a long-but-live run is never stolen (#69).
@@ -196,10 +208,18 @@ async function releaseStrandedClaims(ledgerRows) {
         const expired = claimExpired(claim);
         log({ event: expired ? 'claim-released' : 'reclaim', repo, number, why, machine: claim?.machine });
         if (dry) continue;
-        comment(repo, number, expired
-            ? `<!-- imp-reclaim -->\nReleased: ${claim.machine || 'a machine'}'s claim had no heartbeat since ${claim.heartbeatAt || '?'} (TTL 90 min). Back to \`imp:ready\`.`
-            : `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
-        relabel(repo, number, 'imp:ready', ['imp:working']);
+        try {
+            comment(repo, number, expired
+                ? `<!-- imp-reclaim -->\nReleased: ${claim.machine || 'a machine'}'s claim had no heartbeat since ${claim.heartbeatAt || '?'} (TTL 90 min). Back to \`imp:ready\`.`
+                : `<!-- imp-reclaim -->\nReclaiming: ${why}. Putting this back on \`imp:ready\` so any machine can take it.`);
+        } catch (e) {
+            log({ event: 'label-cleanup-error', repo, number, error: e.message });
+        }
+        try {
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+        } catch (e) {
+            log({ event: 'label-cleanup-error', repo, number, error: e.message });
+        }
         stranded.push(key);
     }
     return stranded;
@@ -228,9 +248,12 @@ async function clearStaleLabels() {
         if (!stale.length) continue;
         log({ event: 'label-cleanup', repo, number: issue.number, removed: stale });
         if (dry) continue;
-        const r = gh(['issue', 'edit', String(issue.number), '-R', `${o.owner}/${repo}`, ...stale.flatMap((l) => ['--remove-label', l])]);
-        if (r.code) log({ event: 'label-cleanup-error', repo, number: issue.number, out: String(r.out || r.err || '').slice(-300) });
-        else cleared.push(`${repo}#${issue.number}`);
+        try {
+            gh(['issue', 'edit', String(issue.number), '-R', `${o.owner}/${repo}`, ...stale.flatMap((l) => ['--remove-label', l])]);
+            cleared.push(`${repo}#${issue.number}`);
+        } catch (e) {
+            log({ event: 'label-cleanup-error', repo, number: issue.number, out: String(e.message).slice(-300) });
+        }
     }
     return cleared;
 }
@@ -265,8 +288,8 @@ async function work(issue) {
     // Without this a machine that dies leaves the issue on imp:working for the whole
     // fleet, and a live run is indistinguishable from a dead one (#60, #67).
     const claim = startClaimBeat(repo, number);
-    relabel(repo, number, 'imp:working', ['imp:ready']);
     try {
+        relabel(repo, number, 'imp:working', ['imp:ready']);
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
         if (!id) {
@@ -310,7 +333,7 @@ if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, wa
 
 // Release claims left behind by a machine that stopped mid-run, before picking
 // anything: otherwise the queue looks emptier than it is (#60).
-const ledger = readLedger();
+let ledger = readLedger();
 const reclaimed = await releaseStrandedClaims(ledger);
 if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
 
@@ -323,7 +346,7 @@ if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelClear
 // imp:needs-human. A PR with nothing to act on costs only gh calls.
 const openImp = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels'])
     .filter((p) => !p.labels.some((l) => l.name === 'imp:needs-human'));
-const ledger = readLedger();
+ledger = readLedger();
 for (const p of openImp) {
     const row = ledger.find((r) => r.pr === p.url);
     if (!row) continue; // opened from another machine's ledger

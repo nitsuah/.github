@@ -106,6 +106,14 @@ fi
 mkdir -p "$(dirname "$RUNNER")"
 if [[ -d "$RUNNER/.git" ]]; then
   # Tracked changes only — `reset --hard` cannot lose an untracked file (#59).
+  # Before reset, migrate tracked model_quota.json to IMPS_HOME if present.
+  if git -C "$RUNNER" ls-files --error-unmatch imps/model_quota.json >/dev/null 2>&1; then
+    if [[ -n "$(git -C "$RUNNER" status --porcelain imps/model_quota.json)" ]]; then
+      mkdir -p "$IMPS_HOME_DIR"
+      git -C "$RUNNER" show HEAD:imps/model_quota.json >"$IMPS_HOME_DIR/model_quota.json" 2>/dev/null || true
+      ok "migrated tracked model_quota.json to $IMPS_HOME_DIR/model_quota.json"
+    fi
+  fi
   if [[ -n "$(git -C "$RUNNER" status --porcelain --untracked-files=no)" ]]; then
     bad "$RUNNER has local changes; refusing to reset. Use a dedicated runner path."
     exit 1
@@ -194,7 +202,7 @@ set -euo pipefail
 # Kill switches: IMPS_LABEL_WATCH=0/false, or config.json "labelWatch": false.
 case "\${IMPS_LABEL_WATCH:-}" in 0|false) exit 0 ;; esac
 export PATH="\$PATH"
-export IMPS_HOME="\$IMPS_HOME_DIR"
+export IMPS_HOME="$IMPS_HOME_DIR"
 if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
   const fs = require("fs");
   const config = JSON.parse(fs.readFileSync(process.env.IMPS_HOME + "/config.json", "utf8"));
@@ -202,16 +210,16 @@ if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
 '; then
   exit 0
 fi
-export IMPS_CODE="\$CODE"
-export IMPS_KIT_PATH="\$RUNNER"
-cd "\$RUNNER"
-git fetch -q origin \$BRANCH
-git reset -q --hard origin/\$BRANCH
+export IMPS_CODE="$CODE"
+export IMPS_KIT_PATH="$RUNNER"
+cd "$RUNNER"
+git fetch -q origin $BRANCH
+git reset -q --hard origin/$BRANCH
 node imps/preflight.mjs >>"\$IMPS_HOME/label-watch.log" 2>&1
 node imps/dispatch.mjs \${IMPS_DRY_RUN:+--dry-run} >>"\$IMPS_HOME/label-watch.log" 2>&1
 EOF
-  chmod +x "\$WATCH"
-  ok "wrote \$WATCH (5-min label watch; lock prevents overlap)"
+  chmod +x "$WATCH"
+  ok "wrote $WATCH (5-min label watch; lock prevents overlap)"
 fi
 
 if [[ "$SKIP_CRON" != "1" ]]; then
@@ -255,7 +263,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
     systemctl --user daemon-reload
-    systemctl --user enable --now imps-hourly.timer >/dev/null 2>&1 || hint "could not enable imps-hourly.timer; enable it yourself"
+    if ! systemctl --user enable --now imps-hourly.timer >/dev/null 2>&1; then
+      bad "failed to enable imps-hourly.timer"
+      exit 1
+    fi
     ok "installed systemd user timer: imps-hourly.timer (hourly at :07 + 2 min after boot)"
     if [[ "$WANT_LABEL_WATCH" -eq 1 ]]; then
       cat >"$UNIT_DIR/imps-label-watch.service" <<EOF
@@ -278,11 +289,15 @@ Persistent=false
 WantedBy=timers.target
 EOF
       systemctl --user daemon-reload
-      systemctl --user enable --now imps-label-watch.timer >/dev/null 2>&1 || hint "could not enable imps-label-watch.timer"
+      if ! systemctl --user enable --now imps-label-watch.timer >/dev/null 2>&1; then
+        bad "failed to enable imps-label-watch.timer"
+        exit 1
+      fi
       ok "installed systemd user timer: imps-label-watch.timer (every 5 min)"
     fi
     if ! loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes'; then
-      hint "run 'loginctl enable-linger $USER' so the timers survive logout"
+      bad "systemd user timers need lingering; run 'loginctl enable-linger $USER' and re-run setup"
+      exit 1
     fi
   else
     hint "no crontab and no systemd --user; run $HOURLY from your own scheduler"
