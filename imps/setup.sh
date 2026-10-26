@@ -61,6 +61,14 @@ fi
 
 mkdir -p "$IMPS_HOME_DIR"/{runs,briefs,logs}
 CONFIG="$IMPS_HOME_DIR/config.json"
+# Honor persisted labelWatch:false unless this run explicitly overrides it.
+EXPLICIT_LABEL=0
+[[ "${SKIP_LABEL_WATCH:-0}" == "1" || -n "${IMPS_LABEL_WATCH:-}" ]] && EXPLICIT_LABEL=1
+if [[ -f "$CONFIG" && "$EXPLICIT_LABEL" -eq 0 ]]; then
+  if node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(c.labelWatch===false?0:1)' "$CONFIG" 2>/dev/null; then
+    WANT_LABEL_WATCH=0
+  fi
+fi
 LABEL_JSON=true
 [[ "$WANT_LABEL_WATCH" -eq 1 ]] || LABEL_JSON=false
 if [[ ! -f "$CONFIG" ]]; then
@@ -122,10 +130,24 @@ ok "kit pointer → $IMPS_HOME_DIR/kit-path.txt"
 # CODE/.github — first-class clone for kit self-work (separate worktrees; never the runner).
 mkdir -p "$CODE"
 RUNNER_REAL=$(cd "$RUNNER" && pwd -P)
-if [[ -d "$CODE_KIT/.git" ]]; then
+# Prospective or existing path: reject equality / containment under the runner before clone.
+if [[ -e "$CODE_KIT" ]]; then
   CODE_KIT_REAL=$(cd "$CODE_KIT" && pwd -P)
-  if [[ "$CODE_KIT_REAL" == "$RUNNER_REAL" ]]; then
-    bad "$CODE_KIT points at the runner checkout; move/rename it and re-run"
+else
+  CODE_KIT_REAL="$(cd "$CODE" && pwd -P)/$KIT_FOLDER"
+fi
+case "$CODE_KIT_REAL" in
+  "$RUNNER_REAL"|"$RUNNER_REAL"/*)
+    bad "$CODE_KIT equals or sits under the runner checkout ($RUNNER); pick a different IMPS_CODE"
+    exit 1
+    ;;
+esac
+if [[ -d "$CODE_KIT/.git" ]]; then
+  ORIGIN_URL=$(git -C "$CODE_KIT" remote get-url origin 2>/dev/null || true)
+  ORIGIN_NORM=$(printf '%s' "$ORIGIN_URL" | sed -E 's#\.git$##; s#^.*github\.com[:/]##' | tr '[:upper:]' '[:lower:]')
+  KIT_NORM=$(printf '%s' "$KIT_REPO" | tr '[:upper:]' '[:lower:]')
+  if [[ "$ORIGIN_NORM" != "$KIT_NORM" ]]; then
+    bad "$CODE_KIT origin is not $KIT_REPO (got ${ORIGIN_URL:-none}); refusing to rewrite it"
     exit 1
   fi
   git -C "$CODE_KIT" remote set-url origin "https://github.com/${KIT_REPO}.git"
@@ -160,10 +182,17 @@ if [[ "$WANT_LABEL_WATCH" -eq 1 ]]; then
   cat >"$WATCH" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-# Kill switch: IMPS_LABEL_WATCH=0/false or SKIP_LABEL_WATCH at setup time.
+# Kill switches: IMPS_LABEL_WATCH=0/false, or config.json "labelWatch": false.
 case "\${IMPS_LABEL_WATCH:-}" in 0|false) exit 0 ;; esac
 export PATH="$PATH"
 export IMPS_HOME="$IMPS_HOME_DIR"
+if [[ -f "\$IMPS_HOME/config.json" ]] && node -e '
+  const fs = require("fs");
+  const config = JSON.parse(fs.readFileSync(process.env.IMPS_HOME + "/config.json", "utf8"));
+  process.exit(config.labelWatch === false ? 0 : 1);
+'; then
+  exit 0
+fi
 export IMPS_CODE="$CODE"
 export IMPS_KIT_PATH="$RUNNER"
 cd "$RUNNER"

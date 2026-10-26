@@ -157,6 +157,9 @@ if (-not (Test-Path -LiteralPath $configPath)) {
     try {
         $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
         $dirty = $false
+        $explicitLabel = $PSBoundParameters.ContainsKey('SkipLabelWatch') -or $PSBoundParameters.ContainsKey('EnableLabelWatch') -or $env:IMPS_LABEL_WATCH
+        # Honor persisted labelWatch:false unless this run explicitly overrides it.
+        if (-not $explicitLabel -and $existing.labelWatch -eq $false) { $wantLabelWatch = $false }
         if (-not [string]::IsNullOrWhiteSpace($VaultPrompt)) {
             $existing | Add-Member -NotePropertyName vaultPrompt -NotePropertyValue $VaultPrompt -Force
             $dirty = $true
@@ -165,7 +168,7 @@ if (-not (Test-Path -LiteralPath $configPath)) {
         if ($null -eq $existing.labelWatch) {
             $existing | Add-Member -NotePropertyName labelWatch -NotePropertyValue ([bool]$wantLabelWatch) -Force
             $dirty = $true
-        } elseif ($PSBoundParameters.ContainsKey('SkipLabelWatch') -or $PSBoundParameters.ContainsKey('EnableLabelWatch') -or $env:IMPS_LABEL_WATCH) {
+        } elseif ($explicitLabel) {
             $existing | Add-Member -NotePropertyName labelWatch -NotePropertyValue ([bool]$wantLabelWatch) -Force
             $dirty = $true
         }
@@ -231,10 +234,29 @@ Write-Ok "kit pointer → $kitPointer (stash can copy to <repo>/.imps/kit-path.t
 # normal PR, and after merge update.ps1 / hourly reset pulls main into the runner.
 New-Item -ItemType Directory -Force -Path $CodePath | Out-Null
 $runnerResolved = (Resolve-Path -LiteralPath $RunnerPath).Path
+# Reject equality or containment before clone/refresh (not only for existing .git).
+$codeParent = if (Test-Path -LiteralPath $CodeKitPath) {
+    (Resolve-Path -LiteralPath $CodeKitPath).Path
+} else {
+    # Prospective path: resolve parent + leaf so we catch CodePath == runner.
+    $parent = (Resolve-Path -LiteralPath $CodePath).Path
+    Join-Path $parent $KitFolder
+}
+$codeNorm = $codeParent.TrimEnd('\', '/').ToLowerInvariant()
+$runnerNorm = $runnerResolved.TrimEnd('\', '/').ToLowerInvariant()
+if ($codeNorm -eq $runnerNorm -or $codeNorm.StartsWith("$runnerNorm\") -or $codeNorm.StartsWith("$runnerNorm/")) {
+    Write-Bad "$CodeKitPath equals or sits under the runner checkout ($RunnerPath); pick a different IMPS_CODE"
+    exit 1
+}
+function Test-KitRemote([string]$Path, [string]$ExpectedRepo) {
+    $url = (& git -C $Path remote get-url origin 2>$null)
+    if (-not $url) { return $false }
+    $norm = ($url -replace '\.git$', '' -replace '^.+github\.com[:/]', '').Trim().ToLowerInvariant()
+    return ($norm -eq $ExpectedRepo.ToLowerInvariant())
+}
 if (Test-Path -LiteralPath (Join-Path $CodeKitPath '.git')) {
-    $codeKitResolved = (Resolve-Path -LiteralPath $CodeKitPath).Path
-    if ($codeKitResolved -eq $runnerResolved) {
-        Write-Bad "$CodeKitPath points at the runner checkout; move/rename it and re-run"
+    if (-not (Test-KitRemote $CodeKitPath $KitRepo)) {
+        Write-Bad "$CodeKitPath origin is not $KitRepo; refusing to rewrite it. Move it aside and re-run."
         exit 1
     }
     Write-Host "`nrefreshing kit clone for self-work…" -ForegroundColor Cyan
@@ -280,10 +302,11 @@ if ($wantLabelWatch) {
     $watchBody = @"
 @echo off
 setlocal
-REM Kill switch: IMPS_LABEL_WATCH=0 or config labelWatch:false (setup -SkipLabelWatch).
+REM Kill switches: IMPS_LABEL_WATCH=0/false, or config.json "labelWatch": false.
 if /I "%IMPS_LABEL_WATCH%"=="0" exit /b 0
 if /I "%IMPS_LABEL_WATCH%"=="false" exit /b 0
 set IMPS_HOME=$HomePath
+node -e "try{var c=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.exit(c.labelWatch===false?0:1)}catch(e){process.exit(1)}" "%IMPS_HOME%\config.json" && exit /b 0
 set IMPS_CODE=$CodePath
 set IMPS_KIT_PATH=$RunnerPath
 cd /d "$RunnerPath"

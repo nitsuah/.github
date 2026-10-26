@@ -185,56 +185,82 @@ export function labelWatchEnabled(config = {}, env = process.env) {
  * `run(args)` should invoke `gh` and return `{ code, out, err }` (same shape as runner `sh`).
  * Fail closed: any gh/parse error → `{ count: 0, error: string }`.
  *
+ * Paginates newest-first through closed/merged PRs until `need` clean merges are
+ * proven (or pages are exhausted). Newest-first means any later revert of a
+ * counted PR appears in an earlier page and is already in the set.
+ *
  * @param {string} repoSlug owner/name
- * @param {{ run: (args: string[]) => { code: number|null, out: string, err: string }, limit?: number }} opts
+ * @param {{ run: (args: string[]) => { code: number|null, out: string, err: string }, need?: number, pageSize?: number, maxPages?: number }} opts
  * @returns {{ count: number, error: string|null }}
  */
-export function fetchGithubSeedTrust(repoSlug, { run, limit = 100 } = {}) {
+export function fetchGithubSeedTrust(
+    repoSlug,
+    {
+        run,
+        need = DEFAULTS.autoMergeTrust,
+        pageSize = 100,
+        maxPages = 10,
+    } = {},
+) {
     if (!repoSlug || typeof run !== 'function') {
         return { count: 0, error: 'repoSlug and run() required' };
     }
+    const target = Number(need);
+    const want = Number.isFinite(target) && target > 0 ? target : DEFAULTS.autoMergeTrust;
     try {
-        const list = run([
-            'pr', 'list', '-R', repoSlug, '--state', 'merged', '--limit', String(limit),
-            '--json', 'number,title,body,mergedAt,labels',
-        ]);
-        if (list.code) return { count: 0, error: list.err || 'gh pr list failed' };
-        let prs;
-        try {
-            prs = JSON.parse(list.out || '[]');
-        } catch {
-            return { count: 0, error: 'invalid gh pr list json' };
-        }
-        if (!Array.isArray(prs)) return { count: 0, error: 'gh pr list was not an array' };
-
         const enriched = [];
-        for (const p of prs) {
-            const labels = (p.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
-            const row = {
-                number: p.number,
-                title: p.title,
-                body: p.body,
-                mergedAt: p.mergedAt,
-                labels,
-                checks: [],
-            };
-            if (p.mergedAt && labels.includes('imp')) {
-                const c = run([
-                    'pr', 'checks', String(p.number), '-R', repoSlug, '--json', 'name,state',
-                ]);
-                if (c.code) {
-                    return { count: 0, error: `gh pr checks #${p.number} failed: ${c.err || c.code}` };
-                }
-                try {
-                    row.checks = JSON.parse(c.out || '[]');
-                } catch {
-                    return { count: 0, error: `invalid checks json for #${p.number}` };
-                }
-                if (!Array.isArray(row.checks)) {
-                    return { count: 0, error: `checks for #${p.number} was not an array` };
-                }
+        for (let page = 1; page <= maxPages; page++) {
+            // Closed pulls, newest updated first; jq keeps only merged ones.
+            const list = run([
+                'api',
+                `-X`, 'GET',
+                `repos/${repoSlug}/pulls?state=closed&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`,
+                '--jq',
+                '[.[] | select(.merged_at != null) | {number, title, body, mergedAt: .merged_at, labels: [.labels[].name]}]',
+            ]);
+            if (list.code) return { count: 0, error: list.err || `gh api pulls page ${page} failed` };
+            let prs;
+            try {
+                prs = JSON.parse(list.out || '[]');
+            } catch {
+                return { count: 0, error: `invalid gh api pulls json (page ${page})` };
             }
-            enriched.push(row);
+            if (!Array.isArray(prs)) return { count: 0, error: `gh api pulls page ${page} was not an array` };
+            if (!prs.length) break;
+
+            for (const p of prs) {
+                const labels = (p.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+                const row = {
+                    number: p.number,
+                    title: p.title,
+                    body: p.body,
+                    mergedAt: p.mergedAt,
+                    labels,
+                    checks: [],
+                };
+                if (p.mergedAt && labels.includes('imp')) {
+                    const c = run([
+                        'pr', 'checks', String(p.number), '-R', repoSlug, '--json', 'name,state',
+                    ]);
+                    if (c.code) {
+                        return { count: 0, error: `gh pr checks #${p.number} failed: ${c.err || c.code}` };
+                    }
+                    try {
+                        row.checks = JSON.parse(c.out || '[]');
+                    } catch {
+                        return { count: 0, error: `invalid checks json for #${p.number}` };
+                    }
+                    if (!Array.isArray(row.checks)) {
+                        return { count: 0, error: `checks for #${p.number} was not an array` };
+                    }
+                }
+                enriched.push(row);
+            }
+
+            const soFar = countGithubSeedTrust(enriched);
+            if (soFar >= want) return { count: soFar, error: null };
+            // A short page means no further results from the API.
+            if (prs.length < pageSize) break;
         }
         return { count: countGithubSeedTrust(enriched), error: null };
     } catch (e) {

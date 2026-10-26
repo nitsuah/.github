@@ -273,6 +273,7 @@ function openPr(id) {
     if (!(Number.isFinite(trustThreshold) && ledgerCount >= trustThreshold)) {
         const seed = fetchGithubSeedTrust(repoSlug, {
             run: (args) => sh('gh', args),
+            need: trustThreshold,
         });
         githubCount = seed.count;
         githubSeedError = seed.error;

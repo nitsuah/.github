@@ -130,20 +130,22 @@ test('countGithubSeedTrust counts green un-reverted imp merges only', () => {
     assert.equal(countGithubSeedTrust(prs), 1);
 });
 
-test('fetchGithubSeedTrust fail-closed and happy path', () => {
+test('fetchGithubSeedTrust fail-closed, happy path, and paginates past page 1', () => {
     assert.equal(fetchGithubSeedTrust('', { run: () => ({ code: 0, out: '[]', err: '' }) }).error, 'repoSlug and run() required');
 
     const boom = fetchGithubSeedTrust('nitsuah/stash', {
         run: () => ({ code: 1, out: '', err: 'api down' }),
     });
     assert.equal(boom.count, 0);
-    assert.match(boom.error, /api down|gh pr list/);
+    assert.match(boom.error, /api down|gh api pulls/);
 
     const calls = [];
     const ok = fetchGithubSeedTrust('nitsuah/stash', {
+        need: 1,
+        pageSize: 100,
         run: (args) => {
             calls.push(args);
-            if (args[0] === 'pr' && args[1] === 'list') {
+            if (args[0] === 'api') {
                 return {
                     code: 0,
                     out: JSON.stringify([
@@ -152,7 +154,7 @@ test('fetchGithubSeedTrust fail-closed and happy path', () => {
                             title: 'imp: ok',
                             body: '',
                             mergedAt: '2026-02-01T00:00:00Z',
-                            labels: [{ name: 'imp' }],
+                            labels: ['imp'],
                         },
                         {
                             number: 8,
@@ -173,7 +175,46 @@ test('fetchGithubSeedTrust fail-closed and happy path', () => {
     });
     assert.equal(ok.error, null);
     assert.equal(ok.count, 1);
-    assert.equal(calls.filter((a) => a[1] === 'checks').length, 1);
+    assert.equal(calls.filter((a) => a[0] === 'pr' && a[1] === 'checks').length, 1);
+
+    // Page 1 has only non-imp merges; page 2 has the clean imp — must paginate.
+    let pages = 0;
+    const paged = fetchGithubSeedTrust('nitsuah/stash', {
+        need: 1,
+        pageSize: 2,
+        maxPages: 5,
+        run: (args) => {
+            if (args[0] === 'api') {
+                pages++;
+                const url = args.find((a) => /[?&]page=\d+/.test(a)) || '';
+                const page = Number((url.match(/[?&]page=(\d+)/) || [])[1] || 1);
+                if (page === 1) {
+                    return {
+                        code: 0,
+                        out: JSON.stringify([
+                            { number: 20, title: 'human a', mergedAt: '2026-03-02', labels: [] },
+                            { number: 19, title: 'human b', mergedAt: '2026-03-01', labels: [] },
+                        ]),
+                        err: '',
+                    };
+                }
+                return {
+                    code: 0,
+                    out: JSON.stringify([
+                        { number: 10, title: 'imp: old', mergedAt: '2026-01-01', labels: ['imp'] },
+                    ]),
+                    err: '',
+                };
+            }
+            if (args[0] === 'pr' && args[1] === 'checks') {
+                return { code: 0, out: JSON.stringify([{ name: 'CI', state: 'SUCCESS' }]), err: '' };
+            }
+            return { code: 1, out: '', err: 'unexpected' };
+        },
+    });
+    assert.equal(paged.error, null);
+    assert.equal(paged.count, 1);
+    assert.ok(pages >= 2, `expected pagination, got ${pages} page fetch(s)`);
 });
 
 test('labelWatchEnabled defaults on with kill switches', () => {
