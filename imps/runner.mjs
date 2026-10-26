@@ -36,7 +36,17 @@ export function update(id, patch) {
 
 // ── processes ─────────────────────────────────────────────────────────────
 export const sh = (bin, args, opts = {}) => {
+    const start = Date.now();
     const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, ...opts });
+    const entry = {
+        timestamp: new Date().toISOString(),
+        command: `${bin} ${args.map(a=>a.replace(/\s+/g,'')).join(' ')}`,
+        exit: r.status,
+        durationMs: Date.now() - start,
+    };
+    // Append to tool error log
+    const logPath = join(HOME, 'logs', 'tool-errors.log');
+    try { writeFileSync(logPath, JSON.stringify(entry) + '\n', { flag: 'a' }); } catch (_) {}
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);

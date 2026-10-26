@@ -98,7 +98,7 @@ const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
 // `git diff --numstat <base>..HEAD`, commit messages, and the test exit code.
 // sizeNumstat (optional) is the imp's own commits only, so a runner-side
 // formatter commit counts toward scope but not toward the size budget.
-export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = 80, allow = [] }) {
+export function gate({ numstat, sizeNumstat = numstat, commits, testExit, maxLines = 15, allow = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)

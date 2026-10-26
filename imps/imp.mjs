@@ -17,7 +17,7 @@
 // State lives outside any repo: $IMPS_HOME (default ~/.imps): runs.jsonl
 // (the ledger), runs/<id>.jsonl (transcripts).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,8 +41,20 @@ const { values: o, positionals: pos } = parseArgs({
 });
 
 // ── commands ──────────────────────────────────────────────────────────────
-async function run() {
+async function validateBrief(meta) {
+    if (!meta.repo) throw new Error('Brief must specify repo');
+    if (!meta.issue) throw new Error('Brief must specify issue');
+    if (meta.maxLines && isNaN(Number(meta.maxLines))) throw new Error('Brief maxLines must be numeric');
+    // add more checks as needed
+}
+    // Docker readiness check – abort if Docker Desktop not running
+    const dockerInfo = spawnSync('docker', ['info'], { encoding: 'utf8', windowsHide: true });
+    if (dockerInfo.status !== 0) {
+        console.error('Docker not available – ensure Docker Desktop is running.');
+        process.exit(1);
+    }
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    validateBrief(meta);
     if (!meta.repo || !meta.issue) throw new Error('brief front matter needs repo and issue');
     const id = `imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
     const repoDir = join(CODE, meta.repo);
@@ -70,7 +82,10 @@ async function run() {
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
-    const metrics = await runClaude({ cwd: wt, prompt, model: o.model, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
+    const chosenModel = pickModel(MODEL_POOL, o.modelStrategy || 'fallback');
+    decrementQuota(chosenModel);
+    console.log(`using model ${chosenModel}`);
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
@@ -130,7 +145,23 @@ function runGate(id) {
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, { gate: { ...g, formatted, lintExit, head, at: new Date().toISOString() } });
-    console.log(g.pass ? `gate PASS (${g.lines} lines: ${g.files.join(', ')})` : `gate FAIL: ${g.reasons.join('; ')}`);
+    if (g.pass) {
+        // Auto‑review after a passing gate
+        const reviewScript = join(HERE, 'review.mjs');
+        const rev = spawnSync('node', [reviewScript, id, '--model', o.model, '--dry-run'], { encoding: 'utf8', windowsHide: true });
+        if (rev.status === 0) {
+            const output = rev.stdout.trim();
+            if (output.includes('posted approve')) {
+                // Auto‑merge the draft PR if review approved
+                const pr = rows().find((x) => x.id === id).pr;
+                const merge = sh('gh', ['pr', 'merge', pr, '--admin', '--squash', '--delete-branch']);
+                if (merge.code) console.error('auto‑merge failed:', merge.err);
+                else console.log('auto‑merged PR after approve');
+            }
+        } else {
+            console.error('auto‑review failed:', rev.stderr);
+        }
+    }
 }
 
 function openPr(id) {
@@ -174,6 +205,7 @@ function outcome(id) {
 
 function ingest(transcript) {
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    validateBrief(meta);
     const events = readFileSync(transcript, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
     const session = events.find((e) => e.session_id)?.session_id || createHash('sha1').update(resolve(transcript)).digest('hex');
     const id = `imp_manual_${session.slice(0, 6)}_${meta.issue}`;
