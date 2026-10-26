@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+// Topology guard for the imps kit. Contract: WARLOCK.md.
+//
+//   node warlock.mjs [--json]
+//
+// Reads only local state and never mutates anything: one line per check, exit
+// 1 if any fail. The point is to catch the two silent breaks — a runner that
+// is not a git checkout, and a second warlock on the same machine — before
+// they turn into unexplainable gate failures.
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
+const CODE = process.env.IMPS_CODE || join(homedir(), 'code');
+const KIT_POINTER = join(HOME, 'kit-path.txt');
+// dispatch.mjs skips a cycle while the lock is younger than this.
+const STALE_LOCK_MS = 3 * 3600_000;
+
+const results = [];
+const check = (name, ok, detail) => results.push({ name, ok, detail });
+const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+
+function read(p) {
+    try {
+        return readFileSync(p, 'utf8');
+    } catch {
+        return null;
+    }
+}
+
+// ── the runner must be a clone we can reset ───────────────────────────────
+const runner = (read(KIT_POINTER) || process.env.IMPS_KIT_PATH || '').trim();
+if (!runner) {
+    check('runner path known', false, `no ${KIT_POINTER} and no $env:IMPS_KIT_PATH`);
+} else {
+    const dispatch = join(runner, 'imps', 'dispatch.mjs');
+    const isRepo = existsSync(join(runner, '.git'));
+    check('runner is a git checkout', isRepo, isRepo ? runner : `${runner} has no .git — re-run setup.ps1 with a fresh -RunnerPath`);
+    check('runner has imps/dispatch.mjs', existsSync(dispatch), existsSync(dispatch) ? dispatch : `${dispatch} is missing`);
+
+    if (isRepo) {
+        const st = git(['status', '--porcelain'], runner);
+        const dirty = (st.stdout || '').trim();
+        // model_quota.json is written by the kit itself and is expected churn.
+        const real = dirty.split('\n').filter((l) => l.trim() && !l.includes('model_quota.json'));
+        check('runner has no local edits', !real.length, real.length ? `${real.length} changed file(s) — setup.ps1 will refuse to reset: ${real[0].trim()}` : 'clean');
+
+        const branch = (git(['rev-parse', '--abbrev-ref', 'HEAD'], runner).stdout || '').trim();
+        const behind = (git(['rev-list', '--count', 'HEAD..origin/main'], runner).stdout || '').trim();
+        check('runner is current with origin/main', branch === 'main' && behind === '0', branch !== 'main' ? `on ${branch || '?'}, expected a detached checkout of origin/main` : `${behind || '?'} commit(s) behind`);
+    }
+}
+
+// ── hourly.cmd must launch the same runner ────────────────────────────────
+const hourly = join(HOME, 'hourly.cmd');
+const hourlyBody = read(hourly);
+if (!hourlyBody) {
+    check('hourly.cmd exists', false, `${hourly} missing — run setup.ps1`);
+} else {
+    const m = hourlyBody.match(/set IMPS_KIT_PATH=(.+)/i);
+    const pointed = m ? m[1].trim().replace(/\r$/, '') : null;
+    check('hourly.cmd points at the runner', Boolean(pointed) && pointed === runner, pointed ? pointed : 'no IMPS_KIT_PATH line — it will run whatever cwd it inherits');
+}
+
+// ── exactly one warlock per machine ───────────────────────────────────────
+if (process.platform !== 'win32') {
+    check('exactly one dispatch task', true, 'skipped (non-Windows: check your cron/systemd units by hand)');
+} else {
+    const ps = [
+        'Get-ScheduledTask | Where-Object { $_.Actions | Where-Object { "$($_.Execute) $($_.Arguments)" -match "hourly\\.cmd|dispatch\\.mjs" } }',
+        '| ForEach-Object { $_.TaskName }',
+    ].join(' ');
+    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true });
+    const tasks = (r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    check('exactly one dispatch task', tasks.length === 1, tasks.length ? tasks.join(', ') : 'no Scheduled Task runs a dispatcher — nothing is reading the queue');
+}
+
+// ── a cycle that died leaves the lock behind ──────────────────────────────
+const lock = join(HOME, 'dispatch.lock');
+if (!existsSync(lock)) {
+    check('no dispatch lock held', true, 'idle');
+} else {
+    const ageMs = Date.now() - statSync(lock).mtimeMs;
+    const ageMin = Math.round(ageMs / 60_000);
+    check('no dispatch lock held', ageMs < STALE_LOCK_MS, ageMs < STALE_LOCK_MS ? `held ${ageMin}m (a cycle is running)` : `stale ${ageMin}m — a cycle died; delete ${lock}`);
+}
+
+// ── the ledger is the warlock's memory ────────────────────────────────────
+const ledger = join(HOME, 'runs.jsonl');
+const ledgerBody = read(ledger);
+if (ledgerBody === null) {
+    check('ledger readable', false, `${ledger} missing — no run history, fix-sweeps will skip every PR`);
+} else {
+    const bad = ledgerBody.split('\n').filter(Boolean).filter((l) => {
+        try {
+            JSON.parse(l);
+            return false;
+        } catch {
+            return true;
+        }
+    }).length;
+    check('ledger readable', bad === 0, bad ? `${bad} unparseable line(s) in ${ledger}` : `${ledgerBody.split('\n').filter(Boolean).length} run(s)`);
+}
+
+// ── without 9router the warlock skips every cycle ─────────────────────────
+const settings = (() => {
+    try {
+        return JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
+    } catch {
+        return {};
+    }
+})();
+const base = (settings.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1').replace(/\/$/, '');
+try {
+    const r = await fetch(`${base}/messages`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(15_000),
+        headers: { 'content-type': 'application/json', 'x-api-key': settings.NINEROUTER_KEY || settings.ANTHROPIC_API_KEY || '', 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
+    });
+    check('9router answers a MAX probe', r.ok, `${base} → ${r.status}`);
+} catch (e) {
+    check('9router answers a MAX probe', false, `${base} → ${e.message}`);
+}
+
+// ── report ────────────────────────────────────────────────────────────────
+const failed = results.filter((r) => !r.ok);
+if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({ code: CODE, home: HOME, runner, results }, null, 2));
+} else {
+    for (const r of results) console.log(`${r.ok ? 'ok  ' : 'FAIL'}  ${r.name}${r.detail ? ` — ${r.detail}` : ''}`);
+    console.log(failed.length ? `\n${failed.length} check(s) failed. Contract: imps/WARLOCK.md` : '\nOne warlock, many imps. Topology is sane.');
+}
+process.exit(failed.length ? 1 : 0);

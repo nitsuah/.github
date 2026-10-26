@@ -4,6 +4,8 @@ Headless Claude workers (via [9router](https://github.com/nitsuah)) that turn **
 
 Sibling system: [`../journeys/`](../journeys/) — nightly Playwright tests that file `bot:journey` / `bot:review` issues with **no AI at night**. Imps fix the small diagnosed ones; green journey nights confirm the fix.
 
+**One warlock per machine, many imps per machine, many machines.** The warlock is the single `dispatch.mjs` cycle; the imp-runner is the kit it executes; imps are the workers. Read [`WARLOCK.md`](./WARLOCK.md) before installing on a second machine, and run `node imps/warlock.mjs` when the queue looks stuck.
+
 ## Fresh machine (Windows — first class)
 
 ```powershell
@@ -110,4 +112,5 @@ No change to wrapper *CLI* contract is required if they already resolve `IMPS_KI
 ```bash
 node --test imps/*.test.mjs
 node imps/check-defaults.mjs   # STANDARD.md vs defaults.mjs
+node imps/warlock.mjs          # this machine's topology (WARLOCK.md)
 ```
