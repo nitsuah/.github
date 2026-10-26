@@ -92,6 +92,8 @@ Repos that call the kit through thin wrappers (`scripts/imp-run.ps1`, `.github/i
 2. `<repo>/.imps/kit-path.txt` (gitignored) containing the absolute runner path, **or**
 3. `kit_path` in `.github/imps-config.yml` (leave empty in git; set locally only).
 
+**Vault playbook.** Stash sets `IMPS_VAULT_PROMPT` from `vault_prompt:` (e.g. `agent/prompts/IMPS.md`). The kit resolves it via `resolveVaultPrompt()` (env → `~/.imps/config.json` `vaultPrompt`) and surfaces it in `imp.mjs report`, `rsi.mjs` issue footers, and `doctor.ps1`. It is **not** injected into worker prompts (token cost). Setup accepts `-VaultPrompt` / `IMPS_VAULT_PROMPT` to persist the path in config for the hourly task.
+
 No change to wrapper *CLI* contract is required if they already resolve `IMPS_KIT_PATH` → `imps/imp.mjs`. See STANDARD.md § Stash.
 
 ## Tests

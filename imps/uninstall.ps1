@@ -7,14 +7,14 @@
 #   pwsh -File imps/uninstall.ps1 -RemoveRunner -WipeState   # destructive
 [CmdletBinding()]
 param(
+    [string]$HomePath = $(if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }),
     [string]$RunnerPath = $(
         if ($env:IMPS_RUNNER) { $env:IMPS_RUNNER }
         elseif ($env:IMPS_KIT_PATH) { $env:IMPS_KIT_PATH }
-        elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.imps\kit-path.txt')) {
-            (Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.imps\kit-path.txt') -Raw).Trim()
+        elseif (Test-Path -LiteralPath (Join-Path $(if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }) 'kit-path.txt')) {
+            (Get-Content -LiteralPath (Join-Path $(if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }) 'kit-path.txt') -Raw).Trim()
         } else { Join-Path $env:LOCALAPPDATA 'imps-runner' }
     ),
-    [string]$HomePath = $(if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }),
     [switch]$RemoveRunner,
     [switch]$WipeState
 )
@@ -32,6 +32,14 @@ foreach ($f in @('hourly.cmd', 'label-watch.cmd')) {
     }
 }
 if ($RemoveRunner -and (Test-Path -LiteralPath $RunnerPath)) {
+    $full = [System.IO.Path]::GetFullPath($RunnerPath)
+    $profile = [System.IO.Path]::GetFullPath($env:USERPROFILE)
+    if ($full -match '^[A-Za-z]:\\?$' -or $full -eq $profile) {
+        throw "Refusing to delete $RunnerPath: path is a drive root or user profile."
+    }
+    $isKit = (Test-Path -LiteralPath (Join-Path $RunnerPath '.git')) -and
+             (Test-Path -LiteralPath (Join-Path $RunnerPath 'imps\dispatch.mjs'))
+    if (-not $isKit) { throw "Refusing to delete $RunnerPath: not an imps kit checkout." }
     Remove-Item -LiteralPath $RunnerPath -Recurse -Force
     Write-Host "removed runner $RunnerPath"
 }

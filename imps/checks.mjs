@@ -89,14 +89,19 @@ export function mayAutoMerge({
     if (reviewVerdict !== 'approve') {
         return { ok: false, reason: `review was ${reviewVerdict || 'missing'}, not approve` };
     }
+    const threshold = Number(trust);
+    // Fail closed on NaN / non-finite trust (a typo in config.json must not bypass the gate).
+    if (!Number.isFinite(threshold) || threshold < 0) {
+        return { ok: false, reason: `invalid autoMergeTrust (${trust}); leaving PR open for a human` };
+    }
     const n = cleanMergesForRepo(rows, repo);
-    if (n < trust) {
+    if (!(n >= threshold)) {
         return {
             ok: false,
-            reason: `earned trust ${n}/${trust} clean merges for ${repo}; leaving PR open for a human`,
+            reason: `earned trust ${n}/${threshold} clean merges for ${repo}; leaving PR open for a human`,
         };
     }
-    return { ok: true, reason: `earned trust ${n}/${trust}` };
+    return { ok: true, reason: `earned trust ${n}/${threshold}` };
 }
 
 export { PENDING, GREEN };

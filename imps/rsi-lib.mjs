@@ -1,8 +1,10 @@
 // Pure RSI helpers: turn ledger/dispatch/journey signals into issue proposals.
-// File I/O is limited to loadRsiConfigFile. Tested in rsi-lib.test.mjs.
+// File I/O is limited to loadRsiConfig. Tested in rsi-lib.test.mjs.
 import { readFileSync, existsSync } from 'node:fs';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK } from './lib.mjs';
+
+export const KIT_TEST = 'node --test imps/*.test.mjs';
 
 /** Parse ~/.imps/config.json text. Missing/invalid → {}. */
 export function parseRsiConfig(text = '') {
@@ -35,15 +37,23 @@ export function gateSignature(reason = '') {
         .slice(0, 120);
 }
 
+/** Extract a brief `test:` line from an issue body, or null. */
+export function testFromIssueBody(body = '') {
+    const m = String(body).match(/(?:^|\n)\s*test:\s*(.+?)\s*(?:\n|$)/i);
+    return m ? m[1].trim() : null;
+}
+
 /**
  * Propose up to `dailyCap` issues.
  * Sources:
  *  1. Recurring gate-failure signatures across the ledger
  *  2. High needs-human / fix-round exhaustion (from dispatchLog + ledger fixes)
- *  3. Open bot:journey / bot:review issues without an imp brief yet
+ *  3. Open bot:journey / bot:review issues that already name a `test:` command
  *
- * Kit improvements (PREAMBLE/REVIEW/FIX/lib gate) target `kitRepo` (.github).
- * Product bugs target their own repo. Never proposes touching workflows/secrets.
+ * Kit improvements target `kitRepo` (.github). Never proposes touching workflows/secrets.
+ * Journey proposals without a known `test:` are skipped (gate would fail with "tests not run").
+ *
+ * `testsByRepo` (optional): { [repo]: testCommand } from config.json for journey briefs.
  */
 export function proposeRsiIssues({
     rows = [],
@@ -54,6 +64,7 @@ export function proposeRsiIssues({
     kitRepo = '.github',
     minRecurrence = DEFAULTS.rsiMinRecurrence,
     dailyCap = DEFAULTS.rsiDailyIssueCap,
+    testsByRepo = {},
 } = {}) {
     const openTitles = new Set(openRsi.map((i) => i.title));
     const used = new Set(filedKeys);
@@ -92,6 +103,7 @@ export function proposeRsiIssues({
             'issue: (set after create)',
             `maxLines: ${DEFAULTS.maxLines}`,
             `allow: ${allow}`,
+            `test: ${KIT_TEST}`,
             '---',
             `## Recurring gate failure: \`${sig}\` (×${v.count})`,
             '',
@@ -104,7 +116,7 @@ export function proposeRsiIssues({
             '',
             '### Done when',
             '- One lesson or gate rule lands under `allow:`.',
-            '- Diff stays inside maxLines; tests in the kit (`node --test imps/*.test.mjs`) still pass.',
+            `- Diff stays inside maxLines; \`${KIT_TEST}\` still passes.`,
         ].join('\n');
         take({
             key,
@@ -128,6 +140,7 @@ export function proposeRsiIssues({
             'issue: (set after create)',
             `maxLines: ${DEFAULTS.maxLines}`,
             'allow: imps/FIX.md, imps/fix.mjs, imps/PREAMBLE.md',
+            `test: ${KIT_TEST}`,
             '---',
             '## Fix rounds escalate to needs-human too often',
             '',
@@ -150,8 +163,9 @@ export function proposeRsiIssues({
     for (const j of journeyIssues) {
         if (j.labels?.some((l) => String(l).startsWith('imp:'))) continue;
         if (/<!--\s*imp-brief\s*-->/i.test(j.body || '')) continue;
-        // Visual baseline churn is usually runner/human work, not an imp.
         if (/baseline|screenshot|snapshot/i.test(j.title || '') && /stale|update/i.test(j.title || '')) continue;
+        const testCmd = testFromIssueBody(j.body) || testsByRepo[j.repo] || null;
+        if (!testCmd) continue; // without test: the gate fails with "tests not run"
         const key = `journey:${j.repo}#${j.number}`;
         const title = `imp: ${j.title}`.slice(0, 80);
         const allowGuess = j.repo === 'stash' ? 'packages/, docs/' : 'app/, src/, lib/, tests/';
@@ -161,6 +175,7 @@ export function proposeRsiIssues({
             `issue: ${j.number}`,
             `maxLines: ${Math.max(DEFAULTS.maxLines, 40)}`,
             `allow: ${allowGuess}`,
+            `test: ${testCmd}`,
             '---',
             `## ${j.title}`,
             '',
@@ -180,7 +195,7 @@ export function proposeRsiIssues({
             key,
             title,
             repo: j.repo,
-            body: `Fed from journeys/review: ${j.repo}#${j.number}.\n\n${BRIEF_MARK} will be attached so the dispatcher can take it.`,
+            body: `Fed from journeys/review: ${j.repo}#${j.number}.\n\n${BRIEF_MARK} will be attached as a comment so the dispatcher can take it.`,
             brief,
             kind: 'journey',
         });

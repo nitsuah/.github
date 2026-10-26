@@ -55,6 +55,8 @@ test('cleanMergesForRepo and mayAutoMerge enforce earned trust', () => {
     assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 2 }).ok, true);
     assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'comment', rows, trust: 0 }).ok, false);
     assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 0, autoMergeEnv: '0' }).ok, false);
+    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 'three' }).ok, false);
+    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: NaN }).ok, false);
 });
 
 test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {

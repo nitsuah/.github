@@ -15,6 +15,7 @@ param(
     [string]$CodePath = $(if ($env:IMPS_CODE) { $env:IMPS_CODE } else { Join-Path $env:USERPROFILE 'code' }),
     [string]$KitRepo = $(if ($env:IMPS_KIT_REPO) { $env:IMPS_KIT_REPO } else { 'nitsuah/.github' }),
     [string]$Branch = 'main',
+    [string]$VaultPrompt = $(if ($env:IMPS_VAULT_PROMPT) { $env:IMPS_VAULT_PROMPT } else { '' }),
     [switch]$SkipTask,
     [switch]$EnableLabelWatch,
     [switch]$SkipDoctor
@@ -86,11 +87,19 @@ if (-not $SkipDoctor) {
             $base = [string]$envMap.ANTHROPIC_BASE_URL
             if ([string]::IsNullOrWhiteSpace($base)) { $base = 'http://localhost:20128/v1' }
             $base = $base.TrimEnd('/')
-            $probe = $null
+            # Any HTTP response < 500 means the router is up (401/404 still count).
+            $reachable = $false
             try {
-                $probe = Invoke-WebRequest -Uri "$base/models" -Method GET -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
-            } catch { $probe = $null }
-            if ($probe -and $probe.StatusCode -ge 200 -and $probe.StatusCode -lt 500) {
+                $probe = Invoke-WebRequest -Uri "$base/models" -Method GET -TimeoutSec 5 -UseBasicParsing
+                $reachable = ($probe.StatusCode -ge 100 -and $probe.StatusCode -lt 500)
+            } catch {
+                $resp = $_.Exception.Response
+                if ($resp -and $resp.StatusCode) {
+                    $code = [int]$resp.StatusCode
+                    $reachable = ($code -ge 100 -and $code -lt 500)
+                }
+            }
+            if ($reachable) {
                 Write-Ok "9router reachable at $base"
             } else {
                 Write-Bad "9router not reachable at $base"
@@ -120,16 +129,26 @@ New-Item -ItemType Directory -Force -Path (Join-Path $HomePath 'briefs') | Out-N
 New-Item -ItemType Directory -Force -Path (Join-Path $HomePath 'logs') | Out-Null
 $configPath = Join-Path $HomePath 'config.json'
 if (-not (Test-Path -LiteralPath $configPath)) {
-    @{
+    $cfg = [ordered]@{
         rsi = $true
         rsiDailyIssueCap = 3
         autoMergeTrust = 3
         runnerPath = $RunnerPath
         codePath = $CodePath
-    } | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding utf8
+    }
+    if (-not [string]::IsNullOrWhiteSpace($VaultPrompt)) { $cfg.vaultPrompt = $VaultPrompt }
+    $cfg | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding utf8
     Write-Ok "wrote $configPath (edit to set `"rsi`": false as kill switch)"
 } else {
     Write-Ok "kept existing $configPath"
+    if (-not [string]::IsNullOrWhiteSpace($VaultPrompt)) {
+        try {
+            $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            $existing | Add-Member -NotePropertyName vaultPrompt -NotePropertyValue $VaultPrompt -Force
+            $existing | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding utf8
+            Write-Ok "set vaultPrompt in $configPath"
+        } catch { Write-Hint "could not update vaultPrompt in $configPath" }
+    }
 }
 
 # ── detached kit checkout ─────────────────────────────────────────────────
@@ -139,11 +158,17 @@ if (Test-Path -LiteralPath $gitDir) {
     Write-Host "`nupdating runner checkout…" -ForegroundColor Cyan
     Push-Location $RunnerPath
     try {
-        & git remote set-url origin "https://github.com/$KitRepo.git" 2>$null
+        $dirty = & git status --porcelain
+        if ($LASTEXITCODE -ne 0) { throw "git status failed" }
+        if ($dirty) { throw "$RunnerPath has local changes; refusing to reset. Use a dedicated runner path (default %LOCALAPPDATA%\imps-runner)." }
+        & git remote set-url origin "https://github.com/$KitRepo.git"
+        if ($LASTEXITCODE -ne 0) { throw "git remote set-url failed" }
         & git fetch -q origin $Branch
         if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
         & git checkout -q $Branch
+        if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
         & git reset -q --hard "origin/$Branch"
+        if ($LASTEXITCODE -ne 0) { throw "git reset failed" }
         Write-Ok "reset $RunnerPath to origin/$Branch"
     } finally { Pop-Location }
 } else {

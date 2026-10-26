@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -256,7 +256,9 @@ function openPr(id) {
     try { finalChecks = JSON.parse(final.out || '[]'); } catch { /* fall through */ }
     const finalEv = evaluateChecks(finalChecks);
     if (!finalEv.green) return console.log(`pre-merge recheck failed: ${finalEv.reason}, leaving the PR open`);
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch']);
+    // Pin merge to the commit we gated/reviewed so a mid-poll push cannot slip through.
+    const pushedHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
     console.log('merged (squash); every check was green');
@@ -297,7 +299,12 @@ switch (cmd) {
     case 'verdict': // a gate decided by hand (backfilled runs): verdict <id> pass|fail "<reason>"
         update(pos[0], (r) => ({ gate: { ...r.gate, pass: pos[1] === 'pass', reasons: pos[2] ? [pos[2]] : [], manual: true, at: new Date().toISOString() } }));
         break;
-    case 'report': console.log(report(rows())); break;
+    case 'report': {
+        const vault = resolveVaultPrompt(loadHomeConfig());
+        if (vault) console.log(`vault: ${vault}`);
+        console.log(report(rows()));
+        break;
+    }
     case 'ingest': ingest(pos[0]); break;
     default: console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 18).join('\n'));
 }

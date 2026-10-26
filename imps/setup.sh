@@ -12,6 +12,7 @@ CODE="${IMPS_CODE:-$HOME/code}"
 KIT_REPO="${IMPS_KIT_REPO:-nitsuah/.github}"
 BRANCH="${IMPS_KIT_BRANCH:-main}"
 SKIP_CRON="${SKIP_CRON:-0}"
+VAULT_PROMPT="${IMPS_VAULT_PROMPT:-}"
 
 ok() { printf '  ok  %s\n' "$*"; }
 bad() { printf '  !!  %s\n' "$*"; FAILED=1; }
@@ -38,7 +39,8 @@ else bad "docker missing"; fi
 SETTINGS="${HOME}/.claude/settings.json"
 if [[ -f "$SETTINGS" ]]; then
   BASE=$(node -e "try{const s=require(process.argv[1]).env||{};console.log((s.ANTHROPIC_BASE_URL||'http://localhost:20128/v1').replace(/\/$/,''))}catch{console.log('http://localhost:20128/v1')}" "$SETTINGS")
-  if curl -fsS --max-time 5 "$BASE/models" >/dev/null 2>&1; then ok "9router at $BASE"
+  CODE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/models" 2>/dev/null || echo 000)
+  if [[ "$CODE_HTTP" =~ ^[0-9]+$ ]] && (( CODE_HTTP >= 100 && CODE_HTTP < 500 )); then ok "9router at $BASE"
   else bad "9router not reachable at $BASE"; hint "Start 9router, then re-run."; fi
 else bad "missing $SETTINGS"; fi
 
@@ -50,7 +52,19 @@ fi
 mkdir -p "$IMPS_HOME_DIR"/{runs,briefs,logs}
 CONFIG="$IMPS_HOME_DIR/config.json"
 if [[ ! -f "$CONFIG" ]]; then
-  cat >"$CONFIG" <<EOF
+  if [[ -n "$VAULT_PROMPT" ]]; then
+    cat >"$CONFIG" <<EOF
+{
+  "rsi": true,
+  "rsiDailyIssueCap": 3,
+  "autoMergeTrust": 3,
+  "runnerPath": "$RUNNER",
+  "codePath": "$CODE",
+  "vaultPrompt": "$VAULT_PROMPT"
+}
+EOF
+  else
+    cat >"$CONFIG" <<EOF
 {
   "rsi": true,
   "rsiDailyIssueCap": 3,
@@ -59,6 +73,7 @@ if [[ ! -f "$CONFIG" ]]; then
   "codePath": "$CODE"
 }
 EOF
+  fi
   ok "wrote $CONFIG"
 else
   ok "kept existing $CONFIG"
@@ -66,7 +81,11 @@ fi
 
 mkdir -p "$(dirname "$RUNNER")"
 if [[ -d "$RUNNER/.git" ]]; then
-  git -C "$RUNNER" remote set-url origin "https://github.com/${KIT_REPO}.git" 2>/dev/null || true
+  if [[ -n "$(git -C "$RUNNER" status --porcelain)" ]]; then
+    bad "$RUNNER has local changes; refusing to reset. Use a dedicated runner path."
+    exit 1
+  fi
+  git -C "$RUNNER" remote set-url origin "https://github.com/${KIT_REPO}.git"
   git -C "$RUNNER" fetch -q origin "$BRANCH"
   git -C "$RUNNER" checkout -q "$BRANCH"
   git -C "$RUNNER" reset -q --hard "origin/$BRANCH"
@@ -88,6 +107,7 @@ HOURLY="$IMPS_HOME_DIR/hourly.sh"
 cat >"$HOURLY" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$PATH"
 export IMPS_HOME="$IMPS_HOME_DIR"
 export IMPS_CODE="$CODE"
 export IMPS_KIT_PATH="$RUNNER"
@@ -102,7 +122,7 @@ ok "wrote $HOURLY"
 if [[ "$SKIP_CRON" != "1" ]]; then
   CRON_LINE="7 * * * * $HOURLY"
   if command -v crontab >/dev/null; then
-    (crontab -l 2>/dev/null | grep -v 'imps/dispatch\|imps-runner\|hourly.sh' || true; echo "$CRON_LINE") | crontab -
+    (crontab -l 2>/dev/null | grep -vF "$HOURLY" || true; echo "$CRON_LINE") | crontab -
     ok "installed hourly crontab: $CRON_LINE"
   else
     hint "crontab not available; run $HOURLY from your own scheduler"

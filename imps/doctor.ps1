@@ -8,6 +8,21 @@ $ErrorActionPreference = 'Continue'
 $failed = $false
 function Ok($m) { Write-Host "  ok  $m" -ForegroundColor Green }
 function Bad($m) { Write-Host "  !!  $m" -ForegroundColor Red; $script:failed = $true }
+function Info($m) { Write-Host "  ..  $m" -ForegroundColor DarkGray }
+
+function Test-RouterReachable([string]$Base) {
+    try {
+        $r = Invoke-WebRequest -Uri "$Base/models" -TimeoutSec 5 -UseBasicParsing
+        return ($r.StatusCode -ge 100 -and $r.StatusCode -lt 500)
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -and $resp.StatusCode) {
+            $code = [int]$resp.StatusCode
+            return ($code -ge 100 -and $code -lt 500)
+        }
+        return $false
+    }
+}
 
 Write-Host 'imps doctor' -ForegroundColor Cyan
 if (Get-Command node -EA SilentlyContinue) { Ok "node $(node -v)" } else { Bad 'node missing' }
@@ -27,23 +42,32 @@ if (Test-Path -LiteralPath $settings) {
         $base = [string]((Get-Content $settings -Raw | ConvertFrom-Json).env.ANTHROPIC_BASE_URL)
         if ([string]::IsNullOrWhiteSpace($base)) { $base = 'http://localhost:20128/v1' }
         $base = $base.TrimEnd('/')
-        try {
-            $r = Invoke-WebRequest -Uri "$base/models" -TimeoutSec 5 -UseBasicParsing
-            if ($r.StatusCode -lt 500) { Ok "9router at $base" } else { Bad "9router HTTP $($r.StatusCode) at $base" }
-        } catch { Bad "9router not reachable at $base" }
+        if (Test-RouterReachable $base) { Ok "9router at $base" } else { Bad "9router not reachable at $base" }
     } catch { Bad "unreadable $settings" }
 } else { Bad "missing $settings" }
 
+$stateDir = if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }
+$kitPointer = Join-Path $stateDir 'kit-path.txt'
 $runner = if ($env:IMPS_RUNNER) { $env:IMPS_RUNNER }
     elseif ($env:IMPS_KIT_PATH) { $env:IMPS_KIT_PATH }
-    elseif (Test-Path (Join-Path $env:USERPROFILE '.imps\kit-path.txt')) {
-        (Get-Content (Join-Path $env:USERPROFILE '.imps\kit-path.txt') -Raw).Trim()
+    elseif (Test-Path -LiteralPath $kitPointer) {
+        (Get-Content -LiteralPath $kitPointer -Raw).Trim()
     } else { Join-Path $env:LOCALAPPDATA 'imps-runner' }
-if (Test-Path (Join-Path $runner 'imps\dispatch.mjs')) { Ok "runner kit at $runner" }
+if (Test-Path -LiteralPath (Join-Path $runner 'imps\dispatch.mjs')) { Ok "runner kit at $runner" }
 else { Bad "runner kit missing at $runner (run setup.ps1)" }
 
-$home = if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }
-if (Test-Path $home) { Ok "state dir $home" } else { Bad "state dir missing $home" }
+if (Test-Path -LiteralPath $stateDir) { Ok "state dir $stateDir" } else { Bad "state dir missing $stateDir" }
+
+$vault = $env:IMPS_VAULT_PROMPT
+if ([string]::IsNullOrWhiteSpace($vault)) {
+    $cfg = Join-Path $stateDir 'config.json'
+    if (Test-Path -LiteralPath $cfg) {
+        try { $vault = [string]((Get-Content $cfg -Raw | ConvertFrom-Json).vaultPrompt) } catch { $vault = $null }
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($vault) -and (Test-Path -LiteralPath $vault)) { Ok "vault playbook $vault" }
+elseif (-not [string]::IsNullOrWhiteSpace($vault)) { Bad "IMPS_VAULT_PROMPT set but missing: $vault" }
+else { Info 'IMPS_VAULT_PROMPT unset (optional; stash wrappers set it from vault_prompt)' }
 
 if ($failed) { Write-Host 'doctor: FAIL' -ForegroundColor Red; exit 1 }
 Write-Host 'doctor: OK' -ForegroundColor Green

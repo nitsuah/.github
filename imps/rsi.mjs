@@ -18,7 +18,7 @@ import { parseArgs } from 'node:util';
 import { BRIEF_MARK, report } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { proposeRsiIssues, loadRsiConfig, rsiEnabled } from './rsi-lib.mjs';
-import { rows } from './runner.mjs';
+import { rows, resolveVaultPrompt } from './runner.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 mkdirSync(HOME, { recursive: true });
@@ -51,7 +51,6 @@ const dispatchLog = existsSync(join(HOME, 'dispatch.jsonl'))
     ? readFileSync(join(HOME, 'dispatch.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
     : [];
 
-// Open bot:journey / bot:review issues become brief candidates (journeys → imps).
 let journeyIssues = [];
 try {
     journeyIssues = ghJson([
@@ -69,43 +68,52 @@ try {
     console.error('journey search failed:', e.message);
 }
 
-// Existing open RSI-filed issues (dedupe by title marker).
+// Open RSI-filed issues (label:imp-rsi survives after imp:ready is consumed).
 let openRsi = [];
 try {
     openRsi = ghJson([
         'search', 'issues', '--owner', o.owner, '--state', 'open',
-        '--limit', '50', '--json', 'repository,number,title',
-        '--', 'label:imp:ready "<!-- imp-rsi -->"',
+        '--limit', '100', '--json', 'repository,number,title',
+        '--', 'label:imp-rsi',
     ]).map((i) => ({ repo: i.repository.name, number: i.number, title: i.title }));
 } catch {
     openRsi = [];
 }
 
-const filedTodayPath = join(HOME, 'rsi-filed.json');
-const filedToday = (() => {
+// Persist filed keys across days (dedupe). Daily `count` resets and drives the cap.
+const filedPath = join(HOME, 'rsi-filed.json');
+const day = new Date().toISOString().slice(0, 10);
+const filedState = (() => {
     try {
-        const j = JSON.parse(readFileSync(filedTodayPath, 'utf8'));
-        const day = new Date().toISOString().slice(0, 10);
-        return j.day === day ? j : { day, keys: [] };
+        const j = JSON.parse(readFileSync(filedPath, 'utf8'));
+        return {
+            day,
+            count: j.day === day ? Number(j.count) || 0 : 0,
+            keys: Array.isArray(j.keys) ? j.keys : [],
+        };
     } catch {
-        return { day: new Date().toISOString().slice(0, 10), keys: [] };
+        return { day, count: 0, keys: [] };
     }
 })();
 
+const dailyCap = config.rsiDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap;
+const remaining = Math.max(0, dailyCap - filedState.count);
 const proposals = proposeRsiIssues({
     rows: ledger,
     dispatchLog,
     journeyIssues,
     openRsi,
-    filedKeys: filedToday.keys,
+    filedKeys: filedState.keys,
     kitRepo: o['kit-repo'],
     minRecurrence: config.rsiMinRecurrence ?? DEFAULTS.rsiMinRecurrence,
-    dailyCap: config.rsiDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap,
+    dailyCap: remaining,
+    testsByRepo: config.testsByRepo || {},
 });
 
-if (o.json) console.log(JSON.stringify({ proposals, report: report(ledger) }, null, 2));
+const vault = resolveVaultPrompt(config);
+if (o.json) console.log(JSON.stringify({ proposals, remaining, vault, report: report(ledger) }, null, 2));
 else {
-    console.log(`rsi: ${proposals.length} proposal(s) (cap ${config.rsiDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap})`);
+    console.log(`rsi: ${proposals.length} proposal(s) (remaining cap ${remaining}/${dailyCap})${vault ? ` · vault ${vault}` : ''}`);
     for (const p of proposals) console.log(`- ${p.repo}: ${p.title}`);
 }
 
@@ -113,24 +121,20 @@ if (o['dry-run'] || !proposals.length) process.exit(0);
 
 for (const p of proposals) {
     const slug = `${o.owner}/${p.repo}`;
-    // Labels used by the dispatcher; create if missing.
     for (const [name, color, desc] of [
         ['imp:ready', '0e8a16', 'Has an imp brief; the hourly dispatcher may take it'],
         ['imp-rsi', '5319e7', 'Filed by rsi.mjs self-improvement'],
     ]) {
         spawnSync('gh', ['label', 'create', name, '-R', slug, '-c', color, '-d', desc, '--force'], { encoding: 'utf8', windowsHide: true });
     }
+    // Body is metadata only. The dispatcher reads briefs from *comments*.
     const body = [
         '<!-- imp-rsi -->',
         p.body,
         '',
-        `${BRIEF_MARK}`,
-        '```markdown',
-        p.brief.trim(),
-        '```',
-        '',
+        vault ? `Vault playbook: \`${vault}\` (also update its Run log after the fix lands).` : '',
         `<sub>Filed by \`rsi.mjs\` from ledger/dispatch signals. Kill switch: \`IMPS_RSI=0\` or \`~/.imps/config.json\` \`{"rsi":false}\`.</sub>`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
     const url = gh([
         'issue', 'create', '-R', slug,
         '--title', p.title,
@@ -138,8 +142,15 @@ for (const p of proposals) {
         '--label', 'imp:ready',
         '--label', 'imp-rsi',
     ]);
-    filedToday.keys.push(p.key);
+    // Rewrite issue: placeholder in the brief now that we know the number.
+    const num = (url.match(/\/issues\/(\d+)/) || [])[1];
+    let briefText = p.brief.trim();
+    if (num) briefText = briefText.replace(/issue:\s*\(set after create\)/, `issue: ${num}`);
+    gh(['issue', 'comment', url, '-R', slug, '--body', [BRIEF_MARK, '```markdown', briefText, '```'].join('\n')]);
+
+    filedState.keys.push(p.key);
+    filedState.count++;
+    writeFileSync(filedPath, JSON.stringify(filedState, null, 2) + '\n');
     console.log(`filed ${url}`);
     appendFileSync(join(HOME, 'rsi.jsonl'), JSON.stringify({ at: new Date().toISOString(), key: p.key, url, repo: p.repo }) + '\n');
 }
-writeFileSync(filedTodayPath, JSON.stringify(filedToday, null, 2) + '\n');

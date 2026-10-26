@@ -178,7 +178,8 @@ Repos such as `nitsuah/stash` may call this kit through:
 1. Resolve kit path as: `IMPS_KIT_PATH` → `<repo>/.imps/kit-path.txt` → config `kit_path`.
 2. Point that path at the **detached runner** from `setup.ps1` (not a path inside the stash worktree).
 3. Do not commit machine-specific paths. After setup, copy `~/.imps/kit-path.txt` into the repo's ignored `.imps/kit-path.txt` or set `IMPS_KIT_PATH` in the user environment / Task Scheduler.
-4. Optional config keys in `imps-config.yml` (`max_diff_lines`, etc.) are **stash-local**; the kit gate still reads `maxLines` from the brief / `defaults.mjs`. If stash wants a higher brief default, put it in the brief front matter when filing issues.
+4. Optional `vault_prompt` in `imps-config.yml` is exported by `imp-run.ps1` as `IMPS_VAULT_PROMPT`. The kit honors it via `resolveVaultPrompt()` (report / RSI footers / doctor) without injecting the playbook into worker prompts.
+5. Diff caps come from each brief's `maxLines` / `defaults.mjs` — stash does not drive the kit gate with a repo-level `max_diff_lines` key.
 
 ## Review
 

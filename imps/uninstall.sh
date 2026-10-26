@@ -9,19 +9,30 @@ for a in "$@"; do
     --wipe-state) WIPE_STATE=1 ;;
   esac
 done
+IMPS_HOME_DIR="${IMPS_HOME:-$HOME/.imps}"
 RUNNER="${IMPS_RUNNER:-${IMPS_KIT_PATH:-}}"
-if [[ -z "$RUNNER" && -f "${IMPS_HOME:-$HOME/.imps}/kit-path.txt" ]]; then
-  RUNNER=$(tr -d '\r\n' <"${IMPS_HOME:-$HOME/.imps}/kit-path.txt")
+if [[ -z "$RUNNER" && -f "$IMPS_HOME_DIR/kit-path.txt" ]]; then
+  RUNNER=$(tr -d '\r\n' <"$IMPS_HOME_DIR/kit-path.txt")
 fi
 RUNNER="${RUNNER:-${XDG_DATA_HOME:-$HOME/.local/share}/imps-runner}"
-IMPS_HOME_DIR="${IMPS_HOME:-$HOME/.imps}"
+HOURLY="$IMPS_HOME_DIR/hourly.sh"
 
 if command -v crontab >/dev/null; then
-  crontab -l 2>/dev/null | grep -v 'imps/dispatch\|imps-runner\|hourly.sh' | crontab - || true
+  crontab -l 2>/dev/null | grep -vF "$HOURLY" | crontab - || true
   echo "removed imps crontab lines (if any)"
 fi
-rm -f "$IMPS_HOME_DIR/hourly.sh" "$IMPS_HOME_DIR/label-watch.sh"
-[[ "$REMOVE_RUNNER" -eq 1 && -d "$RUNNER" ]] && rm -rf "$RUNNER" && echo "removed $RUNNER"
+rm -f "$HOURLY" "$IMPS_HOME_DIR/label-watch.sh"
+if [[ "$REMOVE_RUNNER" -eq 1 && -d "$RUNNER" ]]; then
+  if [[ -d "$RUNNER/.git" && -f "$RUNNER/imps/dispatch.mjs" ]]; then
+    case "$RUNNER" in
+      /|"$HOME"|"$HOME/") echo "Refusing to delete $RUNNER: unsafe path" >&2; exit 1 ;;
+    esac
+    rm -rf "$RUNNER" && echo "removed $RUNNER"
+  else
+    echo "Refusing to delete $RUNNER: not an imps kit checkout" >&2
+    exit 1
+  fi
+fi
 if [[ "$WIPE_STATE" -eq 1 ]]; then
   rm -rf "$IMPS_HOME_DIR"
   echo "wiped $IMPS_HOME_DIR"

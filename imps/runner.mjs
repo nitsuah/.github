@@ -18,6 +18,29 @@ export const LEDGER = join(HOME, 'runs.jsonl');
 export const CODE = process.env.IMPS_CODE || join(homedir(), 'code');
 mkdirSync(join(HOME, 'runs'), { recursive: true });
 
+/**
+ * Resolve the optional vault playbook path (stash agent/prompts/IMPS.md).
+ * Honor order: IMPS_VAULT_PROMPT env → config.vaultPrompt / vault_prompt
+ * (absolute, or relative to HOME/CODE). Returns null if unset/missing.
+ * Stash wrappers set IMPS_VAULT_PROMPT from imps-config.yml `vault_prompt`.
+ */
+export function resolveVaultPrompt(config = {}, env = process.env) {
+    const candidates = [];
+    if (env.IMPS_VAULT_PROMPT) candidates.push(env.IMPS_VAULT_PROMPT);
+    const fromCfg = config.vaultPrompt || config.vault_prompt;
+    if (fromCfg) {
+        candidates.push(fromCfg);
+        if (!/^(?:[A-Za-z]:[\\/]|\/)/.test(fromCfg)) {
+            candidates.push(join(CODE, fromCfg));
+            candidates.push(join(HOME, fromCfg));
+        }
+    }
+    for (const p of candidates) {
+        if (p && existsSync(p)) return p;
+    }
+    return null;
+}
+
 // ── ledger ────────────────────────────────────────────────────────────────
 export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
 // Atomic: a crash mid-write must not truncate the run history.
@@ -186,6 +209,8 @@ export function loadBrief(path, wt) {
         `- The whole diff must stay under ${meta.maxLines || DEFAULTS.maxLines} changed lines.`,
         (meta.test || meta.lint) && `- Run the tests and lint with exactly \`${RUNTEST}\` (no arguments, one command on its own). It runs this brief's test and lint commands for you. Never run the brief's docker/npm/npx commands yourself; they're denied.`,
     ].filter(Boolean).join('\n');
+    // Vault playbook (IMPS_VAULT_PROMPT) is for humans / RSI logging — never
+    // injected into the worker prompt (token cost). See resolveVaultPrompt().
     const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
