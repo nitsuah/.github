@@ -22,8 +22,8 @@ const { values: o } = parseArgs({
     options: {
         max: { type: 'string', default: '5' },
         wip: { type: 'string', default: '8' },
-        'per-repo': { type: 'string', default: '2' },
-        concurrency: { type: 'string', default: '3' },
+        'per-repo': { type: 'string', default: '4' },
+        concurrency: { type: 'string', default: '4' },
         'daily-cap': { type: 'string', default: '15' },
         owner: { type: 'string', default: 'nitsuah' },
         'dry-run': { type: 'boolean', default: false },
