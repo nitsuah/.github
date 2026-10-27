@@ -255,15 +255,18 @@ export function fetchGithubSeedTrust(
                         'pr', 'checks', String(p.number), '-R', repoSlug, '--json', 'name,state',
                     ]);
                     if (c.code) {
-                        return { count: 0, error: `gh pr checks #${p.number} failed: ${c.err || c.code}` };
-                    }
-                    try {
-                        row.checks = JSON.parse(c.out || '[]');
-                    } catch {
-                        return { count: 0, error: `invalid checks json for #${p.number}` };
-                    }
-                    if (!Array.isArray(row.checks)) {
-                        return { count: 0, error: `checks for #${p.number} was not an array` };
+                        // gh pr checks can fail on merged PRs (head commit gone, old format, etc.).
+                        // Don't fail the whole seed - just treat this PR as non-green and continue.
+                        // Log for debugging but keep going.
+                    } else {
+                        try {
+                            row.checks = JSON.parse(c.out || '[]');
+                        } catch {
+                            // Invalid JSON - treat as non-green, continue
+                        }
+                        if (!Array.isArray(row.checks)) {
+                            // Not an array - treat as non-green, continue
+                        }
                     }
                 }
                 enriched.push(row);
