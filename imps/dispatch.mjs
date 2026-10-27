@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
 import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -341,6 +341,26 @@ if (!router.up) {
     process.exit(0);
 }
 if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, waitedMs: router.waitedMs });
+
+// Strip stale imp state labels from closed issues (stash#289, stash#290, vigil#313).
+try {
+    const seen = new Set();
+    for (const l of STALE_ON_CLOSE) {
+        const res = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'closed', '--label', l, '--limit', '100', '--json', 'repository,number,labels']);
+        for (const i of res) {
+            const key = `${i.repository.name}#${i.number}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const rm = staleImpLabels(i.labels);
+            if (rm.length && !dry) {
+                gh(['issue', 'edit', String(i.number), '-R', `${o.owner}/${i.repository.name}`, ...rm.flatMap((x) => ['--remove-label', x])]);
+            }
+            log({ event: 'label-cleanup', repo: i.repository.name, number: i.number, removed: rm });
+        }
+    }
+} catch (e) {
+    log({ event: 'label-cleanup-error', error: e.message });
+}
 
 // Release claims left behind by a machine that stopped mid-run, before picking
 // anything: otherwise the queue looks emptier than it is (#60).

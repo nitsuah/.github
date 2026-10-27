@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -304,6 +304,9 @@ test('staleImpLabels strips state labels but keeps imp:pr (#58)', () => {
     assert.deepEqual(staleImpLabels(want.map((name) => ({ name }))), want);
     assert.deepEqual(staleImpLabels(want), want);
     assert.deepEqual(staleImpLabels([{ name: 'imp:pr' }, 'imp:pr', 'bug', { name: 'docs' }, { name: 'imp:ready' }]), ['imp:ready']);
+    assert.deepEqual(staleImpLabels(['bug', 'imp:failed', 'imp:pr']), ['imp:failed']);
+    assert.deepEqual(staleImpLabels([{ name: 'imp:ready' }]), ['imp:ready']);
+    assert.deepEqual(staleImpLabels(['imp:pr']), []);
     assert.deepEqual(staleImpLabels([]), []);
     assert.deepEqual(staleImpLabels(), []);
     assert.deepEqual(staleImpLabels(undefined), []);
