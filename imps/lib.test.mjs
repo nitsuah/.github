@@ -284,11 +284,11 @@ test('gate collapses uncommitted edits into one reason (#53)', () => {
 test('gate denies the kit defaults and imps-config at any depth (#57)', () => {
     const ok = 'fix: x\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>';
     for (const p of ['.github/imps-config.yml', 'imps/defaults.mjs', 'config/imps-config.yaml']) {
-        const g = gate({ numstat: `1\t0\t${p}`, commits: [ok], testExit: 0 });
+        const g = gate({ numstat: `1\t1\t${p}`, commits: [ok], testExit: 0 });
         assert.ok(g.reasons.includes(`denied path ${p}`), `${p} not denied: ${g.reasons.join()}`);
         assert.equal(g.pass, false);
     }
-    assert.equal(gate({ numstat: '1\t0\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, true);
+    assert.equal(gate({ numstat: '1\t1\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, true);
 });
 
 test('prGuard refuses a closed or unknown issue (#56)', () => {
