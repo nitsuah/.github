@@ -4,7 +4,7 @@
 // get the same guardrails (clean env, 9router only, no shell splitting).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -43,6 +43,34 @@ export function resolveVaultPrompt(config = {}, env = process.env) {
 
 // ── ledger ────────────────────────────────────────────────────────────────
 export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
+
+// ── provenance ────────────────────────────────────────────────────────────
+// Which kit commit and which machine produced a run. Every ledger row and
+// dispatch cycle carries these, so "this behaved differently" can be answered
+// without guessing which machine was running what (#61).
+export const kitSha = () => {
+    try {
+        return spawnSync('git', ['-C', HERE, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', windowsHide: true }).stdout.trim() || null;
+    } catch {
+        return null;
+    }
+};
+// Resolve machine name once, shared across all four record types:
+// heartbeat issues, claim comments, ledger rows, dispatch events.
+// Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
+export function resolveMachine(config = {}, env = process.env) {
+    return env.IMPS_MACHINE || config.machine || hostname();
+}
+export const machineName = () => resolveMachine({}, process.env);
+// Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
+export function isGitDirty(path) {
+    try {
+        const r = spawnSync('git', ['-C', path, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true });
+        return r.status === 0 && r.stdout.trim().length > 0;
+    } catch {
+        return false;
+    }
+}
 // Atomic: a crash mid-write must not truncate the run history.
 export const save = (all) => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;
@@ -224,25 +252,102 @@ export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`
 
 // ── model pool ────────────────────────────────────────────────────────────
 // Which models a run may use. `prefer` orders the free combos 9router rotates
-// through; `fallback` is the paid floor. Quota is a shared counter next to the
-// code, so concurrent runs decrement the same file.
+// through; `fallback` is the paid floor.
+//
+// Quota is machine state, not code: it lives in IMPS_HOME, because the runner
+// checkout is hard-reset to origin/main before every cycle. Keeping it in the
+// checkout meant a reset (a) wiped the counter back to its committed value and
+// (b) dirty-tree'd the checkout so update.ps1/setup.ps1 refused to run at all
+// (#59). One counter per machine also matches what it measures — this
+// machine's spend — and a per-machine home is what a second machine gets.
 export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
-const QUOTA = join(HERE, 'model_quota.json');
-const readQuota = () => { try { return JSON.parse(readFileSync(QUOTA, 'utf8')); } catch { return {}; } };
+const QUOTA = join(HOME, 'model_quota.json');
+
+// Counters refill on a rolling window. Without one, a counter that can finally
+// persist would run to 0 and stop the fleet permanently with no way back.
+const QUOTA_WINDOW_MS = DEFAULTS.quotaWindowMs;
+const QUOTA_DEFAULT = DEFAULTS.quotaPerWindow;
+const windowStart = (now) => Math.floor(now / QUOTA_WINDOW_MS) * QUOTA_WINDOW_MS;
+
+const readQuota = () => {
+    try {
+        const content = readFileSync(QUOTA, 'utf8');
+        const parsed = JSON.parse(content);
+        // Reject non-plain-object roots (null, array, primitive) — damaged quota
+        // state must not silently reset the spend limit.
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('model_quota.json root is not a plain object');
+        }
+        return parsed;
+    } catch (e) {
+        // Missing file is normal on a fresh machine — return empty quota.
+        if (e.code === 'ENOENT') return {};
+        // Propagate other errors so the caller fails closed instead of treating
+        // invalid state as unused quota.
+        throw new Error(`invalid model_quota.json: ${e.message}`);
+    }
+};
+
+// { model: { used, window } } — a stale window counts as unused.
+// Legacy: model_quota.json once stored plain numbers (remaining quota).
+// Convert them so existing files don't reset the counter.
+const counter = (raw, model, now) => {
+    const c = raw[model];
+    if (typeof c === 'number') {
+        // Legacy numeric value = remaining quota in that window.
+        // Convert to consumed: used = DEFAULT - remaining.
+        return { used: Math.max(0, QUOTA_DEFAULT - c), window: windowStart(now) };
+    }
+    if (!c || c.window !== windowStart(now)) return { used: 0, window: windowStart(now) };
+    return { used: c.used || 0, window: c.window };
+};
 
 // Returns null when every model in the order is out of quota: the caller must
-// stop rather than silently spend past the limit.
-export function pickModel(pool = MODEL_POOL, strategy = 'fallback') {
+// stop rather than silently spend past the limit. Throws on invalid quota state
+// so a damaged quota file cannot reset the spend limit.
+export function pickModel(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
     const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
-    const quota = readQuota();
-    return order.find((m) => (quota[m] ?? 1) > 0) || null;
+    const raw = readQuota();
+    return order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT) || null;
 }
 
-export function decrementQuota(model) {
-    const quota = readQuota();
-    if (!(model in quota)) return;
-    quota[model] = Math.max(0, quota[model] - 1);
-    writeFileSync(QUOTA, JSON.stringify(quota, null, 2) + '\n');
+// Reserve quota atomically: pick + decrement as one operation so concurrent
+// runs cannot both see the same available slot and both execute (#64).
+// Uses a retry loop with verification to handle concurrent callers.
+export function reserveQuota(pool = MODEL_POOL, strategy = 'fallback', now = Date.now()) {
+    const order = strategy === 'prefer' ? [...pool.prefer, ...pool.fallback] : [...pool.fallback, ...pool.prefer];
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const raw = readQuota();
+        const model = order.find((m) => counter(raw, m, now).used < QUOTA_DEFAULT);
+        if (!model) return null;
+        const c = counter(raw, model, now);
+        const expectedUsed = c.used;
+        raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
+        mkdirSync(HOME, { recursive: true });
+        const tmp = `${QUOTA}.${process.pid}.tmp`;
+        writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+        renameSync(tmp, QUOTA);
+
+        // Verify the write wasn't stomped by another process
+        const verify = readQuota();
+        if (verify[model]?.used === expectedUsed + 1 && verify[model]?.window === c.window) {
+            return model;
+        }
+        // Another process modified the file; retry
+    }
+    // Too many retries — treat as quota exhausted to avoid live lock
+    return null;
+}
+
+export function decrementQuota(model, now = Date.now()) {
+    const raw = readQuota();
+    const c = counter(raw, model, now);
+    raw[model] = { used: Math.min(QUOTA_DEFAULT, c.used + 1), window: c.window };
+    mkdirSync(HOME, { recursive: true });
+    const tmp = `${QUOTA}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+    renameSync(tmp, QUOTA);
 }
 
 // What an imp may do in its worktree: edit, read-only and commit git, and

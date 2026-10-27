@@ -20,17 +20,36 @@ That:
 2. Installs a **detached** kit at `%LOCALAPPDATA%\imps-runner` (override with `-RunnerPath` or `$env:IMPS_RUNNER`).
 3. Clones `nitsuah/.github` into `%USERPROFILE%\code\.github` (`IMPS_CODE`) for **kit self-work** — imps never edit the runner checkout.
 4. Keeps durable state in `%USERPROFILE%\.imps` (ledger, locks, logs, config) — **never** wiped by update/re-run.
-5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07) and `imps-label-watch` (every 5 min).
+5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07, plus 2 min after logon) and `imps-label-watch` (every 5 min).
 
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
 
 ```powershell
-pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check
+pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check (incl. topology)
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\update.ps1    # pull latest kit into the runner
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\uninstall.ps1 # remove tasks; keeps state
 ```
 
-Unix (cheap equivalent): `./imps/setup.sh`, `update.sh`, `uninstall.sh`.
+## Fresh machine (macOS / Linux)
+
+```bash
+gh repo clone nitsuah/.github /tmp/github-kit
+bash /tmp/github-kit/imps/setup.sh
+```
+
+Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Scheduling is a crontab when `crontab` exists (`7 * * * *` plus `@reboot sleep 120`), and a **systemd user timer** (`imps-hourly.timer` at :07 and 2 min after boot, `imps-label-watch.timer` every 5 min) otherwise — run `loginctl enable-linger "$USER"` so the timers survive logout. If neither exists, setup says so instead of half-succeeding.
+
+## What lives where
+
+| Path | What | Reset by updates? |
+| --- | --- | --- |
+| runner checkout (`imps-runner`) | the kit — code only | **yes**, `reset --hard origin/main` every cycle |
+| `IMPS_CODE` clone (`~/code/.github`) | base for kit self-work worktrees | no (fetched only) |
+| `~/.imps` (`IMPS_HOME`) | ledger, logs, locks, `config.json`, `model_quota.json` | **never** — machine state |
+
+Quota is machine state on purpose: the runner is reset every cycle, so a counter there could neither survive a cycle nor stop the fleet. It refills on a rolling window (`quotaPerWindow` / `quotaWindowMs`).
+
+**Deploying several machines:** the wrappers pull `origin/main` themselves, so a merged kit change reaches every machine on its next cycle. A failed reset aborts non-zero, and `imps/preflight.mjs` runs first, so a stub or truncated checkout fails loudly instead of no-op'ing. The two things auto-update does *not* cover — the generated `hourly.*` wrapper (re-run setup when `warlock.mjs` says it is stale) and `~/.imps` state — are both checked by `warlock.mjs`. Turn on `"heartbeat": true` in `config.json` (or `IMPS_HEARTBEAT=1`) and each machine updates one issue, `imps heartbeat: <machine>`, so "alive and current" is one `gh issue list`.
 
 ## How it runs (event-driven design)
 
@@ -51,8 +70,8 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 
 | Signal | Behaviour |
 | --- | --- |
-| Lock file `~/.imps/dispatch.lock` | Skip if &lt; 3h old (one cycle at a time) |
-| 9router probe | Skip the whole cycle if `MAX` doesn't answer |
+| Lock file `~/.imps/dispatch.lock` | Skip if held by a live pid; a dead pid, a pre-boot lock, or &lt; 3h age is cleared and the cycle runs |
+| 9router probe | Wait up to 10 min with backoff before giving up a cycle (boot, provider blip) |
 | WIP / daily caps | Stop when the review pile or 24h run budget is full |
 | Repo cooldown | 24h pause after two straight gate failures |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |

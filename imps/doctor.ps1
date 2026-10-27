@@ -79,6 +79,24 @@ if (-not [string]::IsNullOrWhiteSpace($vault) -and (Test-Path -LiteralPath $vaul
 elseif (-not [string]::IsNullOrWhiteSpace($vault)) { Bad "IMPS_VAULT_PROMPT set but missing: $vault" }
 else { Info 'IMPS_VAULT_PROMPT unset (optional; stash wrappers set it from vault_prompt)' }
 
+# Topology: one warlock per machine, and the runner it executes is a real,
+# current git checkout. Checked here so install fails loudly rather than
+# succeeding into an hourly no-op (WARLOCK.md, #62). Never fatal on its own —
+# warlock.mjs reports every check, and doctor is the right place to show them.
+$warlock = Join-Path $PSScriptRoot 'warlock.mjs'
+if (Test-Path -LiteralPath $warlock) {
+    Write-Host '  topology (warlock.mjs):' -ForegroundColor DarkGray
+    & node $warlock
+    if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+} else { Info 'warlock.mjs not present (older kit); topology unchecked' }
+
+# Preflight: fail fast if the checkout is a stub or missing files. This replaces
+# the old implicit success on incomplete checkouts (#62).
+$preflight = Join-Path $PSScriptRoot 'preflight.mjs'
+if (Test-Path -LiteralPath $preflight) {
+    Write-Host '  preflight:' -ForegroundColor DarkGray
+    & node $preflight
+    if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+} else { Bad 'preflight.mjs missing — kit is incomplete (re-run setup.ps1)' }
+
 if ($failed) { Write-Host 'doctor: FAIL' -ForegroundColor Red; exit 1 }
-Write-Host 'doctor: OK' -ForegroundColor Green
-exit 0

@@ -23,10 +23,10 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, gate, report } from './lib.mjs';
+import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
-import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, decrementQuota, MODEL_POOL, resolveVaultPrompt } from './runner.mjs';
+import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -89,10 +89,10 @@ async function run() {
     }
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
     validateBrief(meta);
-    // Pick before the worktree exists: an exhausted pool must cost nothing.
-    const chosenModel = pickModel(MODEL_POOL, o.modelStrategy || 'fallback');
+    // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
+    const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
     if (!chosenModel) {
-        console.error(`every model in the pool is out of quota (${join(HERE, 'model_quota.json')}); run stopped`);
+        console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
     }
     const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
@@ -123,13 +123,17 @@ async function run() {
     const row = {
         id, repo: meta.repo, issue: Number(meta.issue), base, baseSha: git(wt, 'rev-parse', 'HEAD').out,
         branch, worktree: wt, brief: resolve(o.brief), briefHash: hash, model: o.model,
+        // Which kit produced this row. Without it, a behaviour change after a
+        // kit fix is unattributable — you cannot tell a bad brief from a
+        // machine 40 commits behind (#61).
+        kitSha: kitSha(), kitDirty: isGitDirty(HERE), machine: machineName(),
+        pid: process.pid,
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };
     appendFileSync(LEDGER, JSON.stringify(row) + '\n');
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
-    decrementQuota(chosenModel);
     console.log(`using model ${chosenModel}`);
     const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
@@ -161,6 +165,24 @@ function runGate(id) {
         }
     }
     // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
+    // An imp that edits, verifies, and stops should not lose the work over the
+    // one step it forgets (#53/#54). The runner commits instead — only when the
+    // imp made no commits of its own and the brief's test passes on that exact
+    // tree, so a genuinely red run still fails. The runner writes the trailer,
+    // so it cannot be forgotten either.
+    let autoCommitted = false;
+    let earlyTestExit = null;
+    const leftover = git(r.worktree, 'status', '--porcelain').out;
+    if (meta.test && leftover && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out === '0') {
+        console.log(`tests (dirty tree): ${meta.test}`);
+        earlyTestExit = shell(meta.test);
+        const dirtyOut = git(r.worktree, 'status', '--porcelain').out;
+        if (shouldAutoCommit({ impCommits: 0, dirty: dirtyOut, testExit: earlyTestExit })) {
+            git(r.worktree, 'add', '-A');
+            git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
+            autoCommitted = true;
+        }
+    }
     const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
     // Only the imp's own commits must carry the imp trailer: a human or the
     // hypervisor may push a fix to the PR branch between rounds.
@@ -168,9 +190,9 @@ function runGate(id) {
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
     const dirty = git(r.worktree, 'status', '--porcelain').out;
-    let testExit = null;
+    let testExit = earlyTestExit;
     let lintExit = null;
-    if (meta.test && commits.length) {
+    if (meta.test && commits.length && testExit == null) {
         console.log(`tests: ${meta.test}`);
         testExit = shell(meta.test);
     }
@@ -179,7 +201,7 @@ function runGate(id) {
         lintExit = shell(meta.lint);
     }
     const g = gate({
-        numstat, commits, testExit,
+        numstat, commits, testExit, dirty: Boolean(dirty),
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
@@ -190,8 +212,8 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, lintExit, head, at: new Date().toISOString() } });
-    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}` : `gate failed: ${g.reasons.join('; ')}`);
+    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, head, at: new Date().toISOString() } });
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
 // Poll `gh pr checks --json` until every check (required *and* optional) is
@@ -232,6 +254,18 @@ function openPr(id) {
     if (!r.gate.manual && r.gate.head !== git(r.worktree, 'rev-parse', 'HEAD').out)
         throw new Error('worktree changed since the gate ran; run `gate` again');
     const m = r.metrics;
+    const repoSlug = git(r.worktree, 'remote', 'get-url', 'origin').out.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '');
+    // Refuse before pushing: a closed issue or an issue that already has an open
+    // imp PR means the work is done or duplicated, and reusing a merged
+    // imp/<n> branch over and over is how stash#311 rode a stale branch into
+    // main (#56).
+    const issueInfo = (() => {
+        const v = sh('gh', ['issue', 'view', String(r.issue), '-R', repoSlug, '--json', 'number,state']);
+        if (v.code) return undefined;
+        try { return JSON.parse(v.out); } catch { return undefined; }
+    })();
+    const guard = prGuard({ issue: issueInfo });
+    if (!guard.ok) throw new Error(guard.reason);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
@@ -249,7 +283,6 @@ function openPr(id) {
         `Gate: ${r.gate.lines} lines in ${r.gate.files.join(', ')}. Brief \`${r.briefHash.slice(0, 7)}\`.`, '',
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
-    const repoSlug = git(r.worktree, 'remote', 'get-url', 'origin').out.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
     const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
@@ -289,14 +322,19 @@ function openPr(id) {
     if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);
     if (!w.green) return console.log(`review approved; CI ${w.reason}, leaving the PR open`);
-    // Re-read once more right before merge (checks can flip in the last second).
+    // Re-read once more right before merge (checks can flip in the last second),
+    // and bind that verdict to the commit GitHub says is at the head — not to
+    // whatever we last pushed. stash#305 merged because auto-merge waited only
+    // on *required* checks; this recheck is the belt to that brace (#55).
     const final = sh('gh', ['pr', 'checks', pr.out, '--json', 'name,state']);
     let finalChecks = [];
     try { finalChecks = JSON.parse(final.out || '[]'); } catch { /* fall through */ }
-    const finalEv = evaluateChecks(finalChecks);
-    if (!finalEv.green) return console.log(`pre-merge recheck failed: ${finalEv.reason}, leaving the PR open`);
-    // Pin merge to the commit we gated/reviewed so a mid-poll push cannot slip through.
     const pushedHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+    const live = sh('gh', ['pr', 'view', pr.out, '--json', 'headRefOid']);
+    let headSha = '';
+    try { headSha = String(JSON.parse(live.out || '{}').headRefOid || ''); } catch { /* fall through */ }
+    const ready = mergeReady({ headSha, pushedHead, checks: finalChecks });
+    if (!ready.ok) return console.log(`pre-merge recheck failed: ${ready.reason}, leaving the PR open`);
     const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
@@ -323,6 +361,7 @@ function ingest(transcript) {
         id, repo: meta.repo, issue: Number(meta.issue), model: o.model, brief: resolve(o.brief),
         briefHash: createHash('sha1').update(readFileSync(o.brief)).digest('hex'), transcript: resolve(transcript),
         worktree: o.worktree ? resolve(o.worktree) : null, metrics, ingested: true,
+        pid: process.pid,
     };
     const prev = rows().find((x) => x.id === id);
     save([...rows().filter((x) => x.id !== id), { ...prev, ...row }]);
