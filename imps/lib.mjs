@@ -147,7 +147,8 @@ export function prGuard({ issue } = {}) {
 
 // Labels to strip when an issue closes. imp:pr is kept: it records that an imp
 // shipped here, so the dispatcher will not pick the repo up again (#58).
-const STALE_IMP = new Set(['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human']);
+export const STALE_ON_CLOSE = ['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human'];
+const STALE_IMP = new Set(STALE_ON_CLOSE);
 
 export function staleImpLabels(labels = []) {
     if (!Array.isArray(labels)) return [];
