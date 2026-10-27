@@ -98,7 +98,7 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
 | Imps per cycle | 5, up to 4 per repo, at most 4 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 8 in total, 4 per repo | `--wip`, `--per-repo`, `pickIssues` |
-| Imp runs per 24 h / `--daily-cap` | 15 | `loopBudget` |
+| Imp runs per 24 h / `--daily-cap` | 30 | `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
 | Auto-merge earned trust | 3 clean merges/repo (`max(ledger, GitHub seed)`) | `defaults.autoMergeTrust`, `checks.mjs` |
