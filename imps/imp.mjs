@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
