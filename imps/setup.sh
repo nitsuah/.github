@@ -41,10 +41,14 @@ command -v node >/dev/null && ok "node $(node -v)" || { bad "node missing"; hint
 command -v git >/dev/null && ok "$(git --version)" || { bad "git missing"; }
 if command -v gh >/dev/null; then
   if gh auth status >/dev/null 2>&1; then ok "gh authenticated"; else bad "gh not authenticated"; hint "gh auth login"; fi
-else bad "gh missing"; fi
+else
+  bad "gh missing"
+fi
 if command -v docker >/dev/null; then
   if docker info >/dev/null 2>&1; then ok "docker reachable"; else bad "docker not running"; fi
-else bad "docker missing"; fi
+else
+  bad "docker missing"
+fi
 
 SETTINGS="${HOME}/.claude/settings.json"
 if [[ -f "$SETTINGS" ]]; then
@@ -52,7 +56,9 @@ if [[ -f "$SETTINGS" ]]; then
   CODE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/models" 2>/dev/null || echo 000)
   if [[ "$CODE_HTTP" =~ ^[0-9]+$ ]] && (( CODE_HTTP >= 100 && CODE_HTTP < 500 )); then ok "9router at $BASE"
   else bad "9router not reachable at $BASE"; hint "Start 9router, then re-run."; fi
-else bad "missing $SETTINGS"; fi
+else
+  bad "missing $SETTINGS"
+fi
 
 if [[ "$FAILED" -ne 0 ]]; then
   echo "Fix the items above, then re-run. Nothing was written."
@@ -126,11 +132,12 @@ if [[ -d "$RUNNER/.git" ]]; then
   # Use NUL-delimited paths so spaces/newlines in filenames don't break the loop.
   git -C "$RUNNER" fetch -q origin "$BRANCH"
   OVERWRITTEN=""
-  while IFS= read -r -d '' f; do
+  mapfile -t -d '' UNTRACKED < <(git -C "$RUNNER" ls-files -z --others --exclude-standard)
+  for f in "${UNTRACKED[@]}"; do
     if git -C "$RUNNER" cat-file -t "origin/$BRANCH:$f" >/dev/null 2>&1; then
       OVERWRITTEN="${OVERWRITTEN}${OVERWRITTEN:+ }$f"
     fi
-  done < <(git -C "$RUNNER" ls-files -z --others --exclude-standard)
+  done
   if [[ -n "$OVERWRITTEN" ]]; then
     bad "untracked files would be overwritten by reset: $OVERWRITTEN"
     exit 1
@@ -255,7 +262,7 @@ if [[ "$SKIP_CRON" != "1" ]]; then
         echo "*/5 * * * * $WATCH"
       fi
     } | grep -v '^$' | crontab -
-    ok "installed crontab: hourly + boot + $([[ "$WANT_LABEL_WATCH" -eq 1 ]] && echo '5-min label-watch' || echo 'no label-watch')"
+    ok "installed crontab: hourly + @reboot + $([[ "$WANT_LABEL_WATCH" -eq 1 ]] && echo '5-min label-watch' || echo 'no label-watch')"
   elif command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
     # Headless boxes frequently have no crontab at all. Without this the install
     # half-succeeded and nothing ever ran (#63).
