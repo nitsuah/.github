@@ -10,18 +10,18 @@ export const DEFAULTS = {
     maxLines: 40,
 
     // Hourly dispatcher pick/run limits
-    max: 5,
-    wip: 8,
-    perRepo: 4,
-    concurrency: 4,
+    max: 8,
+    wip: 12,
+    perRepo: 6,
+    concurrency: 6,
     dailyCap: 60,
     quietHours: 6,
 
     // Fix rounds on an open imp PR before imp:needs-human
-    fixMaxRounds: 2,
+    fixMaxRounds: 3,
 
     // Repo cooldown after two straight gate failures (ms)
-    cooldownMs: 24 * 3600_000,
+    cooldownMs: 12 * 3600_000,
 
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
