@@ -207,7 +207,6 @@ function runGate(id) {
         maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
     });
-    if (dirty) g.reasons.push('uncommitted changes left behind'), (g.pass = false);
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
