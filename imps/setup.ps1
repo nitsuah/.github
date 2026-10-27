@@ -192,7 +192,7 @@ if (Test-Path -LiteralPath $gitDir) {
         # If the file was modified locally, preserve the working-tree file by copying it
         # only when destination is absent; then restore the tracked path so the dirty
         # check passes. If the copy or restore fails, the setup fails.
-        if (& git ls-files --error-unmatch imps/model_quota.json 2>$null) {
+        if (Test-Path -LiteralPath (Join-Path $RunnerPath 'impsmodel_quota.json')) {
             $status = & git status --porcelain imps/model_quota.json
             if ($LASTEXITCODE -eq 0 -and $status) {
                 if (-not (Test-Path -LiteralPath (Join-Path $HomePath 'model_quota.json'))) {
@@ -440,3 +440,5 @@ Write-Host "  RSI kill switch:  set `"rsi`": false in $configPath  (or IMPS_RSI=
 Write-Host "  Label-watch kill: set `"labelWatch`": false in $configPath  (or IMPS_LABEL_WATCH=0)"
 Write-Host "  Kit self-work:    briefs use repo: .github → worktrees under $CodeKitPath"
 exit 0
+
+
