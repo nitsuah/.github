@@ -14,7 +14,7 @@ export const DEFAULTS = {
     wip: 8,
     perRepo: 4,
     concurrency: 4,
-    dailyCap: 30,
+    dailyCap: 60,
     quietHours: 6,
 
     // Fix rounds on an open imp PR before imp:needs-human
