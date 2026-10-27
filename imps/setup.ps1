@@ -390,11 +390,9 @@ if (-not $SkipTask) {
         $start = (Get-Date).Date.AddMinutes(7)
         while ($start -le (Get-Date)) { $start = $start.AddHours(1) }
         $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
-        $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
-        $logonTrigger.Delay = 'PT2M'
         $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c \`"{0}\`"" -f $hourly)
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($hourlyTrigger, $logonTrigger) -Force -ErrorAction Stop | Out-Null
-        Write-Ok "registered task '$TaskName' (hourly at :07 + 2 min after logon)"
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $hourlyTrigger -Force -ErrorAction Stop | Out-Null
+        Write-Ok "registered task '$TaskName' (hourly at :07)"
     } catch {
         # Policy or elevation refused the logon trigger: keep the hourly task anyway.
         & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
@@ -408,6 +406,19 @@ if (-not $SkipTask) {
             Write-Bad "could not register '$TaskName' (run elevated if needed)"
             Write-Hint "Manual: schtasks /Create /TN $TaskName /SC HOURLY /ST 00:07 /TR \`"cmd.exe /d /c \`"$hourly\`"\`""
             exit 1
+        }
+    }
+
+    # Add at-logon trigger (2 min delay) — same task, second trigger.
+    if ($LASTEXITCODE -eq 0) {
+        try {
+            $logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+            $logon.Delay = 'PT2M'
+            $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            Set-ScheduledTask -TaskName $TaskName -Trigger (@($t.Triggers) + $logon) -ErrorAction Stop | Out-Null
+            Write-Ok "added at-logon trigger to '$TaskName' (2 min delay)"
+        } catch {
+            Write-Hint "no at-logon trigger: $($_.Exception.Message) (hourly still runs)"
         }
     }
 
