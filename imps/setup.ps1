@@ -216,7 +216,8 @@ if (Test-Path -LiteralPath $gitDir) {
         if ($LASTEXITCODE -eq 0 -and $untracked) {
             $overwritten = @()
             foreach ($f in $untracked.Split([char]0)) {
-                if ($f -and (& git cat-file -t "origin/$Branch:`$f" 2>$null)) {
+                $obj = "origin/$Branch`:$f"
+if ($f -and (& git cat-file -t $obj 2>$null)) {
                     $overwritten += $f
                 }
             }
