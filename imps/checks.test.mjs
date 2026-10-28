@@ -271,8 +271,10 @@ test('imps folder has no gh pr merge --auto calls (#55)', async () => {
     const { fileURLToPath } = await import('node:url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mjs') && !f.endsWith('.test.mjs'));
-    // Match actual gh pr merge --auto calls, not comments/docs
-    const forbidden = /(?:sh|spawnSync|execSync|run)\([^)]*pr['", ]+merge[^\n]*--auto/;
+    // Match actual gh pr merge --auto calls, not comments/docs or words in strings
+    // Use [\s\S]* to match across newlines between merge and --auto
+    // Require 'gh' or 'pr' to be at call position, not in comments/strings
+    const forbidden = /(?:sh|spawnSync|execSync|run)\([\s\S]*?['"]gh['"]\s*,\s*['"]pr['"]\s*,\s*['"]merge['"][\s\S]*?['"]--auto['"]/;
     for (const f of files) {
         const content = fs.readFileSync(path.join(dir, f), 'utf8');
         const match = content.match(forbidden);

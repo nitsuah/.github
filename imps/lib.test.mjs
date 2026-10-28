@@ -294,7 +294,7 @@ test('gate denies the kit defaults and imps-config at any depth (#57)', () => {
 test('prGuard refuses a closed issue, merged branch, or open imp PR (#56)', () => {
     assert.deepEqual(prGuard({ issueState: 'CLOSED', issue: 54 }), { ok: false, reason: 'issue #54 is closed' });
     assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [{ headRefName: 'imp/54-abc', mergedAt: '2026-01-01', number: 10 }] }), { ok: false, reason: 'branch imp/54-abc already merged in #10' });
-    assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [{ state: 'OPEN', headRefName: 'imp/54-xyz', number: 11 }] }), { ok: false, reason: 'issue #54 already has open imp PR #11' });
+    assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [{ state: 'OPEN', headRefName: 'imp/54-xyz', number: 11, title: 'imp: fix #54' }] }), { ok: false, reason: 'issue #54 already has open imp PR #11' });
     assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [] }), { ok: true });
     assert.deepEqual(prGuard({}), { ok: false, reason: 'issue #? is closed' });
 });

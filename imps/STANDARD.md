@@ -54,9 +54,9 @@ GitHub issues are the queue; labels are the state.
 **`dispatch.mjs`** runs hourly with no LLM of its own:
 1. It skips the cycle if the previous one is still running (`dispatch.lock` &lt; 3h), or if 9router doesn't answer a `MAX` probe.
 2. It sweeps open `imp` PRs with `fix.mjs` first (skip `imp:needs-human`).
-3. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 4` per repo (counting its open imp PRs)**, and never past `--wip 8` open imp PRs in total. Review + CI are the bottleneck, so the dispatcher stops when the pile is full.
+3. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 6` per repo (counting its open imp PRs)**, and never past `--wip 12` open imp PRs in total. Review + CI are the bottleneck, so the dispatcher stops when the pile is full.
 4. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
-5. It runs `--concurrency 4` repos at once through `imp.mjs run → gate → pr` (same-repo imps stay sequential so `imp-nm-<repo>` volumes don't race), then relabels and comments the result on the issue.
+5. It runs `--concurrency 6` repos at once through `imp.mjs run → gate → pr` (same-repo imps stay sequential so `imp-nm-<repo>` volumes don't race), then relabels and comments the result on the issue.
 6. Optional `--rsi` (or `IMPS_RSI=1`) runs `rsi.mjs` after the cycle.
 
 Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-run` prints the picks and changes nothing.
@@ -96,9 +96,9 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | --- | --- | --- |
 | Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
-| Imps per cycle | 5, up to 4 per repo, at most 4 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
-| Open imp PRs | 8 in total, 4 per repo | `--wip`, `--per-repo`, `pickIssues` |
-| Imp runs per 24 h / `--daily-cap` | 30 | `loopBudget` |
+| Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
+| Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
+| Imp runs per 24 h / `--daily-cap` | 60 | `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
 | Auto-merge earned trust | 3 clean merges/repo (`max(ledger, GitHub seed)`) | `defaults.autoMergeTrust`, `checks.mjs` |
@@ -113,7 +113,7 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
 - **No push.** The worktree's push URL is `no_push`. Only `imp.mjs pr` / `fix.mjs` push, and only after the gate passes.
 - **Tool allowlist.** Read, Edit, Write, Glob, Grep, limited `git …`, and `node …/runtest.mjs` only. No raw `docker run` / host npm for the model (the **gate** runs the brief's Docker test/lint). No `gh` in the sandbox.
 - **Formatting is the runner's job.** If the brief has `format:`, the gate runs it first and commits any change as a separate `style: … (imp runner)` commit. The model never spends turns on whitespace.
-- **Gate.** Tests and `lint:` exit 0 (usually in Docker via the brief), at least one commit, every *imp* commit has the trailer, no uncommitted leftovers, the diff is within `maxLines` (default **40** when the brief omits it — briefs should set a realistic number), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles. Kit self-work still denies `.github/workflows/` and secrets inside the `.github` repo itself.
+- **Gate.** Tests and `lint:` exit 0 (usually in Docker via the brief), at least one commit, every *imp* commit has the trailer, no uncommitted leftovers, the diff is within `maxLines` (default **80** when the brief omits it — briefs should set a realistic number), every path is under `allow`, and no `.github/`, `.env*`, secrets or lockfiles. Kit self-work still denies `.github/workflows/` and secrets inside the `.github` repo itself.
   - **Nothing to run is not two failures.** If the imp left edits uncommitted and made no commit, the gate reports one reason, `edits left uncommitted` — not `no commits` plus `tests not run`. One cause, one RSI issue.
   - **Salvage an uncommitted run.** When the imp made no commit of its own and the brief test passes on the dirty tree, the runner stages and commits the work itself (`imp: work for #<issue> (committed by runner)`, with the trailer) and records `gate.autoCommitted`. Scope, deny, size and the test still run afterwards.
   - **Guardrails are denied paths.** `imps/defaults.mjs` and any `imps-config.yml`/`.yaml` are refused by the gate, so an imp cannot widen the limits it is judged by.

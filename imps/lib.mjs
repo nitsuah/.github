@@ -147,12 +147,19 @@ export function prGuard({ issueState, branch, issue, prs = [] } = {}) {
     if (merged) {
         return { ok: false, reason: `branch ${branch} already merged in #${merged.number}` };
     }
-    const open = prs.find((p) => String(p.state || '').toUpperCase() === 'OPEN');
-    if (open) {
-        return { ok: false, reason: `issue #${issue ?? '?'} already has open imp PR #${open.number}` };
-    }
-    return { ok: true };
-}
+    // Only consider PRs that actually reference this issue (in title, body, or via closing keywords)
+     // The search `head:imp/${issue}-` matches branch prefixes but not all are for this issue.
+     const relevantOpen = prs.find((p) =>
+         String(p.state || '').toUpperCase() === 'OPEN' &&
+         (p.title?.includes(`#${issue}`) ||
+          p.body?.includes(`#${issue}`) ||
+          p.headRefName === branch)
+     );
+     if (relevantOpen) {
+         return { ok: false, reason: `issue #${issue ?? '?'} already has open imp PR #${relevantOpen.number}` };
+     }
+     return { ok: true };
+ }
 
 // Labels to strip when an issue closes. imp:pr is kept: it records that an imp
 // shipped here, so the dispatcher will not pick the repo up again (#58).

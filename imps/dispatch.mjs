@@ -2,7 +2,7 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 8] [--per-repo 4] [--concurrency 4] [--owner nitsuah] [--dry-run] [--rsi]
+//   node dispatch.mjs [--max 5] [--wip 12] [--per-repo 6] [--concurrency 6] [--owner nitsuah] [--dry-run] [--rsi]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
