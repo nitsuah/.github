@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
-    parseClaim, claimExpired, CLAIM_MARK, claimBody } from './lib.mjs';
+    parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -385,4 +385,24 @@ test('claimBody without pr omits PR line', () => {
     assert.deepEqual(meta, c);
     assert.match(lines[2], /Imp claim: \*\*test-host\*\*, started 2026-01-01T00:00:00.000Z, last heartbeat 2026-01-01T00:10:00.000Z\./);
     assert.ok(!lines[2].includes('PR'));
+});
+
+test('routerWaitDelays backoff sums to <= window, first delay, cap, empty for zero window', () => {
+    // default: 10 min window, 15s first, 2min max
+    let delays = routerWaitDelays();
+    assert.ok(delays.length > 0);
+    assert.equal(delays[0], 15_000);
+    assert.ok(delays.every(d => d <= 120_000));
+    const sum = delays.reduce((a, b) => a + b, 0);
+    assert.ok(sum <= 600_000);
+    // custom: 5 min window, 10s first, 30s max
+    delays = routerWaitDelays({ windowMs: 300_000, firstMs: 10_000, maxMs: 30_000 });
+    assert.equal(delays[0], 10_000);
+    assert.ok(delays.every(d => d <= 30_000));
+    const sum2 = delays.reduce((a, b) => a + b, 0);
+    assert.ok(sum2 <= 300_000);
+    // zero window returns empty
+    assert.deepEqual(routerWaitDelays({ windowMs: 0 }), []);
+    // window smaller than first returns empty
+    assert.deepEqual(routerWaitDelays({ windowMs: 1000, firstMs: 10_000 }), []);
 });
