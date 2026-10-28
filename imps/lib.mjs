@@ -340,17 +340,14 @@ export function lockIsStale({ text = '', mtimeMs = 0, now = Date.now(), bootTime
         lock = JSON.parse(text);
     } catch { /* legacy plain-PID lock, or a truncated write */ }
     if (!lock || typeof lock !== 'object') {
-        // Legacy: a bare PID. Only the mtime is trustworthy.
-        if (bootTimeMs && mtimeMs && mtimeMs < bootTimeMs) return 'before-boot';
-        if (mtimeMs && now - mtimeMs > maxAgeMs) return 'expired';
-        return null;
+        // Legacy: a bare PID (e.g., '1234'). Only the mtime is trustworthy; no host, no startedAt.
+        lock = { pid: Number(text.trim()) || 0 };
     }
-    const started = Date.parse(lock.startedAt || '');
-    if (bootTimeMs && Number.isFinite(started) && started < bootTimeMs) return 'before-boot';
+    const started = Date.parse(lock.startedAt || '') || mtimeMs;
     // Only this host can answer for its own PID; another machine's lock is judged by age.
     if (lock.host && host && lock.host === host && Number.isFinite(lock.pid) && !alive(lock.pid)) return 'pid-dead';
-    const since = Number.isFinite(started) ? started : mtimeMs;
-    if (since && now - since > maxAgeMs) return 'expired';
+    if (bootTimeMs && Number.isFinite(started) && started < bootTimeMs) return 'before-boot';
+    if (now - started >= maxAgeMs) return 'expired';
     return null;
 }
 

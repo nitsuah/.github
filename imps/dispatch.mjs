@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, lockBody, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
 import { kitSha, machineName } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -71,9 +71,11 @@ if (existsSync(LOCK)) {
     const why = lockIsStale({
         text: readFileSync(LOCK, 'utf8'),
         mtimeMs: statSync(LOCK).mtimeMs,
+        now: Date.now(),
         bootTimeMs: Date.now() - uptime() * 1000,
         host: hostname(),
         alive,
+        maxAgeMs: DEFAULTS.lockMaxAgeMs,
     });
     if (!why) {
         log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
@@ -82,7 +84,7 @@ if (existsSync(LOCK)) {
     log({ event: 'lock-cleared', reason: why, lock: readFileSync(LOCK, 'utf8').slice(0, 200) });
     if (!dry) rmSync(LOCK, { force: true });
 }
-if (!dry) writeFileSync(LOCK, lockBody({ pid: process.pid, host: hostname() }));
+if (!dry) writeFileSync(LOCK, JSON.stringify({ pid: process.pid, host: hostname(), startedAt: new Date().toISOString() }));
 const unlock = () => { if (!dry) rmSync(LOCK, { force: true }); };
 process.on('exit', unlock);
 
