@@ -233,12 +233,13 @@ export const RECLAIM_MARK = '<!-- imp-reclaim -->';
 // than this with no ledger row on this machine is stranded, not slow.
 export const CLAIM_TTL_MS = 3 * 3600_000;
 
-export function claimBody({ machine = '', at = '', id = '', heartbeatAt = '', startedAt = '', pr = null } = {}) {
-    const meta = JSON.stringify({ machine: machine || '?', startedAt: startedAt || at || new Date().toISOString(), heartbeatAt: heartbeatAt || at || new Date().toISOString(), pr });
-    return `${CLAIM_MARK}\n${CLAIM_META_OPEN}${meta}${CLAIM_META_CLOSE}\n` +
-        `Imp claim: **${machine || '?'}**${id ? ` (\`${id}\`)` : ''}, started ${startedAt || at || new Date().toISOString()}` +
-        `${heartbeatAt ? `, heartbeat ${heartbeatAt}` : ''}.` +
-        ' Released when the run ends; reclaimed automatically if the heartbeat stops.';
+export function claimBody(c = {}) {
+    const lines = [
+        CLAIM_MARK,
+        `<!-- ${JSON.stringify(c)} -->`,
+        `Imp claim: **${c.machine}**, started ${c.startedAt}, last heartbeat ${c.heartbeatAt}${c.pr ? `, PR ${c.pr}` : ''}.`
+    ];
+    return lines.join('\n');
 }
 
 // The hidden JSON line makes a claim machine-readable (who, when, last heartbeat,
