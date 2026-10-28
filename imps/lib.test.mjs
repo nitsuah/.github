@@ -2,7 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    parseClaim, claimExpired } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -348,4 +349,20 @@ test('lockIsStale checks pid-dead before before-boot, uses >= for expiry', () =>
         text: JSON.stringify({ pid: 9999, host, startedAt: '2026-10-23T12:06:00Z' }),
         mtimeMs: 0, now, bootTimeMs, host, alive, maxAgeMs
     }), null);
+});
+
+test('parseClaim / claimExpired', () => {
+    const now = new Date('2026-10-27T12:00:00Z').getTime();
+
+    const valid = `<!-- imp-claim -->\n<!-- {"machine":"M1","startedAt":"2026-10-27T10:00:00Z","heartbeatAt":"2026-10-27T10:29:00Z","pr":123} -->\nhuman`;
+    const parsed = parseClaim(valid);
+    assert.ok(parsed);
+    assert.equal(parsed.machine, 'M1');
+    assert.equal(parsed.pr, 123);
+    assert.equal(parseClaim('garbage'), null);
+    assert.equal(parseClaim('<!-- other -->\n<!-- {} -->'), null);
+    assert.equal(parseClaim('<!-- imp-claim -->\n<!-- not-json -->'), null);
+    assert.equal(claimExpired(parsed, now), true);  // 91 min elapsed
+    assert.equal(claimExpired({ ...parsed, heartbeatAt: '2026-10-27T11:30:00Z' }, now), false); // 30 min
+    assert.equal(claimExpired(null, now), false);
 });

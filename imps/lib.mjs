@@ -249,30 +249,20 @@ export const CLAIM_META_CLOSE = ' -->';
 
 export function parseClaim(body = '') {
     const s = String(body || '');
-    if (!s.trimStart().startsWith(CLAIM_MARK)) return null;
-    const m = s.match(/<!-- imp-claim-meta (\{[\s\S]*?\}) -->/);
-    if (m) {
-        try {
-            const j = JSON.parse(m[1]);
-            return { machine: j.machine || '', startedAt: j.startedAt || '', heartbeatAt: j.heartbeatAt || j.startedAt || '', pr: j.pr || null, legacy: false };
-        } catch { /* fall through to the prose form */ }
+    if (!s.startsWith(CLAIM_MARK)) return null;
+    const lines = s.split('\n');
+    if (lines.length < 2) return null;
+    try {
+        return JSON.parse(lines[1].slice(5, -4));
+    } catch {
+        return null;
     }
-    // Claims written before the JSON line existed: keep them usable rather than
-    // dropping them, so #60's sweep still has a clock to read.
-    const who = (s.match(/Claimed by `([^`]+)`/) || s.match(/Imp claim: \*\*([^*]+)\*\*/) || [])[1] || '';
-    const at = ((s.match(/at (\S+?)\.\s/) || [])[1] || '');
-    return { machine: who, startedAt: at, heartbeatAt: at, pr: null, legacy: true };
 }
 
 export const CLAIM_HEARTBEAT_TTL_MS = 90 * 60_000;
 
-// A live run refreshes the claim's heartbeat; a dead one cannot. Age since the
-// last heartbeat is therefore the only honest liveness signal a label has (#69).
-export function claimExpired(claim, now = Date.now(), ttlMs = CLAIM_HEARTBEAT_TTL_MS) {
-    if (!claim) return false;
-    const at = Date.parse(claim.heartbeatAt || claim.startedAt || '');
-    if (!Number.isFinite(at)) return false;
-    return now - at > ttlMs;
+export function claimExpired(claim, now, ttlMs = 90 * 60_000) {
+    return !!claim && now - Date.parse(claim.heartbeatAt) > ttlMs;
 }
 
 // The newest claim comment on an issue, or null. Comments come from the API

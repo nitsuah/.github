@@ -388,6 +388,17 @@ for (const p of openImp) {
     log({ event: 'fix-sweep', pr: p.url, id: row.id, result: last ? JSON.parse(last).event : `exit ${f.code}` });
 }
 
+// Release stale imp:working claims whose heartbeat is older than 90 min (#69).
+for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
+    const slug = `${o.owner}/${w.repository.name}`;
+    const comments = ghJson(['issue', 'view', String(w.number), '-R', slug, '--json', 'comments']).comments;
+    const c = comments.map((x) => parseClaim(x.body)).filter(Boolean).pop();
+    if (!claimExpired(c, Date.now())) continue;
+    relabel(w.repository.name, w.number, 'imp:ready', ['imp:working']);
+    comment(w.repository.name, w.number, `Released: ${c.machine}'s claim had no heartbeat since ${c.heartbeatAt} (TTL 90 min). Back to imp:ready.`);
+    log({ event: 'claim-released', repo: w.repository.name, number: w.number, machine: c.machine });
+}
+
 const queued = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
