@@ -3,7 +3,13 @@
 #
 #   pwsh -File imps/doctor.ps1
 [CmdletBinding()]
-param()
+param(
+    # Same owner dispatch.mjs searches (its --owner flag); default read from defaults.mjs.
+    [string]$Owner = $(
+        $m = Select-String -LiteralPath (Join-Path $PSScriptRoot 'defaults.mjs') -Pattern "^\s*owner:\s*'([^']+)'" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($m) { $m.Matches[0].Groups[1].Value } else { 'nitsuah' }
+    )
+)
 $ErrorActionPreference = 'Continue'
 $failed = $false
 function Ok($m) { Write-Host "  ok  $m" -ForegroundColor Green }
@@ -87,14 +93,14 @@ if (Test-Path -LiteralPath $stateDir) { Ok "state dir $stateDir" } else { Bad "s
 # as a failed run on the issue. Check every repo that has an imp:ready issue.
 $codeRoot = if ($env:IMPS_CODE) { $env:IMPS_CODE } else { Join-Path $env:USERPROFILE 'code' }
 if (Get-Command gh -EA SilentlyContinue) {
-    $readyJson = gh search issues --owner nitsuah --state open --label imp:ready --limit 100 --json repository 2>&1
+    $readyJson = gh search issues --owner $Owner --state open --label imp:ready --limit 100 --json repository 2>&1
     $ghExit = $LASTEXITCODE
     $ready = if ($ghExit -eq 0) { $readyJson | ConvertFrom-Json }
     if ($ghExit -ne 0) { Info "could not list imp:ready issues, so the clone check was skipped: $(($readyJson | Out-String).Trim())" }
     elseif ($ready) {
         $names = $ready | ForEach-Object { $_.repository.name } | Sort-Object -Unique
         $missing = @($names | Where-Object { -not (Test-Path -LiteralPath (Join-Path $codeRoot $_)) })
-        if ($missing.Count) { Bad "imp:ready issues in repos not cloned under ${codeRoot}: $($missing -join ', ') (gh repo clone nitsuah/<repo> $codeRoot\<repo>)" }
+        if ($missing.Count) { Bad "imp:ready issues in repos not cloned under ${codeRoot}: $($missing -join ', ') (gh repo clone $Owner/<repo> $codeRoot\<repo>)" }
         else { Ok "all $($names.Count) repos with imp:ready issues are cloned under $codeRoot" }
     }
 }
