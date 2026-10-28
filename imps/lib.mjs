@@ -1,6 +1,70 @@
 // Pure helpers for imps: brief parsing, run metrics, the pre-push gate and
 // the RSI report. No I/O beyond defaults.mjs. Tested in lib.test.mjs (node --test).
 import { DEFAULTS } from './defaults.mjs';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+// ── 9router URL/key resolution ────────────────────────────────────────────
+// Secrets belong in OS user-level env vars; ~/.claude/settings.json `env` is
+// the backwards-compatible fallback. Never throws: a fresh machine may have no
+// file, bad JSON, or no `env` block.
+export function readSettingsEnv(path = join(homedir(), '.claude', 'settings.json')) {
+    try {
+        const e = JSON.parse(readFileSync(path, 'utf8')).env;
+        return e && typeof e === 'object' ? e : {};
+    } catch {
+        return {};
+    }
+}
+
+const nonEmpty = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : '');
+const trimSlash = (u) => { let t = u; while (t.endsWith('/')) t = t.slice(0, -1); return t; };
+const withV1 = (u) => { const t = trimSlash(u); return t.endsWith('/v1') ? t : `${t}/v1`; };
+
+// The generic Anthropic names (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY) are often present in an ambient
+// session env pointing at api.anthropic.com, so router-specific names win and anything on anthropic.com
+// is refused: a router key must never be sent to a third party.
+const DEFAULT_ROUTER_URL = 'http://localhost:20128/v1';
+export function isAnthropicHost(u) {
+    try {
+        const h = new URL(u).hostname.toLowerCase();
+        return h === 'anthropic.com' || h.endsWith('.anthropic.com');
+    } catch {
+        return true; // unparseable: do not trust it
+    }
+}
+
+// Returns { baseUrl, key, urlFrom, keyFrom, reason? }; *From is 'env' | 'settings' | 'default' | 'none'.
+// baseUrl: env NINEROUTER_URL (+/v1) > settings ANTHROPIC_BASE_URL > settings NINEROUTER_URL (+/v1)
+//          > env ANTHROPIC_BASE_URL (only if not an anthropic.com host) > http://localhost:20128/v1.
+// key:     env NINEROUTER_KEY > settings NINEROUTER_KEY > settings ANTHROPIC_API_KEY
+//          > env ANTHROPIC_API_KEY (only when the URL itself came from env ANTHROPIC_BASE_URL).
+// Hard guard: a resolved anthropic.com URL is replaced by the default and no key is returned.
+export function resolveRouter({ env = process.env, settings } = {}) {
+    const s = settings === undefined ? readSettingsEnv() : (settings || {});
+    const get = (src, n) => nonEmpty(src[n]);
+    let baseUrl, urlFrom, genericEnvUrl = false, v, reason;
+    if ((v = get(env, 'NINEROUTER_URL'))) { baseUrl = withV1(v); urlFrom = 'env'; }
+    else if ((v = get(s, 'ANTHROPIC_BASE_URL'))) { baseUrl = trimSlash(v); urlFrom = 'settings'; }
+    else if ((v = get(s, 'NINEROUTER_URL'))) { baseUrl = withV1(v); urlFrom = 'settings'; }
+    else if ((v = get(env, 'ANTHROPIC_BASE_URL')) && !isAnthropicHost(v)) { baseUrl = trimSlash(v); urlFrom = 'env'; genericEnvUrl = true; }
+    else { baseUrl = DEFAULT_ROUTER_URL; urlFrom = 'default'; }
+    let key, keyFrom = 'none';
+    if ((v = get(env, 'NINEROUTER_KEY'))) { key = v; keyFrom = 'env'; }
+    else if ((v = get(s, 'NINEROUTER_KEY') || get(s, 'ANTHROPIC_API_KEY'))) { key = v; keyFrom = 'settings'; }
+    else if (genericEnvUrl && (v = get(env, 'ANTHROPIC_API_KEY'))) { key = v; keyFrom = 'env'; }
+    if (isAnthropicHost(baseUrl)) {
+        reason = `refusing to use ${baseUrl}: an anthropic.com host is never a 9router`;
+        return { baseUrl: DEFAULT_ROUTER_URL, key: undefined, urlFrom: 'default', keyFrom: 'none', reason };
+    }
+    return { baseUrl, key, urlFrom, keyFrom };
+}
+
+// Safe-to-print description of where the router config came from. Never includes the key.
+export function describeRouter(r) {
+    return `url from ${r.urlFrom}, key ${r.keyFrom === 'none' ? 'MISSING' : `set (${r.keyFrom})`}${r.reason ? `; ${r.reason}` : ""}`;
+}
 
 // A brief is markdown with an optional `---` front matter of `key: value`
 // lines (repo, issue, test, maxLines, allow). Returns { meta, body }.

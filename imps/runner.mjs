@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief, closesIssue } from './lib.mjs';
+import { summarizeRun, parseBrief, closesIssue, resolveRouter } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -124,14 +124,15 @@ export function lookupIssueGuard(slug, issue) {
     };
 }
 
-export function cleanEnv() {
-    const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
+export function cleanEnv(src = process.env, settings) {
     const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME',
         'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'ProgramFiles', 'ProgramData', 'HOMEDRIVE', 'HOMEPATH', 'DOCKER_HOST', 'IMPS_HOME'];
-    const env = Object.fromEntries(keep.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+    const env = Object.fromEntries(keep.filter((k) => src[k]).map((k) => [k, src[k]]));
     // Nothing from the dispatching session leaks in: no Claude/GitHub tokens.
-    env.ANTHROPIC_BASE_URL = s.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1';
-    env.ANTHROPIC_API_KEY = s.NINEROUTER_KEY || s.ANTHROPIC_API_KEY;
+    // Only the resolved router URL/key are passed (env first, settings.json fallback).
+    const { baseUrl, key } = resolveRouter({ env: src, settings });
+    env.ANTHROPIC_BASE_URL = baseUrl;
+    if (key) env.ANTHROPIC_API_KEY = key;
     return env;
 }
 

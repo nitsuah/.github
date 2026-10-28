@@ -36,15 +36,11 @@ if (Get-Command docker -EA SilentlyContinue) {
     if ($LASTEXITCODE -eq 0) { Ok 'docker reachable' } else { Bad 'docker not running' }
 } else { Bad 'docker missing' }
 
-$settings = Join-Path $env:USERPROFILE '.claude\settings.json'
-if (Test-Path -LiteralPath $settings) {
-    try {
-        $base = [string]((Get-Content $settings -Raw | ConvertFrom-Json).env.ANTHROPIC_BASE_URL)
-        if ([string]::IsNullOrWhiteSpace($base)) { $base = 'http://localhost:20128/v1' }
-        $base = $base.TrimEnd('/')
-        if (Test-RouterReachable $base) { Ok "9router at $base" } else { Bad "9router not reachable at $base" }
-    } catch { Bad "unreadable $settings" }
-} else { Bad "missing $settings" }
+. (Join-Path $PSScriptRoot 'router-env.ps1')
+$router = Resolve-Router
+$base = $router.BaseUrl
+if (Test-RouterReachable $base) { Ok "9router at $base ($($router.Note))" } else { Bad "9router not reachable at $base ($($router.Note))" }
+if ($router.KeyFrom -in 'MISSING','persisted-only') { Bad 'no 9router key: set user env NINEROUTER_KEY (imps/README.md "Configure 9router") or settings.json env' }
 
 $stateDir = if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }
 $kitPointer = Join-Path $stateDir 'kit-path.txt'

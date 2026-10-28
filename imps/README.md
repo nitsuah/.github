@@ -39,6 +39,29 @@ bash /tmp/github-kit/imps/setup.sh
 
 Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Scheduling is a crontab when `crontab` exists (`7 * * * *` plus `@reboot sleep 120`), and a **systemd user timer** (`imps-hourly.timer` at :07 and 2 min after boot, `imps-label-watch.timer` every 5 min) otherwise — run `loginctl enable-linger "$USER"` so the timers survive logout. If neither exists, setup says so instead of half-succeeding.
 
+## Configure 9router (new machine)
+
+Keep the router URL and key in **OS user-level environment variables**, not in `~/.claude/settings.json`. The router-specific names win, and the generic `ANTHROPIC_*` names in the ambient environment are distrusted (a desktop session often has `ANTHROPIC_BASE_URL=https://api.anthropic.com`). Exact order, first hit wins:
+
+- **URL:** env `NINEROUTER_URL` (`/v1` added if missing) → `settings.json` `env.ANTHROPIC_BASE_URL` → `settings.json` `env.NINEROUTER_URL` (`/v1` added) → env `ANTHROPIC_BASE_URL` (only if its host is not `anthropic.com`) → `http://localhost:20128/v1`.
+- **Key:** env `NINEROUTER_KEY` → `settings.json` `env.NINEROUTER_KEY` → `settings.json` `env.ANTHROPIC_API_KEY` → env `ANTHROPIC_API_KEY` (only when the URL itself came from env `ANTHROPIC_BASE_URL`).
+- **Guard:** a URL on `anthropic.com` is never used and no key is sent to it; the kit falls back to the default URL with no key, so the probe fails loudly.
+
+Existing machines that only have `settings.json` keep working, and `settings.json` may be missing or have no `env` block. Only the resolved URL and key reach an imp's environment (nothing else from your session). `doctor.ps1`, `setup.*` and `warlock.mjs` say where each came from and never print the key; `doctor.ps1` also tells you when a key is saved at User scope but not set in the current session.
+
+Windows (PowerShell; the prompt keeps the key out of history and the console):
+
+```powershell
+[Environment]::SetEnvironmentVariable('NINEROUTER_URL', 'http://localhost:20128/v1', 'User')
+$k = Read-Host 'NINEROUTER_KEY' -AsSecureString
+$plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($k))
+[Environment]::SetEnvironmentVariable('NINEROUTER_KEY', $plain, 'User'); Remove-Variable plain, k
+```
+
+Task Scheduler tasks only see new user variables after you **sign out and back in** (or reboot); open a new terminal for interactive shells. Then run `doctor.ps1`.
+
+macOS / Linux: `export NINEROUTER_KEY=...` (and optionally `NINEROUTER_URL`) in `~/.profile` (login shells; cron does not read it, so prefix the crontab line or use `environment.d`), or for systemd user timers put `NINEROUTER_KEY=...` in `~/.config/environment.d/imps.conf` and re-login. Keep that file `chmod 600`. `setup.sh` reports where it found the URL and key.
+
 ## What lives where
 
 | Path | What | Reset by updates? |
