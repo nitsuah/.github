@@ -280,26 +280,38 @@ function readLedger() {
     }
 }
 const ledgerRow = (id) => readLedger().find((r) => r.id === id);
-const MACHINE = machineName();
 // How often a running claim refreshes its heartbeat. Well under the 90 min TTL
 // so a live run always looks alive, and cheap enough to ignore.
 const CLAIM_BEAT_MS = 10 * 60_000;
 
 async function work(issue) {
     const { repo, number } = issue;
-    // A label has no owner, so write one down and keep it beating BEFORE relabeling.
-    // Without this a machine that dies leaves the issue on imp:working for the whole
-    // fleet, and a live run is indistinguishable from a dead one (#60, #67).
+    const slug = `${o.owner}/${repo}`;
+    const claim = { machine: hostname(), startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(), pr: null };
+    let cid = null;
+    if (!dry) {
+        try {
+            cid = gh(['api', `repos/${slug}/issues/${number}/comments`, '-f', `body=${claimBody(claim)}`, '--jq', '.id']);
+        } catch (e) {
+            log({ event: 'claim-comment-error', repo, number });
+        }
+    }
+    const beat = (pr) => {
+        if (!cid) return;
+        claim.heartbeatAt = new Date().toISOString();
+        if (pr) claim.pr = pr;
+        try {
+            gh(['api', '-X', 'PATCH', `repos/${slug}/issues/comments/${cid}`, '-f', `body=${claimBody(claim)}`]);
+        } catch {}
+    };
+    const hb = setInterval(beat, CLAIM_BEAT_MS);
+    hb.unref?.();
     // Post the claim comment BEFORE relabeling to imp:working, so another dispatcher
     // sees the claim and does not reclaim it while this run is starting.
-    const claim = startClaimBeat(repo, number);
-    // startClaimBeat posts the initial claim synchronously (gh uses spawnSync).
-    // No yield here — the claim is visible before we change the label.
     try {
         relabel(repo, number, 'imp:working', ['imp:ready']);
     } catch (e) {
-        // If relabel fails, stop the heartbeat and rethrow so the caller sees the error.
-        claim.stop();
+        clearInterval(hb);
         throw e;
     }
     try {
@@ -318,7 +330,7 @@ async function work(issue) {
             const pr = await node(['pr', id]);
             const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
             if (url) {
-                claim.pr(url);
+                beat(url);
                 relabel(repo, number, 'imp:pr', ['imp:working']);
                 comment(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
                 // The review + merge decision live inside `imp.mjs pr`.
@@ -332,7 +344,7 @@ async function work(issue) {
         comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}\n\nNeeds a new brief or a human.`);
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
-        claim.stop();
+        clearInterval(hb);
     }
 }
 

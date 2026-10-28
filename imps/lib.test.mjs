@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
-    parseClaim, claimExpired } from './lib.mjs';
+    parseClaim, claimExpired, CLAIM_MARK, claimBody } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -264,7 +264,6 @@ test('tokenTable estimates killed runs from the median input per turn and totals
     assert.equal(t.totals.wastedInput, 1_200_000);
 });
 
-
 test('shouldAutoCommit salvages a verified but uncommitted run (#54)', () => {
     assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 0 }), true);
     assert.equal(shouldAutoCommit({ impCommits: 0, dirty: false, testExit: 0 }), false);
@@ -309,7 +308,6 @@ test('staleImpLabels strips state labels but keeps imp:pr (#58)', () => {
     assert.deepEqual(staleImpLabels([{ name: 'imp:ready' }]), ['imp:ready']);
     assert.deepEqual(staleImpLabels(['imp:pr']), []);
     assert.deepEqual(staleImpLabels([]), []);
-    assert.deepEqual(staleImpLabels(), []);
     assert.deepEqual(staleImpLabels(undefined), []);
 });
 
@@ -365,4 +363,26 @@ test('parseClaim / claimExpired', () => {
     assert.equal(claimExpired(parsed, now), true);  // 91 min elapsed
     assert.equal(claimExpired({ ...parsed, heartbeatAt: '2026-10-27T11:30:00Z' }, now), false); // 30 min
     assert.equal(claimExpired(null, now), false);
+});
+
+test('claimBody format and IMP_MARK.test', () => {
+    const c = { machine: 'test-host', startedAt: '2026-01-01T00:00:00.000Z', heartbeatAt: '2026-01-01T00:10:00.000Z', pr: 'https://github.com/owner/repo/pull/42' };
+    const body = claimBody(c);
+    const lines = body.split('\n');
+    assert.equal(lines[0], CLAIM_MARK);
+    const meta = JSON.parse(lines[1].slice(5, -4));
+    assert.deepEqual(meta, c);
+    assert.match(lines[2], /Imp claim: \*\*test-host\*\*, started 2026-01-01T00:00:00.000Z, last heartbeat 2026-01-01T00:10:00.000Z, PR https:\/\/github.com\/owner\/repo\/pull\/42\./);
+    assert.ok(CLAIM_MARK.test ? CLAIM_MARK.test(body) : body.startsWith(CLAIM_MARK));
+});
+
+test('claimBody without pr omits PR line', () => {
+    const c = { machine: 'test-host', startedAt: '2026-01-01T00:00:00.000Z', heartbeatAt: '2026-01-01T00:10:00.000Z' };
+    const body = claimBody(c);
+    const lines = body.split('\n');
+    assert.equal(lines[0], CLAIM_MARK);
+    const meta = JSON.parse(lines[1].slice(5, -4));
+    assert.deepEqual(meta, c);
+    assert.match(lines[2], /Imp claim: \*\*test-host\*\*, started 2026-01-01T00:00:00.000Z, last heartbeat 2026-01-01T00:10:00.000Z\./);
+    assert.ok(!lines[2].includes('PR'));
 });
