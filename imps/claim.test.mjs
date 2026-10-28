@@ -102,8 +102,9 @@ test('parseClaim falls back to the prose form, and is null for anything else', (
 });
 
 test('parseClaim survives a corrupted JSON line instead of throwing', () => {
-    const c = parseClaim(`${CLAIM_MARK}\n<!-- imp-claim-meta {"machine":"X", -->\nImp claim: **X**, started ${at(1)}.`);
-    assert.equal(c.machine, 'X'); // prose still there
+    const c = parseClaim(`${CLAIM_MARK}\n<!-- imp-claim-meta {"machine":"X", -->\nClaimed by \`OLD-BOX\` as \`imp_1\` at ${at(1)}.`);
+    assert.equal(c.machine, 'OLD-BOX'); // prose fallback works
+    assert.equal(c.legacy, true);
 });
 
 test('claimExpired is true only past the TTL, and never for a missing clock', () => {

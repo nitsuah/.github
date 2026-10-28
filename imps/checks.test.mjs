@@ -228,11 +228,11 @@ test('labelWatchEnabled defaults on with kill switches', () => {
 });
 
 test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {
-    assert.equal(DEFAULTS.maxLines, 40);
-    assert.equal(DEFAULTS.perRepo, 4);
-    assert.equal(DEFAULTS.concurrency, 4);
-    assert.equal(DEFAULTS.wip, 8);
-    assert.equal(DEFAULTS.dailyCap, 30);
+    assert.equal(DEFAULTS.maxLines, 80);
+    assert.equal(DEFAULTS.perRepo, 6);
+    assert.equal(DEFAULTS.concurrency, 6);
+    assert.equal(DEFAULTS.wip, 12);
+    assert.equal(DEFAULTS.dailyCap, 60);
     assert.equal(DEFAULTS.autoMergeTrust, 3);
     assert.equal(DEFAULTS.kitFolder, '.github');
     assert.equal(DEFAULTS.kitRepo, 'nitsuah/.github');
@@ -263,4 +263,19 @@ test('mergeReady requires green checks on the commit actually at the head (#55)'
     assert.equal(empty.reason, evaluateChecks([]).reason);
 
     assert.deepEqual(mergeReady({ headSha: 'abc', pushedHead: 'abc', checks: [{ name: 'test', state: 'SUCCESS' }] }), { ok: true });
+});
+
+test('imps folder has no gh pr merge --auto calls (#55)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mjs') && !f.endsWith('.test.mjs'));
+    // Match actual gh pr merge --auto calls, not comments/docs
+    const forbidden = /(?:sh|spawnSync|execSync|run)\([^)]*pr['", ]+merge[^\n]*--auto/;
+    for (const f of files) {
+        const content = fs.readFileSync(path.join(dir, f), 'utf8');
+        const match = content.match(forbidden);
+        assert.equal(match, null, `${f} contains forbidden auto-merge call: ${match?.[0]}`);
+    }
 });

@@ -136,12 +136,21 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
 }
 
-// Refuse to open a PR for an issue that closed while the imp was working (#56).
+// Refuse to open a PR for an issue that closed while the imp was working,
+// for a branch already merged, or when the issue already has an open imp PR (#56).
 // A failed lookup is not proof the issue is open, so it fails closed.
-export function prGuard({ issue } = {}) {
-    const n = issue?.number ?? '?';
-    if (issue?.state === 'CLOSED') return { ok: false, reason: `issue #${n} is closed` };
-    if (!issue?.state) return { ok: false, reason: `cannot confirm issue #${n} is open` };
+export function prGuard({ issueState, branch, issue, prs = [] } = {}) {
+    if (String(issueState || '').toUpperCase() !== 'OPEN') {
+        return { ok: false, reason: `issue #${issue ?? '?'} is closed` };
+    }
+    const merged = prs.find((p) => p.headRefName === branch && p.mergedAt);
+    if (merged) {
+        return { ok: false, reason: `branch ${branch} already merged in #${merged.number}` };
+    }
+    const open = prs.find((p) => String(p.state || '').toUpperCase() === 'OPEN');
+    if (open) {
+        return { ok: false, reason: `issue #${issue ?? '?'} already has open imp PR #${open.number}` };
+    }
     return { ok: true };
 }
 
@@ -253,11 +262,25 @@ export function parseClaim(body = '') {
     if (!s.startsWith(CLAIM_MARK)) return null;
     const lines = s.split('\n');
     if (lines.length < 2) return null;
-    try {
-        return JSON.parse(lines[1].slice(5, -4));
-    } catch {
-        return null;
+    // Check line 1 for JSON format
+    const line1 = lines[1].trim();
+    // New format: <!-- {"machine":"X",...} -->
+    if (line1.startsWith('<!-- ') && line1.endsWith(' -->')) {
+        try {
+            const parsed = JSON.parse(line1.slice(5, -4));
+            return { ...parsed, legacy: false };
+        } catch {
+            // Corrupted JSON - fall through to prose fallback on next lines
+        }
     }
+    // Old prose format: Claimed by `OLD-BOX` as `imp_1` at ... (could be on line 1 or 2)
+    for (let i = 1; i < lines.length; i++) {
+        const m = lines[i].match(/Claimed by\s+`([^`]+)`\s+as\s+`([^`]+)`/);
+        if (m) {
+            return { machine: m[1], legacy: true };
+        }
+    }
+    return null;
 }
 
 export const CLAIM_HEARTBEAT_TTL_MS = 90 * 60_000;
