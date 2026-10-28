@@ -76,7 +76,7 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 | Repo cooldown | 24h pause after two straight gate failures |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |
 
-Defaults (from `defaults.mjs`): per-repo **4**, concurrency **4**, wip **8**, daily **15**, maxLines fallback **40**, auto-merge trust **3** clean merges.
+Defaults (from `defaults.mjs`): per-repo **4**, concurrency **4**, wip **8**, daily **15**, maxLines fallback **80**, auto-merge trust **3** clean merges.
 
 ## Auto-merge safety
 

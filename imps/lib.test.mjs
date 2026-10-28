@@ -291,12 +291,12 @@ test('gate denies the kit defaults and imps-config at any depth (#57)', () => {
     assert.equal(gate({ numstat: '1\t1\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, true);
 });
 
-test('prGuard refuses a closed or unknown issue (#56)', () => {
-    assert.deepEqual(prGuard({ issue: { number: 54, state: 'CLOSED' } }), { ok: false, reason: 'issue #54 is closed' });
-    assert.deepEqual(prGuard({ issue: { number: 54 } }), { ok: false, reason: 'cannot confirm issue #54 is open' });
-    assert.deepEqual(prGuard({}), { ok: false, reason: 'cannot confirm issue #? is open' });
-    assert.deepEqual(prGuard(), { ok: false, reason: 'cannot confirm issue #? is open' });
-    assert.deepEqual(prGuard({ issue: { number: 54, state: 'OPEN' } }), { ok: true });
+test('prGuard refuses a closed issue, merged branch, or open imp PR (#56)', () => {
+    assert.deepEqual(prGuard({ issueState: 'CLOSED', issue: 54 }), { ok: false, reason: 'issue #54 is closed' });
+    assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [{ headRefName: 'imp/54-abc', mergedAt: '2026-01-01', number: 10 }] }), { ok: false, reason: 'branch imp/54-abc already merged in #10' });
+    assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [{ state: 'OPEN', headRefName: 'imp/54-xyz', number: 11, title: 'imp: fix #54' }] }), { ok: false, reason: 'issue #54 already has open imp PR #11' });
+    assert.deepEqual(prGuard({ issueState: 'OPEN', issue: 54, branch: 'imp/54-abc', prs: [] }), { ok: true });
+    assert.deepEqual(prGuard({}), { ok: false, reason: 'issue #? is closed' });
 });
 
 test('staleImpLabels strips state labels but keeps imp:pr (#58)', () => {

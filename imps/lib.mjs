@@ -136,14 +136,30 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
 }
 
-// Refuse to open a PR for an issue that closed while the imp was working (#56).
+// Refuse to open a PR for an issue that closed while the imp was working,
+// for a branch already merged, or when the issue already has an open imp PR (#56).
 // A failed lookup is not proof the issue is open, so it fails closed.
-export function prGuard({ issue } = {}) {
-    const n = issue?.number ?? '?';
-    if (issue?.state === 'CLOSED') return { ok: false, reason: `issue #${n} is closed` };
-    if (!issue?.state) return { ok: false, reason: `cannot confirm issue #${n} is open` };
-    return { ok: true };
-}
+export function prGuard({ issueState, branch, issue, prs = [] } = {}) {
+    if (String(issueState || '').toUpperCase() !== 'OPEN') {
+        return { ok: false, reason: `issue #${issue ?? '?'} is closed` };
+    }
+    const merged = prs.find((p) => p.headRefName === branch && p.mergedAt);
+    if (merged) {
+        return { ok: false, reason: `branch ${branch} already merged in #${merged.number}` };
+    }
+    // Only consider PRs that actually reference this issue (in title, body, or via closing keywords)
+     // The search `head:imp/${issue}-` matches branch prefixes but not all are for this issue.
+     const relevantOpen = prs.find((p) =>
+         String(p.state || '').toUpperCase() === 'OPEN' &&
+         (p.title?.includes(`#${issue}`) ||
+          p.body?.includes(`#${issue}`) ||
+          p.headRefName === branch)
+     );
+     if (relevantOpen) {
+         return { ok: false, reason: `issue #${issue ?? '?'} already has open imp PR #${relevantOpen.number}` };
+     }
+     return { ok: true };
+ }
 
 // Labels to strip when an issue closes. imp:pr is kept: it records that an imp
 // shipped here, so the dispatcher will not pick the repo up again (#58).
@@ -253,11 +269,25 @@ export function parseClaim(body = '') {
     if (!s.startsWith(CLAIM_MARK)) return null;
     const lines = s.split('\n');
     if (lines.length < 2) return null;
-    try {
-        return JSON.parse(lines[1].slice(5, -4));
-    } catch {
-        return null;
+    // Check line 1 for JSON format
+    const line1 = lines[1].trim();
+    // New format: <!-- {"machine":"X",...} -->
+    if (line1.startsWith('<!-- ') && line1.endsWith(' -->')) {
+        try {
+            const parsed = JSON.parse(line1.slice(5, -4));
+            return { ...parsed, legacy: false };
+        } catch {
+            // Corrupted JSON - fall through to prose fallback on next lines
+        }
     }
+    // Old prose format: Claimed by `OLD-BOX` as `imp_1` at ... (could be on line 1 or 2)
+    for (let i = 1; i < lines.length; i++) {
+        const m = lines[i].match(/Claimed by\s+`([^`]+)`\s+as\s+`([^`]+)`/);
+        if (m) {
+            return { machine: m[1], legacy: true };
+        }
+    }
+    return null;
 }
 
 export const CLAIM_HEARTBEAT_TTL_MS = 90 * 60_000;

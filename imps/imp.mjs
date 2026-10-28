@@ -254,16 +254,14 @@ function openPr(id) {
         throw new Error('worktree changed since the gate ran; run `gate` again');
     const m = r.metrics;
     const repoSlug = git(r.worktree, 'remote', 'get-url', 'origin').out.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '');
-    // Refuse before pushing: a closed issue or an issue that already has an open
-    // imp PR means the work is done or duplicated, and reusing a merged
-    // imp/<n> branch over and over is how stash#311 rode a stale branch into
-    // main (#56).
-    const issueInfo = (() => {
-        const v = sh('gh', ['issue', 'view', String(r.issue), '-R', repoSlug, '--json', 'number,state']);
-        if (v.code) return undefined;
-        try { return JSON.parse(v.out); } catch { return undefined; }
-    })();
-    const guard = prGuard({ issue: issueInfo });
+    // Refuse before pushing: a closed issue, a branch already merged, or an
+    // issue that already has an open imp PR means the work is done or duplicated
+    // (#56).
+    const issueState = JSON.parse(sh('gh', ['issue', 'view', String(r.issue), '-R', repoSlug, '--json', 'state']).out || '{}').state;
+    const prLookup = sh('gh', ['pr', 'list', '-R', repoSlug, '--state', 'all', '--search', `head:imp/${r.issue}-`, '--json', 'number,state,headRefName,mergedAt']);
+    if (prLookup.code !== 0 || !prLookup.out) throw new Error(`cannot list PRs: ${prLookup.err}`);
+    const prs = JSON.parse(prLookup.out);
+    const guard = prGuard({ issueState, branch: r.branch, issue: r.issue, prs });
     if (!guard.ok) throw new Error(guard.reason);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
