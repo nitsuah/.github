@@ -1,8 +1,0 @@
-{
-  "webhook": "https://discord.com/api/webhooks/REPLACE/ME",
-  "timeout_ms": 8000,
-  "urls": [
-    "https://example.com",
-    "https://example.org"
-  ]
-}
