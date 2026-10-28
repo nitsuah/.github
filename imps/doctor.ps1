@@ -36,6 +36,13 @@ if (Get-Command docker -EA SilentlyContinue) {
     if ($LASTEXITCODE -eq 0) { Ok 'docker reachable' } else { Bad 'docker not running' }
 } else { Bad 'docker missing' }
 
+# The runner spawns the npm-installed claude.exe itself (the .cmd shim splits args), so
+# `claude --version` working in a shell is not enough. Same lookup as runner.mjs.
+$claudeBin = @($env:IMPS_CLAUDE_BIN, (Join-Path $env:APPDATA 'npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe')) |
+    Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+if ($claudeBin) { Ok "claude binary $claudeBin" }
+else { Bad 'claude binary not found where the runner looks (npm i -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code, or set IMPS_CLAUDE_BIN)' }
+
 . (Join-Path $PSScriptRoot 'router-env.ps1')
 $router = Resolve-Router
 $base = $router.BaseUrl
@@ -63,6 +70,19 @@ if (Test-Path -LiteralPath (Join-Path $codeKit 'imps\dispatch.mjs')) {
 } else { Bad "kit self-work clone missing at $codeKit (re-run setup.ps1)" }
 
 if (Test-Path -LiteralPath $stateDir) { Ok "state dir $stateDir" } else { Bad "state dir missing $stateDir" }
+
+# An imp can only work in a repo cloned under IMPS_CODE; a missing clone used to show up
+# as a failed run on the issue. Check every repo that has an imp:ready issue.
+$codeRoot = if ($env:IMPS_CODE) { $env:IMPS_CODE } else { Join-Path $env:USERPROFILE 'code' }
+if (Get-Command gh -EA SilentlyContinue) {
+    $ready = gh search issues --owner nitsuah --state open --label imp:ready --limit 100 --json repository 2>$null | ConvertFrom-Json
+    if ($LASTEXITCODE -eq 0 -and $ready) {
+        $names = $ready | ForEach-Object { $_.repository.name } | Sort-Object -Unique
+        $missing = @($names | Where-Object { -not (Test-Path -LiteralPath (Join-Path $codeRoot $_)) })
+        if ($missing.Count) { Bad "imp:ready issues in repos not cloned under ${codeRoot}: $($missing -join ', ') (gh repo clone nitsuah/<repo> $codeRoot\<repo>)" }
+        else { Ok "all $($names.Count) repos with imp:ready issues are cloned under $codeRoot" }
+    }
+}
 
 $vault = $env:IMPS_VAULT_PROMPT
 if ([string]::IsNullOrWhiteSpace($vault)) {

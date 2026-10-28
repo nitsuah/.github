@@ -488,6 +488,17 @@ test('issueFailures counts ended runs without a PR since the latest brief', () =
     assert.equal(issueFailures(rows, 'a', 5, Date.parse('2026-10-20T12:00:00Z')), 1); // a re-brief resets the count
     assert.equal(issueFailures(rows, 'a', 6), 1);
     assert.equal(issueFailures([], 'a', 5), 0);
+    // a run that never started (no claude binary) is not the issue's failure
+    assert.equal(issueFailures([run('imp_6', '2026-10-23T00:00:00Z', { metrics: { end: 'spawn-failed' } })], 'a', 5), 0);
+});
+
+test('resolveClaudeBin: env override, npm global exe on Windows, PATH elsewhere, null when missing', () => {
+    const exists = (set) => (p) => set.includes(p);
+    assert.equal(resolveClaudeBin({ IMPS_CLAUDE_BIN: 'C:/x/claude.exe' }, 'win32', exists(['C:/x/claude.exe'])), 'C:/x/claude.exe');
+    const npmExe = pjoin('C:/Users/u/AppData/Roaming', 'npm', 'node_modules/@anthropic-ai/claude-code/bin/claude.exe');
+    assert.equal(resolveClaudeBin({ APPDATA: 'C:/Users/u/AppData/Roaming' }, 'win32', exists([npmExe])), npmExe);
+    assert.equal(resolveClaudeBin({ APPDATA: 'C:/Users/u/AppData/Roaming' }, 'win32', exists([])), null);
+    assert.equal(resolveClaudeBin({}, 'linux', exists([])), 'claude');
 });
 
 test('briefCommentAt, hasMark and outcomeFromPr', () => {
@@ -523,7 +534,7 @@ test('review fixes: code under docs/, cross-repo refs, bug label precedence', ()
 
 // ── 9router URL/key resolution ──
 import { resolveRouter, describeRouter, readSettingsEnv, isAnthropicHost } from './lib.mjs';
-import { cleanEnv } from './runner.mjs';
+import { cleanEnv, resolveClaudeBin } from './runner.mjs';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';

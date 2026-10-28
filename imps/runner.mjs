@@ -150,6 +150,27 @@ const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'No
 // and records the limit as metrics.noEditTurns.
 // Context trim: the default CLI session sends ~60 slash commands, skills and every
 // built-in tool each turn; workers only need `tools`. IMPS_NO_TRIM=1 turns the trim off.
+//
+// Where the CLI lives. IMPS_CLAUDE_BIN wins; on Windows the npm global .exe (not the
+// .cmd shim); elsewhere `claude` on PATH. A fresh machine with no install used to
+// spawn a missing path and end `killed-timeout` in 4 ms, which read as a gate failure
+// of the issue; now it is `spawn-failed`, an infrastructure error.
+export function claudeBinCandidates(env = process.env, platform = process.platform) {
+    if (env.IMPS_CLAUDE_BIN) return [env.IMPS_CLAUDE_BIN];
+    if (platform !== 'win32') return ['claude'];
+    const pkg = 'node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+    return [env.APPDATA && join(env.APPDATA, 'npm', pkg), env.npm_config_prefix && join(env.npm_config_prefix, pkg)].filter(Boolean);
+}
+export function resolveClaudeBin(env = process.env, platform = process.platform, exists = existsSync) {
+    if (platform !== 'win32' && !env.IMPS_CLAUDE_BIN) return 'claude';
+    return claudeBinCandidates(env, platform).find((p) => exists(p)) || null;
+}
+function spawnFailed(t0) {
+    const metrics = summarizeRun([], { startedAt: t0, endedAt: Date.now() });
+    metrics.end = 'spawn-failed';
+    metrics.toolTurns = 0;
+    return metrics;
+}
 export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
     const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
@@ -159,13 +180,15 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
         const builtin = [...new Set(tools.map((t) => t.replace(/\(.*$/, '')))];
         args.push('--disable-slash-commands', '--no-session-persistence', '--tools', builtin.join(','));
     }
+    const t0 = Date.now();
     // Spawn the binary itself: a shell (the npm .cmd shim) splits multi-word args.
-    const bin = process.platform === 'win32'
-        ? join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
-        : 'claude';
+    const bin = resolveClaudeBin();
+    if (!bin) {
+        console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
+        return spawnFailed(t0);
+    }
     const out = createWriteStream(transcript);
     const events = [];
-    const t0 = Date.now();
     const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let buf = '';
     let toolTurns = 0;
@@ -205,12 +228,14 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     child.stderr.on('data', () => {});
     const timer = setTimeout(() => child.kill('SIGTERM'), Number(minutes) * 60_000);
     // `close`, not `exit`: stdout can still hold the final result event at exit.
+    let spawnError = false;
     const code = await new Promise((done) => {
-        child.once('error', (e) => { console.error(`spawn failed: ${e.message}`); done(null); });
+        child.once('error', (e) => { spawnError = true; console.error(`spawn failed: ${e.message}`); done(null); });
         child.once('close', done);
     });
     clearTimeout(timer);
     await new Promise((done) => out.end(done));
+    if (spawnError) return spawnFailed(t0);
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
     if (capped) metrics.end = 'killed-max-turns';
     else if (noEdit) metrics.end = 'no-edit-timeout';

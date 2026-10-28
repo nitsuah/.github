@@ -2,7 +2,7 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 12] [--per-repo 6] [--concurrency 6] [--owner nitsuah] [--dry-run] [--rsi]
+//   node dispatch.mjs [--max 5] [--wip 12] [--per-repo 6] [--concurrency 6] [--owner nitsuah] [--dry-run] [--rsi] [--only repo#N,...]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
@@ -29,6 +29,7 @@ const { values: o } = parseArgs({
         'daily-cap': { type: 'string', default: String(DEFAULTS.dailyCap) },
         owner: { type: 'string', default: DEFAULTS.owner },
         'dry-run': { type: 'boolean', default: false },
+        only: { type: 'string', default: '' }, // controlled runs: --only vhs#102,skyview#213
         rsi: { type: 'boolean', default: false },
     },
 });
@@ -346,6 +347,12 @@ async function work(issue) {
             comment(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
             return log({ event: 'run-error', repo, number, out: run.out.slice(-500) });
         }
+        if (ledgerRow(id)?.metrics?.end === 'spawn-failed') {
+            // No claude binary here: nothing was tried on the issue, so put it back
+            // and say nothing on it. `doctor.ps1` reports the missing binary.
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return log({ event: 'infra-fail', repo, number, id, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
+        }
         await node(['gate', id]);
         const row = ledgerRow(id);
         const m = row.metrics || {};
@@ -474,7 +481,8 @@ for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open
 const queued = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
-    .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)));
+    .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)))
+    .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`));
 const impPRs = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'repository'])
     .map((p) => p.repository.name);
 
@@ -492,8 +500,27 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
-const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
-for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo, dailyCap: Number(o['daily-cap']), ...budget })) {
+// readLedger, not readFileSync: a fresh machine has no runs.jsonl yet.
+const budget = loopBudget(readLedger());
+// An issue with no brief is skipped below, so it must not use up one of the --max
+// slots (with --max 1 a briefless issue at the head of the queue starved the cycle
+// every hour). Pick in batches until the slots hold issues that can run.
+function* pickable() {
+    let pool = queued;
+    while (picked.length < Number(o.max)) {
+        const taken = (repo) => picked.filter((p) => p.repo === repo).length;
+        const batch = pickIssues({
+            candidates: pool,
+            repos: Object.fromEntries(Object.entries(repos).map(([k, v]) => [k, { ...v, impPRs: (v.impPRs || 0) + taken(k) }])),
+            max: Number(o.max) - picked.length, wip: Number(o.wip) - picked.length, perRepo,
+            dailyCap: Number(o['daily-cap']) - picked.length, ...budget,
+        });
+        if (!batch.length) return;
+        pool = pool.filter((c) => !batch.includes(c));
+        yield* batch;
+    }
+}
+for (const i of pickable()) {
     const comments = ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments;
     const brief = briefFromComments(comments);
     if (!brief) {

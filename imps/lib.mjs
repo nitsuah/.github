@@ -271,8 +271,9 @@ export function duplicateImpPrs(open = [], merged = []) {
 // Counted only since the latest brief comment (`sinceMs`), so a human re-brief
 // gives the issue a fresh allowance.
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
+    // spawn-failed is this machine's fault (no claude binary), not the issue's.
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && Date.parse(r.startedAt) >= sinceMs).length;
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs).length;
 }
 
 // What happened to an imp PR, for the ledger's `outcome`. `open` while it is
