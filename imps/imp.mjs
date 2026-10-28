@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -89,6 +89,13 @@ async function run() {
     }
     const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
     validateBrief(meta);
+    // No claude binary means no run can start: say so before reserving quota, so each
+    // hourly retry on such a machine does not spend a reservation. dispatch reads this
+    // line and puts the issue back on imp:ready instead of labelling it failed.
+    if (!resolveClaudeBin()) {
+        console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
+        process.exit(1);
+    }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
     const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
     if (!chosenModel) {
@@ -152,7 +159,7 @@ function runGate(id) {
     // On a re-run the runner's format commit is already there; size is
     // measured up to the imp's last commit either way.
     const runnerCommit = git(r.worktree, 'log', '-1', '--format=%s').out.includes('(imp runner)');
-    const impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
+    let impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
     // Never format over uncommitted imp work: it would be swept into the runner commit.
     const dirtyBefore = git(r.worktree, 'status', '--porcelain').out;
     if (meta.format && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
@@ -181,9 +188,12 @@ function runGate(id) {
             git(r.worktree, 'add', '-A');
             git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
             autoCommitted = true;
+            // The imp's work is this commit. impHead was read before it existed, so the
+            // size check below compared baseSha..baseSha and saw zero lines.
+            impHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         }
     }
-    const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
+    const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
     // Only the imp's own commits must carry the imp trailer: a human or the
     // hypervisor may push a fix to the PR branch between rounds.
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;

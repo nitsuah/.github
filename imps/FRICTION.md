@@ -1,8 +1,10 @@
 # Friction log
 
 Where the imps process needed hand-holding, or got stuck on the same gate twice. Add a
-row when a human had to step in; mark it fixed when a PR closes it. RSI reads recurring
-rows here as signal (`rsi.mjs`), so keep the **cause** column specific.
+row when a human had to step in; mark it fixed when a PR closes it. Nothing reads this
+file automatically: `rsi.mjs` works from the ledger, `dispatch.jsonl` and open
+`bot:journey` / `bot:review` issues, not from here. Feeding recurring rows to RSI is a
+proposal, not behavior. Keep the **cause** column specific so a human can.
 
 | # | Date | Where | Symptom | Cause | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -16,6 +18,8 @@ rows here as signal (`rsi.mjs`), so keep the **cause** column specific.
 | 8 | 2026-10-28 | log reading | `label-cleanup` is logged the same in dry and live runs, so the log cannot say whether labels were actually removed | event has no `dry` field | open |
 | 10 | 2026-10-28 | gate, first real imp run | imp edited `auth.js` (11 turns, `success`), gate said `edits left uncommitted; tests exit 2`, issue `imp:failed` | gate/`runtest.mjs` ran the brief's `sh -c '... && ...'` through `shell: true` = cmd.exe, which does not group single quotes; the container's `sh` died before any test ran. The same command under Git Bash exits 0 | fixed: `gateShell()` (Git Bash, `IMPS_SHELL` override), doctor check |
 | 9 | 2026-10-28 | scheduled tasks | user env vars (9router key) are visible to Task Scheduler only after sign-out/in; until then every scheduled cycle skips "9router not up" | Windows reads user env at logon | open: doctor could warn when the task's logon predates the vars |
+| 11 | 2026-10-28 | imp PR quality (vhs#103) | with the broken gate shell the imp could not run tests, finished anyway, and its PR body is its last message ("the test command failed due to a syntax error...") under the generic title `imp: work for #102 (committed by runner)`; the diff itself had two blockers | the imp is told to verify with `runtest.mjs` but nothing stops it from ending with a red or unrun test; PR title/summary come from the final text, not the work | open: refuse to open a PR when the imp's last test run failed; title from the issue; summary from the diff. Worked as designed: the imp reviewer caught both blockers and nothing auto-merged |
+| 12 | 2026-10-28 | gate size accounting | `Gate: 0 lines in src/modules/auth.js` for a +12/-5 diff | `runGate` read `impHead` before the runner's auto-commit existed, then measured the size as `baseSha..impHead`, which is empty when the imp left its edits uncommitted. So `maxLines` never saw an auto-committed change: an oversized diff would have passed the size gate | fixed: `impHead` is re-read after the auto-commit |
 
 ## Who writes the briefs? (gap, not yet built)
 
