@@ -92,6 +92,7 @@ process.on('exit', unlock);
 // ── 9router must be up ────────────────────────────────────────────────────
 async function routerUp() {
     const { baseUrl: base, key } = resolveRouter();
+    if (!key) return false; // never probe keyless (or with a refused anthropic.com config)
     try {
         const r = await fetch(`${base}/messages`, {
             method: 'POST',

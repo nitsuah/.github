@@ -41,7 +41,13 @@ Same four steps, same layout (`~/.local/share/imps-runner`, `~/.imps` state). Sc
 
 ## Configure 9router (new machine)
 
-Keep the router URL and key in **OS user-level environment variables**, not in `~/.claude/settings.json`. The kit reads, in order: URL = `ANTHROPIC_BASE_URL`, else `NINEROUTER_URL` (a missing `/v1` is added), else `http://localhost:20128/v1`; key = `NINEROUTER_KEY`, else `ANTHROPIC_API_KEY`. For each, the environment wins and `settings.json` `env` is the fallback, so existing machines keep working. `settings.json` may be missing or have no `env` block. Only the resolved URL and key reach an imp's environment (nothing else from your session). `doctor.ps1` and `warlock.mjs` say whether each came from `env` or `settings`, and never print the key.
+Keep the router URL and key in **OS user-level environment variables**, not in `~/.claude/settings.json`. The router-specific names win, and the generic `ANTHROPIC_*` names in the ambient environment are distrusted (a desktop session often has `ANTHROPIC_BASE_URL=https://api.anthropic.com`). Exact order, first hit wins:
+
+- **URL:** env `NINEROUTER_URL` (`/v1` added if missing) → `settings.json` `env.ANTHROPIC_BASE_URL` → `settings.json` `env.NINEROUTER_URL` (`/v1` added) → env `ANTHROPIC_BASE_URL` (only if its host is not `anthropic.com`) → `http://localhost:20128/v1`.
+- **Key:** env `NINEROUTER_KEY` → `settings.json` `env.NINEROUTER_KEY` → `settings.json` `env.ANTHROPIC_API_KEY` → env `ANTHROPIC_API_KEY` (only when the URL itself came from env `ANTHROPIC_BASE_URL`).
+- **Guard:** a URL on `anthropic.com` is never used and no key is sent to it; the kit falls back to the default URL with no key, so the probe fails loudly.
+
+Existing machines that only have `settings.json` keep working, and `settings.json` may be missing or have no `env` block. Only the resolved URL and key reach an imp's environment (nothing else from your session). `doctor.ps1`, `setup.*` and `warlock.mjs` say where each came from and never print the key; `doctor.ps1` also tells you when a key is saved at User scope but not set in the current session.
 
 Windows (PowerShell; the prompt keeps the key out of history and the console):
 

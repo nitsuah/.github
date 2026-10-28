@@ -113,7 +113,7 @@ if (-not $SkipDoctor) {
         Write-Hint 'Start 9router (the local router that serves free models), then re-run.'
         $failed = $true
     }
-    if ($router.KeyFrom -eq 'MISSING') {
+    if ($router.KeyFrom -in 'MISSING','persisted-only') {
         Write-Bad 'no 9router key found'
         Write-Hint 'Set user env NINEROUTER_KEY (imps/README.md "Configure 9router"), or put it in ~/.claude/settings.json env.'
         $failed = $true

@@ -40,7 +40,7 @@ if (Get-Command docker -EA SilentlyContinue) {
 $router = Resolve-Router
 $base = $router.BaseUrl
 if (Test-RouterReachable $base) { Ok "9router at $base ($($router.Note))" } else { Bad "9router not reachable at $base ($($router.Note))" }
-if ($router.KeyFrom -eq 'MISSING') { Bad 'no 9router key: set user env NINEROUTER_KEY (imps/README.md "Configure 9router") or settings.json env' }
+if ($router.KeyFrom -in 'MISSING','persisted-only') { Bad 'no 9router key: set user env NINEROUTER_KEY (imps/README.md "Configure 9router") or settings.json env' }
 
 $stateDir = if ($env:IMPS_HOME) { $env:IMPS_HOME } else { Join-Path $env:USERPROFILE '.imps' }
 $kitPointer = Join-Path $stateDir 'kit-path.txt'

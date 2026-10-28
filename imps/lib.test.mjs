@@ -522,54 +522,86 @@ test('review fixes: code under docs/, cross-repo refs, bug label precedence', ()
 });
 
 // ── 9router URL/key resolution ──
-import { resolveRouter, describeRouter, readSettingsEnv } from './lib.mjs';
+import { resolveRouter, describeRouter, readSettingsEnv, isAnthropicHost } from './lib.mjs';
 import { cleanEnv } from './runner.mjs';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';
 
-test('resolveRouter: env beats settings for url and key', () => {
+test('resolveRouter: env NINEROUTER_* beats settings', () => {
     const r = resolveRouter({
-        env: { ANTHROPIC_BASE_URL: 'http://env:1/v1/', NINEROUTER_KEY: 'envkey1234' },
+        env: { NINEROUTER_URL: 'http://env:1', NINEROUTER_KEY: 'envkey1234' },
         settings: { ANTHROPIC_BASE_URL: 'http://settings:2/v1', NINEROUTER_KEY: 'setkey' },
     });
-    assert.equal(r.baseUrl, 'http://env:1/v1');
-    assert.equal(r.key, 'envkey1234');
-    assert.equal(r.urlFrom, 'env');
-    assert.equal(r.keyFrom, 'env');
+    assert.deepEqual([r.baseUrl, r.key, r.urlFrom, r.keyFrom], ['http://env:1/v1', 'envkey1234', 'env', 'env']);
 });
 
-test('resolveRouter: url order is env BASE_URL > settings BASE_URL > env NINEROUTER_URL > settings NINEROUTER_URL > default', () => {
-    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://e:3' }, settings: { ANTHROPIC_BASE_URL: 'http://s:4/v1' } }).baseUrl, 'http://s:4/v1');
-    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://e:3' }, settings: { NINEROUTER_URL: 'http://s:5' } }).baseUrl, 'http://e:3/v1');
-    const s = resolveRouter({ env: {}, settings: { NINEROUTER_URL: 'http://s:5' } });
-    assert.equal(s.baseUrl, 'http://s:5/v1');
-    assert.equal(s.urlFrom, 'settings');
-    const d = resolveRouter({ env: {}, settings: {} });
-    assert.equal(d.baseUrl, 'http://localhost:20128/v1');
-    assert.equal(d.urlFrom, 'default');
+test('resolveRouter: new machine with only env NINEROUTER_URL/KEY and empty settings works', () => {
+    for (const settings of [{}, null, undefined === 0 ? 0 : {}]) {
+        const r = resolveRouter({ env: { NINEROUTER_URL: 'http://h:1/', NINEROUTER_KEY: 'k' }, settings });
+        assert.deepEqual([r.baseUrl, r.key], ['http://h:1/v1', 'k']);
+    }
 });
 
-test('resolveRouter: NINEROUTER_URL is normalized to end in /v1 exactly once; ANTHROPIC_BASE_URL is only trimmed', () => {
+test('resolveRouter: ambient api.anthropic.com env is ignored; settings localhost URL/key win', () => {
+    const r = resolveRouter({
+        env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_API_KEY: 'sk-ant-x' },
+        settings: { ANTHROPIC_BASE_URL: 'http://localhost:20128/v1', NINEROUTER_KEY: 'routerkey' },
+    });
+    assert.deepEqual([r.baseUrl, r.key, r.urlFrom, r.keyFrom], ['http://localhost:20128/v1', 'routerkey', 'settings', 'settings']);
+    // Even with no settings, the ambient anthropic key is never picked up.
+    const bare = resolveRouter({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_API_KEY: 'sk-ant-x' }, settings: {} });
+    assert.equal(bare.baseUrl, 'http://localhost:20128/v1');
+    assert.equal(bare.key, undefined);
+    assert.equal(bare.keyFrom, 'none');
+});
+
+test('resolveRouter: env ANTHROPIC_BASE_URL (non-anthropic) + ANTHROPIC_API_KEY work when nothing else is set', () => {
+    const r = resolveRouter({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:20128/v1/', ANTHROPIC_API_KEY: 'k' }, settings: {} });
+    assert.deepEqual([r.baseUrl, r.key, r.urlFrom, r.keyFrom], ['http://127.0.0.1:20128/v1', 'k', 'env', 'env']);
+    // ...but an ambient ANTHROPIC_API_KEY is not used when the URL came from somewhere else.
+    const other = resolveRouter({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/v1', ANTHROPIC_API_KEY: 'amb', NINEROUTER_URL: 'http://r:2' }, settings: {} });
+    assert.equal(other.key, undefined);
+});
+
+test('resolveRouter: url order env NINEROUTER_URL > settings BASE_URL > settings NINEROUTER_URL > env BASE_URL > default', () => {
+    const u = (env, settings) => resolveRouter({ env, settings }).baseUrl;
+    assert.equal(u({ NINEROUTER_URL: 'http://a', ANTHROPIC_BASE_URL: 'http://d/v1' }, { ANTHROPIC_BASE_URL: 'http://b/v1' }), 'http://a/v1');
+    assert.equal(u({ ANTHROPIC_BASE_URL: 'http://d/v1' }, { ANTHROPIC_BASE_URL: 'http://b/v1', NINEROUTER_URL: 'http://c' }), 'http://b/v1');
+    assert.equal(u({ ANTHROPIC_BASE_URL: 'http://d/v1' }, { NINEROUTER_URL: 'http://c' }), 'http://c/v1');
+    assert.equal(u({ ANTHROPIC_BASE_URL: 'http://d/v1' }, {}), 'http://d/v1');
+    assert.equal(u({}, {}), 'http://localhost:20128/v1');
+});
+
+test('resolveRouter: NINEROUTER_URL gets /v1 exactly once; BASE_URL only trimmed', () => {
     assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1' }, settings: {} }).baseUrl, 'http://h:1/v1');
-    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1/' }, settings: {} }).baseUrl, 'http://h:1/v1');
     assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1/v1//' }, settings: {} }).baseUrl, 'http://h:1/v1');
-    assert.equal(resolveRouter({ env: { ANTHROPIC_BASE_URL: 'http://h:1/custom/' }, settings: {} }).baseUrl, 'http://h:1/custom');
+    assert.equal(resolveRouter({ env: {}, settings: { ANTHROPIC_BASE_URL: 'http://h:1/custom/' } }).baseUrl, 'http://h:1/custom');
 });
 
-test('resolveRouter: key order env NINEROUTER_KEY > env ANTHROPIC_API_KEY > settings NINEROUTER_KEY > settings ANTHROPIC_API_KEY', () => {
+test('resolveRouter: key order env NINEROUTER_KEY > settings NINEROUTER_KEY > settings ANTHROPIC_API_KEY', () => {
     const k = (env, settings) => resolveRouter({ env, settings }).key;
-    assert.equal(k({ NINEROUTER_KEY: 'a', ANTHROPIC_API_KEY: 'b' }, { NINEROUTER_KEY: 'c' }), 'a');
-    assert.equal(k({ ANTHROPIC_API_KEY: 'b' }, { NINEROUTER_KEY: 'c' }), 'b');
+    assert.equal(k({ NINEROUTER_KEY: 'a' }, { NINEROUTER_KEY: 'c' }), 'a');
     assert.equal(k({}, { NINEROUTER_KEY: 'c', ANTHROPIC_API_KEY: 'd' }), 'c');
     assert.equal(k({}, { ANTHROPIC_API_KEY: 'd' }), 'd');
-    const none = resolveRouter({ env: {}, settings: {} });
-    assert.equal(none.key, '');
-    assert.equal(none.keyFrom, 'none');
-    assert.equal(resolveRouter({ env: { NINEROUTER_KEY: '  ' }, settings: { NINEROUTER_KEY: 'x' } }).keyFrom, 'settings');
+    assert.equal(k({ NINEROUTER_KEY: '  ' }, { NINEROUTER_KEY: 'x' }), 'x');
+    assert.equal(resolveRouter({ env: {}, settings: {} }).keyFrom, 'none');
 });
 
-test('resolveRouter: settings fallback keeps existing machines working; missing/garbage settings never throw', () => {
+test('resolveRouter: hard guard never returns a key for an anthropic.com host', () => {
+    for (const url of ['https://api.anthropic.com', 'https://API.Anthropic.com/v1', 'https://anthropic.com', 'not a url']) {
+        const r = resolveRouter({ env: { NINEROUTER_URL: url, NINEROUTER_KEY: 'k' }, settings: {} });
+        assert.equal(r.key, undefined);
+        assert.equal(r.baseUrl, 'http://localhost:20128/v1');
+        assert.ok(r.reason);
+        const s = resolveRouter({ env: {}, settings: { ANTHROPIC_BASE_URL: url, NINEROUTER_KEY: 'k' } });
+        assert.equal(s.key, undefined);
+    }
+    assert.ok(!isAnthropicHost('http://notanthropic.com'));
+    assert.ok(!isAnthropicHost('http://localhost:20128/v1'));
+});
+
+test('resolveRouter: missing/garbage settings never throw', () => {
     const dir = mkdtempSync(pjoin(tmpdir(), 'router-'));
     assert.deepEqual(readSettingsEnv(pjoin(dir, 'nope.json')), {});
     writeFileSync(pjoin(dir, 'bad.json'), '{not json');
@@ -579,7 +611,6 @@ test('resolveRouter: settings fallback keeps existing machines working; missing/
     writeFileSync(pjoin(dir, 'ok.json'), JSON.stringify({ env: { NINEROUTER_KEY: 'k' } }));
     assert.equal(readSettingsEnv(pjoin(dir, 'ok.json')).NINEROUTER_KEY, 'k');
     assert.doesNotThrow(() => resolveRouter({ env: {}, settings: null }));
-    assert.equal(resolveRouter({ env: {}, settings: { ANTHROPIC_BASE_URL: 'http://s/v1', NINEROUTER_KEY: 'k' } }).keyFrom, 'settings');
 });
 
 test('describeRouter never contains the key', () => {
@@ -610,4 +641,13 @@ test('cleanEnv falls back to settings and works with no key at all', () => {
     const bare = cleanEnv({ PATH: '/bin' }, {});
     assert.equal(bare.ANTHROPIC_BASE_URL, 'http://localhost:20128/v1');
     assert.ok(!('ANTHROPIC_API_KEY' in bare));
+});
+
+test('cleanEnv never emits an anthropic.com URL or an ambient anthropic key', () => {
+    const amb = { PATH: '/bin', ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_API_KEY: 'sk-ant-x' };
+    for (const settings of [{}, { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', NINEROUTER_KEY: 'k' }]) {
+        const env = cleanEnv(amb, settings);
+        assert.ok(!isAnthropicHost(env.ANTHROPIC_BASE_URL));
+        assert.ok(!('ANTHROPIC_API_KEY' in env));
+    }
 });

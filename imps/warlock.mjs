@@ -202,7 +202,7 @@ try {
     const r = await fetch(`${base}/messages`, {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
-        headers: { 'content-type': 'application/json', 'x-api-key': router.key, 'anthropic-version': '2023-06-01' },
+        headers: { 'content-type': 'application/json', 'x-api-key': router.key || '', 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
     });
     check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
