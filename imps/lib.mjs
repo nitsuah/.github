@@ -96,7 +96,18 @@ export function errorKind(text = '') {
 // imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
     /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
-    /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/];
+    /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/, /(^|\/)CODEOWNERS$/];
+
+// An unscoped brief (no `allow:`) must not reach the kit itself. Kit self-work
+// briefs name the imps/ files they may touch in `allow:`, which opts them in.
+const KIT = /^imps\//;
+
+// Not a code change: docs, task/changelog bookkeeping, screenshots and other media.
+// A bug-fix diff made only of these fixed nothing.
+// Extension decides first: a code file is code even under docs/ (docs/build.js).
+const CODE_EXT = /\.(m?[jt]sx?|cjs|py|go|rs|java|rb|php|sh|ps1|cmd|css|scss|html|vue|svelte|c|cc|cpp|h|hpp|cs|sql)$/i;
+const NON_CODE_RE = /(\.(md|mdx|txt|rst|png|jpe?g|gif|webp|svg|ico|pdf)$|(^|\/)(docs?|screenshots?)\/|(^|\/)(TASKS|CHANGELOG|ROADMAP|README)(\.[a-z]+)?$)/i;
+const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 
 // An imp that edited and verified but never committed is salvageable: the
 // runner commits for it rather than failing a run whose work is already done (#54).
@@ -110,7 +121,7 @@ export function shouldAutoCommit({ impCommits, dirty, testExit } = {}) {
 // formatter commit counts toward scope but not toward the size budget.
 // dirty (optional) collapses "no commits" and the uncommitted edits behind it
 // into one reason, so RSI files one issue instead of three (#53).
-export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [] }) {
+export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -123,9 +134,10 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
     const reasons = [];
     if (!commits.length) reasons.push(dirty ? 'edits left uncommitted' : 'no commits');
     for (const f of files) {
-        if (DENY.some((re) => re.test(f.path))) reasons.push(`denied path ${f.path}`);
+        if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
         if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
+    if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
     if (!(lines <= maxLines)) reasons.push(`diff ${lines} lines > ${maxLines}`);
     if (commits.length && !commits.every((c) => /Co-Authored-By: .*imp/i.test(c))) reasons.push('commit missing imp trailer');
@@ -139,7 +151,7 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
 // Refuse to open a PR for an issue that closed while the imp was working,
 // for a branch already merged, or when the issue already has an open imp PR (#56).
 // A failed lookup is not proof the issue is open, so it fails closed.
-export function prGuard({ issueState, branch, issue, prs = [] } = {}) {
+export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [], slug = '' } = {}) {
     if (String(issueState).toUpperCase() !== 'OPEN') {
         return { ok: false, reason: `issue #${issue ?? '?'} is closed` };
     }
@@ -147,11 +159,88 @@ export function prGuard({ issueState, branch, issue, prs = [] } = {}) {
     if (merged) {
         return { ok: false, reason: `branch ${branch} already merged in #${merged.number}` };
     }
+    // One PR per issue: a merged imp/<n>-* branch, or any merged PR whose body
+    // closes the issue, means the work is already on main.
+    const done = prs.find((p) => p.mergedAt && String(p.headRefName || '').startsWith(`imp/${issue}-`))
+        || mergedPrs.find((p) => closesIssue(p.body, issue, slug));
+    if (done) {
+        return { ok: false, reason: `issue #${issue ?? '?'} already fixed by merged PR #${done.number}` };
+    }
     const open = prs.find((p) => String(p.state).toUpperCase() === 'OPEN');
     if (open) {
         return { ok: false, reason: `issue #${issue ?? '?'} already has open imp PR #${open.number}` };
     }
     return { ok: true };
+}
+
+// Only the line the kit itself writes (imp.mjs PR body: `Fixes #n`, alone on its
+// line). Prose in a model-written summary ("does not resolve #12") must not count.
+
+const fixesRefs = (body) => [...String(body || '').replace(/\r/g, '').matchAll(/^Fixes (?:([\w.-]+\/[\w.-]+))?#(\d+)[ \t]*$/gm)].map((m) => ({ slug: m[1] || '', n: m[2] }));
+
+// Does a PR body carry the kit's own `Fixes #n` line for this issue? Same repo
+// only: bare `#n`, or `<slug>#n` when `slug` (owner/repo) is given.
+export function closesIssue(body = '', issue, slug = '') {
+    return fixesRefs(body).some((r) => r.n === String(Number(issue)) && (!r.slug || (slug && r.slug.toLowerCase() === slug.toLowerCase())));
+}
+
+// Open imp PRs whose issue a merged imp PR already closed: duplicates the
+// sweep can close. Both lists are [{ repo, number, body, url }] (gh search prs).
+// Returns [{ pr, mergedPr, key }].
+export function duplicateImpPrs(open = [], merged = []) {
+    const refs = (x) => fixesRefs(x.body)
+        .filter((r) => !r.slug || (x.owner ? r.slug.toLowerCase() === `${x.owner}/${x.repo}`.toLowerCase() : r.slug.split('/')[1].toLowerCase() === String(x.repo).toLowerCase()))
+        .map((r) => r.n);
+    const fixed = new Map();
+    for (const m of merged) for (const n of refs(m)) fixed.set(`${m.repo}#${n}`, m);
+    const dups = [];
+    for (const p of open) {
+        for (const n of refs(p)) {
+            const m = fixed.get(`${p.repo}#${n}`);
+            if (m && m.url !== p.url) dups.push({ pr: p, mergedPr: m, key: `${p.repo}#${n}` });
+        }
+    }
+    return dups;
+}
+
+// Failed or killed attempts on one issue: ended runs that never got a PR.
+// Counted only since the latest brief comment (`sinceMs`), so a human re-brief
+// gives the issue a fresh allowance.
+export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
+    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && Date.parse(r.startedAt) >= sinceMs).length;
+}
+
+// What happened to an imp PR, for the ledger's `outcome`. `open` while it is
+// open; `merged`; `abandoned` when it was closed unmerged by anyone; the sweep
+// writes `closed-duplicate` itself. Older rows may still say `closed`.
+export function outcomeFromPr({ state, mergedAt } = {}) {
+    const s = String(state || '').toUpperCase();
+    if (s === 'MERGED' || mergedAt) return 'merged';
+    if (s === 'CLOSED') return 'abandoned';
+    return 'open';
+}
+
+// When the latest brief comment was posted (ms), or 0.
+export function briefCommentAt(comments = []) {
+    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
+    return c ? Date.parse(c.createdAt || '') || 0 : 0;
+}
+
+export const CAP_MARK = '<!-- imp-cap -->';
+export const NO_BRIEF_MARK = '<!-- imp-no-brief -->';
+// Has the dispatcher already left this one-time note on the issue?
+export const hasMark = (comments = [], mark) => comments.some((c) => (c.body || '').includes(mark));
+
+// Mark a brief as a bug fix (the issue carries the `bug` label) so the gate can
+// refuse a docs-only diff. Adds `kind: bug` to the front matter; no-op otherwise.
+export function withKind(brief, labels = []) {
+    const { meta } = parseBrief(brief);
+    if (!labels.includes('bug') || meta.kind === 'bug') return brief;
+    // The bug label wins over a brief's own kind: it must not opt out of the code-change gate.
+    if (meta.kind) return brief.replace(/^kind:.*$/m, 'kind: bug');
+    if (/^---\r?\n/.test(brief)) return brief.replace(/^---\r?\n/, '---\nkind: bug\n');
+    return `---\nkind: bug\n---\n${brief}`;
 }
 
 // Labels to strip when an issue closes. imp:pr is kept: it records that an imp

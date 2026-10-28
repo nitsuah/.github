@@ -74,9 +74,17 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 | 9router probe | Wait up to 10 min with backoff before giving up a cycle (boot, provider blip) |
 | WIP / daily caps | Stop when the review pile or 24h run budget is full |
 | Repo cooldown | 24h pause after two straight gate failures |
+| Issue attempt cap | 2 failed/killed runs on one issue (since its latest brief) → `imp:needs-human` and one comment; a new brief comment resets it |
+| One PR per issue | closed issue, open/merged `imp/<n>-*` PR, or a merged PR that closes it → skip; open duplicates of a merged fix are closed by the sweep |
+| No-edit fail-fast | `noEditTurns` (default 12, `config.json` / `IMPS_NO_EDIT_TURNS`) tool calls with no edit → run ends `no-edit-timeout` |
+| `no-brief` | an `imp:ready` issue with no brief gets one explanatory comment (not repeated) |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |
 
 Defaults (from `defaults.mjs`): per-repo **4**, concurrency **4**, wip **8**, daily **15**, maxLines fallback **80**, auto-merge trust **3** clean merges.
+
+## Ledger outcomes
+
+`runs.jsonl` rows get `outcome` filled as PR state is observed: `open` → `merged` | `abandoned` (closed unmerged) | `closed-duplicate` (closed by the sweep). Each cycle reconciles up to 40 rows still `open`. Older rows may say `closed`. Rows also carry `authorModel` (first served model), and the PR body has an `Authored by model` line.
 
 ## Auto-merge safety
 

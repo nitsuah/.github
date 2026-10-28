@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
-    parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays } from './lib.mjs';
+    parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -288,7 +289,9 @@ test('gate denies the kit defaults and imps-config at any depth (#57)', () => {
         assert.ok(g.reasons.includes(`denied path ${p}`), `${p} not denied: ${g.reasons.join()}`);
         assert.equal(g.pass, false);
     }
-    assert.equal(gate({ numstat: '1\t1\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, true);
+    // Kit files other than defaults need a brief that names them in `allow:`.
+    assert.equal(gate({ numstat: '1\t1\timps/lib.mjs', commits: [ok], testExit: 0 }).pass, false);
+    assert.equal(gate({ numstat: '1\t1\timps/lib.mjs', commits: [ok], testExit: 0, allow: ['imps/lib.mjs'] }).pass, true);
 });
 
 test('prGuard refuses a closed issue, merged branch, or open imp PR (#56)', () => {
@@ -408,4 +411,112 @@ test('routerWaitDelays backoff sums to <= window, first delay, cap, empty for ze
     assert.deepEqual(routerWaitDelays({ windowMs: 0 }), []);
     // window smaller than first returns empty
     assert.deepEqual(routerWaitDelays({ windowMs: 1000, firstMs: 10_000 }), []);
+});
+
+// ── hardening (2026-10-28 assessment) ─────────────────────────────────────
+test('prGuard: one PR per issue (merged imp/<n>-* branch, or a merged PR that closes it)', () => {
+    const base = { issueState: 'OPEN', issue: 54, branch: 'imp/54-new' };
+    assert.deepEqual(prGuard({ ...base, prs: [{ state: 'MERGED', headRefName: 'imp/54-old', mergedAt: '2026-01-01', number: 7 }] }),
+        { ok: false, reason: 'issue #54 already fixed by merged PR #7' });
+    assert.deepEqual(prGuard({ ...base, prs: [], mergedPrs: [{ number: 8, body: 'Fixes #54\n\n> Imp PR.' }] }),
+        { ok: false, reason: 'issue #54 already fixed by merged PR #8' });
+    assert.deepEqual(prGuard({ ...base, prs: [], mergedPrs: [{ number: 9, body: 'Fixes #540' }] }), { ok: true });
+    assert.deepEqual(prGuard({ ...base, branch: null, prs: [] }), { ok: true }); // pre-claim: no branch yet
+});
+
+test('closesIssue matches Fixes/Closes/Resolves #n exactly', () => {
+    assert.ok(closesIssue('Fixes #5', 5));
+    assert.ok(closesIssue('Fixes #5\r\n\r\nrest', 5));
+    // model-written prose must not count
+    assert.ok(!closesIssue('### Imp summary\nThis does not resolve #5 and never fixes #5.', 5));
+    assert.ok(!closesIssue('Closes #5', 5));
+    assert.ok(!closesIssue('see Fixes #5 above', 5));
+    assert.ok(!closesIssue('Fixes #55', 5));
+    assert.ok(!closesIssue('see #5', 5));
+    assert.ok(!closesIssue(undefined, 5));
+});
+
+test('duplicateImpPrs finds open imp PRs whose issue a merged imp PR fixed', () => {
+    const open = [{ repo: 'a', url: 'u1', body: 'Fixes #5' }, { repo: 'a', url: 'u2', body: 'Fixes #6' }, { repo: 'b', url: 'u3', body: 'Fixes #5' }];
+    const merged = [{ repo: 'a', url: 'm1', body: 'Fixes #5\n\n...' }];
+    const d = duplicateImpPrs(open, merged);
+    assert.deepEqual(d.map((x) => [x.pr.url, x.mergedPr.url, x.key]), [['u1', 'm1', 'a#5']]);
+    assert.deepEqual(duplicateImpPrs(merged, merged), []); // a PR is not its own duplicate
+    assert.deepEqual(duplicateImpPrs([{ repo: 'a', url: 'u9', body: 'Fixes #7' }], [{ repo: 'a', url: 'm9', body: 'Fixes #8\n\nThis does not resolve #7' }]), []);
+});
+
+test('gate denies CODEOWNERS and, for an unscoped brief, the kit itself', () => {
+    const run = (path, allow = []) => gate({ numstat: `1\t0\t${path}`, commits: [ok], testExit: 0, allow }).reasons;
+    assert.ok(run('CODEOWNERS').includes('denied path CODEOWNERS'));
+    assert.ok(run('docs/CODEOWNERS').includes('denied path docs/CODEOWNERS'));
+    assert.ok(run('.github/workflows/ci.yml').includes('denied path .github/workflows/ci.yml'));
+    assert.ok(run('.github/imps-config.yml', ['.github/']).includes('denied path .github/imps-config.yml'));
+    assert.ok(run('imps/dispatch.mjs').includes('denied path imps/dispatch.mjs'));
+    assert.ok(run('imps/defaults.mjs', ['imps/']).includes('denied path imps/defaults.mjs')); // never, even with allow
+    assert.deepEqual(run('imps/lib.mjs', ['imps/lib.mjs']), []); // kit self-work names its files in allow
+});
+
+test('gate refuses a docs- or screenshot-only diff for a bug fix', () => {
+    const run = (numstat, bugfix = true) => gate({ numstat, commits: [ok], testExit: 0, bugfix }).reasons;
+    const why = 'no code change (docs/screenshot-only diff) for a bug fix';
+    assert.ok(run('5\t0\tTASKS.md\n3\t0\tdocs/CHANGELOG.md').includes(why));
+    assert.ok(run('0\t0\ttests/shots/home.png').includes(why));
+    assert.ok(!run('5\t0\tTASKS.md\n3\t1\tsrc/app.js').includes(why));
+    assert.ok(!run('3\t1\tsrc/app.test.js').includes(why));
+    assert.ok(!run('5\t0\tTASKS.md', false).includes(why)); // not a bug fix: docs-only is fine
+});
+
+test('withKind tags bug-labelled briefs and leaves the rest alone', () => {
+    assert.equal(withKind('---\nrepo: a\n---\nbody', ['bug']), '---\nkind: bug\nrepo: a\n---\nbody');
+    assert.equal(withKind('body', ['bug']), '---\nkind: bug\n---\nbody');
+    assert.equal(withKind('---\nrepo: a\n---\nbody', ['enhancement']), '---\nrepo: a\n---\nbody');
+    assert.equal(withKind('---\nkind: docs\n---\nbody', ['bug']), '---\nkind: bug\n---\nbody'); // the bug label wins
+    assert.equal(parseBrief(withKind('---\nrepo: a\n---\nbody', ['bug'])).meta.kind, 'bug');
+});
+
+test('issueFailures counts ended runs without a PR since the latest brief', () => {
+    const run = (id, at, extra = {}) => ({ id, repo: 'a', issue: 5, startedAt: at, endedAt: at, ...extra });
+    const rows = [
+        run('imp_1', '2026-10-20T00:00:00Z'),
+        run('imp_2', '2026-10-21T00:00:00Z', { metrics: { end: 'no-edit-timeout' } }),
+        run('imp_3', '2026-10-22T00:00:00Z', { pr: 'u', outcome: 'open' }), // got a PR: not a failure
+        { ...run('imp_4', '2026-10-22T01:00:00Z'), endedAt: undefined }, // still running
+        { ...run('imp_5', '2026-10-22T02:00:00Z'), issue: 6 },
+        { ...run('imp_manual_x_5', '2026-10-22T03:00:00Z'), ingested: true },
+    ];
+    assert.equal(issueFailures(rows, 'a', 5), 2);
+    assert.equal(issueFailures(rows, 'a', 5, Date.parse('2026-10-20T12:00:00Z')), 1); // a re-brief resets the count
+    assert.equal(issueFailures(rows, 'a', 6), 1);
+    assert.equal(issueFailures([], 'a', 5), 0);
+});
+
+test('briefCommentAt, hasMark and outcomeFromPr', () => {
+    const cs = [{ body: `${BRIEF_MARK}\nold`, createdAt: '2026-10-01T00:00:00Z' }, { body: 'chat' }, { body: `${BRIEF_MARK}\nnew`, createdAt: '2026-10-02T00:00:00Z' }];
+    assert.equal(briefCommentAt(cs), Date.parse('2026-10-02T00:00:00Z'));
+    assert.equal(briefCommentAt([]), 0);
+    assert.ok(hasMark([{ body: `x ${NO_BRIEF_MARK}` }], NO_BRIEF_MARK));
+    assert.ok(!hasMark([{ body: 'x' }], NO_BRIEF_MARK));
+    assert.equal(outcomeFromPr({ state: 'MERGED' }), 'merged');
+    assert.equal(outcomeFromPr({ state: 'CLOSED', mergedAt: '2026-10-01' }), 'merged');
+    assert.equal(outcomeFromPr({ state: 'CLOSED' }), 'abandoned');
+    assert.equal(outcomeFromPr({ state: 'OPEN' }), 'open');
+    assert.equal(outcomeFromPr({}), 'open');
+});
+
+test('review fixes: code under docs/, cross-repo refs, bug label precedence', () => {
+    const run = (numstat) => gate({ numstat, commits: [ok], testExit: 0, bugfix: true }).reasons;
+    const why = 'no code change (docs/screenshot-only diff) for a bug fix';
+    assert.ok(!run('3\t1\tdocs/build.js').includes(why));
+    assert.ok(!run('3\t1\tsrc/docs/renderer.js').includes(why));
+    assert.ok(run('3\t1\tdocs/guide.md\n1\t0\tdocs/data.json').includes(why));
+    // cross-repo refs never match this repo's issue
+    assert.ok(!closesIssue('Fixes other/repo#54', 54, 'nitsuah/x'));
+    assert.ok(closesIssue('Fixes nitsuah/x#54', 54, 'nitsuah/x'));
+    assert.ok(closesIssue('Fixes #54', 54, 'nitsuah/x'));
+    assert.deepEqual(duplicateImpPrs([{ repo: 'a', owner: 'o', url: 'u', body: 'Fixes #5' }], [{ repo: 'a', owner: 'o', url: 'm', body: 'Fixes other/a#5' }]), []);
+    assert.equal(duplicateImpPrs([{ repo: 'a', owner: 'o', url: 'u', body: 'Fixes #5' }], [{ repo: 'a', owner: 'o', url: 'm', body: 'Fixes o/a#5' }]).length, 1);
+    assert.equal(prGuard({ issueState: 'OPEN', issue: 54, slug: 'o/r', mergedPrs: [{ number: 3, body: 'Fixes o/r#54' }] }).ok, false);
+    assert.equal(prGuard({ issueState: 'OPEN', issue: 54, slug: 'o/r', mergedPrs: [{ number: 3, body: 'Fixes z/q#54' }] }).ok, true);
+    // the bug label wins over a brief's own kind
+    assert.equal(parseBrief(withKind('---\nkind: docs\nrepo: a\n---\nbody', ['bug'])).meta.kind, 'bug');
 });

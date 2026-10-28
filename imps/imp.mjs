@@ -23,10 +23,10 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard } from './lib.mjs';
+import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -135,7 +135,7 @@ async function run() {
 
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
-    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: 15, transcript: row.transcript });
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
@@ -206,6 +206,7 @@ function runGate(id) {
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
+        bugfix: meta.kind === 'bug',
     });
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
@@ -257,11 +258,7 @@ function openPr(id) {
     // Refuse before pushing: a closed issue, a branch already merged, or an
     // issue that already has an open imp PR means the work is done or duplicated
     // (#56).
-    const issueState = JSON.parse(sh('gh', ['issue', 'view', String(r.issue), '-R', repoSlug, '--json', 'state']).out || '{}').state;
-    const prLookup = sh('gh', ['pr', 'list', '-R', repoSlug, '--state', 'all', '--search', `head:imp/${r.issue}-`, '--json', 'number,state,headRefName,mergedAt']);
-    if (prLookup.code !== 0 || !prLookup.out) throw new Error(`cannot list PRs: ${prLookup.err}`);
-    const prs = JSON.parse(prLookup.out);
-    const guard = prGuard({ issueState, branch: r.branch, issue: r.issue, prs });
+    const guard = prGuard({ branch: r.branch, issue: r.issue, slug: repoSlug, ...lookupIssueGuard(repoSlug, r.issue) });
     if (!guard.ok) throw new Error(guard.reason);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
@@ -277,13 +274,14 @@ function openPr(id) {
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
+        `Authored by model: \`${(m.served || []).join(', ') || r.model}\` (requested \`${r.model}\`).`, '',
         `Gate: ${r.gate.lines} lines in ${r.gate.files.join(', ')}. Brief \`${r.briefHash.slice(0, 7)}\`.`, '',
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
     const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
-    update(id, { pr: pr.out, outcome: 'open' });
+    update(id, { pr: pr.out, outcome: 'open', authorModel: (m.served || [])[0] || r.model });
     console.log(pr.out);
     // Auto-review, then merge only on approve + all checks green + earned trust.
     // Merge immediately (no `gh pr merge --auto`): GitHub auto-merge only waits
@@ -341,9 +339,9 @@ function openPr(id) {
 function outcome(id) {
     const r = rows().find((x) => x.id === id);
     if (!r.pr) return console.log('no PR');
-    const s = sh('gh', ['pr', 'view', r.pr, '--json', 'state,reviews,comments', '--jq', '{state, reviews: (.reviews|length), comments: (.comments|length)}']);
+    const s = sh('gh', ['pr', 'view', r.pr, '--json', 'state,mergedAt,reviews,comments', '--jq', '{state, mergedAt, reviews: (.reviews|length), comments: (.comments|length)}']);
     const v = JSON.parse(s.out);
-    update(id, { outcome: v.state.toLowerCase(), prActivity: { reviews: v.reviews, comments: v.comments } });
+    update(id, { outcome: r.outcome === 'closed-duplicate' ? r.outcome : outcomeFromPr(v), prActivity: { reviews: v.reviews, comments: v.comments } });
     console.log(`${id}: ${v.state} · ${v.reviews} reviews · ${v.comments} comments`);
 }
 
