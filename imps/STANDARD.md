@@ -101,7 +101,7 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Imp runs per 24 h / `--daily-cap` | 60 | `loopBudget` |
 | Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
 | Attempts per issue | 2 failed/killed runs without a PR (since the latest brief), then `imp:needs-human` + one comment | `defaults.maxIssueFailures`, `issueFailures` |
-| No-edit fail-fast | 8 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
+| No-edit fail-fast | 12 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
 | Auto-merge earned trust | 3 clean merges/repo (`max(ledger, GitHub seed)`) | `defaults.autoMergeTrust`, `checks.mjs` |
 | Label-watch poll | every 5 min (default on) | `defaults.labelWatchDefault`, `IMPS_LABEL_WATCH=0` |
@@ -120,7 +120,7 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
   - **Salvage an uncommitted run.** When the imp made no commit of its own and the brief test passes on the dirty tree, the runner stages and commits the work itself (`imp: work for #<issue> (committed by runner)`, with the trailer) and records `gate.autoCommitted`. Scope, deny, size and the test still run afterwards.
   - **Guardrails are denied paths.** `imps/defaults.mjs`, any `imps-config.yml`/`.yaml`, any `CODEOWNERS` and everything under `.github/` (workflows included) are refused by the gate, so an imp cannot widen the limits it is judged by. A brief with no `allow:` cannot touch `imps/` at all; kit self-work briefs name the `imps/` files they may change in `allow:` (`defaults.mjs` stays denied regardless).
   - **A bug fix must change code.** The dispatcher tags briefs for `bug`-labelled issues with `kind: bug`; for those the gate fails a diff made only of docs, TASKS/CHANGELOG/README or images (`no code change …`).
-  - **One PR per issue.** `prGuard` (run before claiming and again before pushing) refuses a closed issue, an open `imp/<n>-*` PR, a merged `imp/<n>-*` PR, or a merged PR whose body says `Fixes/Closes/Resolves #n`. The sweep closes any open imp PR whose issue a merged imp PR already fixed and records `outcome: closed-duplicate`.
+  - **One PR per issue.** `prGuard` (run before claiming and again before pushing) refuses a closed issue, an open `imp/<n>-*` PR, a merged `imp/<n>-*` PR, or a merged PR whose body has the kit's own `Fixes #n` line. The sweep closes any open imp PR whose issue a merged imp PR already fixed and records `outcome: closed-duplicate`.
 - **Guardrail values are human-only.** The gate denies `imps/defaults.mjs` and any `imps-config.yml`, so an imp can never raise its own limits (stash#311).
   - **No merge without a bound head.** `mergeReady` requires the checks to be green *and* GitHub's `headRefOid` to equal the commit the runner pushed — a push between the poll and the merge leaves the PR open.
 - **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust**: `max(ledger clean merges, GitHub-seeded count of past merged imp PRs that passed checks and were not reverted)`. Seed query errors fail closed. Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
@@ -251,7 +251,7 @@ First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority r
 What the kit does about it:
 
 - **Context trim.** Workers start with `--disable-slash-commands --no-session-persistence --tools <only what they use>`. A trivial prompt went from 14.5k to 7.7k input tokens (-47%) with the same answer. `IMPS_NO_TRIM=1` turns it off. Compare `metrics.init` (tool / slash-command / skill counts) in the ledger across versions.
-- **Fail fast.** An imp with 15 tool calls and no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is now `defaults.noEditTurns`, 8, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
+- **Fail fast.** An imp with 15 tool calls and no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is now `defaults.noEditTurns`, 12, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
 - **One-shot reviews.** `review.mjs` defaults to `--mode chat`: one `/v1/chat/completions` call with the diff, brief and issue in the prompt (about 5k input) instead of a read-only agent session (about 500k). It falls back to the agent session if the answer is unusable. `review.mode` in the ledger tells them apart.
 - **Honest metrics.** Killed runs now record `turns` from tool calls and `unmetered: true` instead of zeros.
 

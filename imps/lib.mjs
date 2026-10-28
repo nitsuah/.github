@@ -170,18 +170,19 @@ export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [] } 
     return { ok: true };
 }
 
-const CLOSES = '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+';
+// Only the line the kit itself writes (imp.mjs PR body: `Fixes #n`, alone on its
+// line). Prose in a model-written summary ("does not resolve #12") must not count.
 
-// Does a PR body close this issue (`Fixes #n`, `Closes #n`, `Resolves #n`)?
+// Does a PR body carry the kit's own `Fixes #n` line for this issue?
 export function closesIssue(body = '', issue) {
-    return new RegExp(`\\b${CLOSES}(?:[\\w.-]+/[\\w.-]+)?#${Number(issue)}\\b`, 'i').test(body || '');
+    return new RegExp(`^Fixes #${Number(issue)}[ \\t]*$`, 'm').test(String(body || '').replace(/\r/g, ''));
 }
 
 // Open imp PRs whose issue a merged imp PR already closed: duplicates the
 // sweep can close. Both lists are [{ repo, number, body, url }] (gh search prs).
 // Returns [{ pr, mergedPr, key }].
 export function duplicateImpPrs(open = [], merged = []) {
-    const refs = (b) => [...String(b || '').matchAll(new RegExp(`\\b${CLOSES}#(\\d+)\\b`, 'gi'))].map((m) => m[1]);
+    const refs = (b) => [...String(b || '').replace(/\r/g, '').matchAll(/^Fixes #(\d+)[ \t]*$/gm)].map((m) => m[1]);
     const fixed = new Map();
     for (const m of merged) for (const n of refs(m.body)) fixed.set(`${m.repo}#${n}`, m);
     const dups = [];

@@ -300,8 +300,14 @@ async function work(issue) {
     if (!guard.ok) {
         log({ event: 'skip-handled', repo, number, reason: guard.reason });
         if (/already fixed/.test(guard.reason)) {
-            comment(repo, number, `Not running an imp: ${guard.reason}. Taking it off \`imp:ready\`; close the issue if it is done.`);
-            relabel(repo, number, 'imp:needs-human', ['imp:ready']);
+            // Relabel first: once off imp:ready the issue is not picked again, so a
+            // failing comment cannot repeat hourly.
+            try {
+                relabel(repo, number, 'imp:needs-human', ['imp:ready']);
+                comment(repo, number, `Not running an imp: ${guard.reason}. Taking it off \`imp:ready\`; close the issue if it is done.`);
+            } catch (e) {
+                log({ event: 'issue-note-error', repo, number, error: e.message });
+            }
         }
         return;
     }
@@ -492,9 +498,14 @@ for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip:
     const brief = briefFromComments(comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
-        if (!hasMark(comments, NO_BRIEF_MARK))
-            comment(i.repo, i.number, `${NO_BRIEF_MARK}
+        if (!hasMark(comments, NO_BRIEF_MARK)) {
+            try {
+                comment(i.repo, i.number, `${NO_BRIEF_MARK}
 This is labelled \`imp:ready\` but has no brief comment, so no imp will run on it. A brief is a comment starting with \`<!-- imp-brief -->\` (see imps/STANDARD.md). Not repeating this note.`);
+            } catch (e) {
+                log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
+            }
+        }
         continue;
     }
     // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
@@ -504,10 +515,15 @@ This is labelled \`imp:ready\` but has no brief comment, so no imp will run on i
     if (fails >= DEFAULTS.maxIssueFailures) {
         log({ event: 'issue-cap', repo: i.repo, number: i.number, failures: fails });
         if (!dry) {
-            if (!hasMark(comments.filter((c) => Date.parse(c.createdAt || '') >= briefAt), CAP_MARK))
-                comment(i.repo, i.number, `${CAP_MARK}
+            try {
+                // Relabel first so a failing comment cannot repeat every cycle.
+                relabel(i.repo, i.number, 'imp:needs-human', ['imp:ready']);
+                if (!hasMark(comments.filter((c) => Date.parse(c.createdAt || '') >= briefAt), CAP_MARK))
+                    comment(i.repo, i.number, `${CAP_MARK}
 ${fails} imp attempts on this issue failed or were killed without a PR, so the dispatcher stops here. Labelled \`imp:needs-human\`: re-brief it (a new brief comment resets the count) or fix it by hand.`);
-            relabel(i.repo, i.number, 'imp:needs-human', ['imp:ready']);
+            } catch (e) {
+                log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
+            }
         }
         continue;
     }

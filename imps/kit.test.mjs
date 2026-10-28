@@ -32,11 +32,11 @@ test('imp.mjs imports isGitDirty, which the ledger row provenance calls', () => 
 });
 
 test('no-edit fail-fast is on by default and configurable', async () => {
-    assert.equal(DEFAULTS.noEditTurns, 8);
+    assert.equal(DEFAULTS.noEditTurns, 12);
     const { resolveNoEditTurns } = await import('./runner.mjs');
-    assert.equal(resolveNoEditTurns({}, {}), 8);
+    assert.equal(resolveNoEditTurns({}, {}), 12);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, {}), 12);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, { IMPS_NO_EDIT_TURNS: '5' }), 5);
     assert.equal(resolveNoEditTurns({ noEditTurns: 0 }, {}), 0); // 0 turns it off
-    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 8); // junk falls back
+    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 12); // junk falls back
 });

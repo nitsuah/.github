@@ -76,7 +76,7 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 | Repo cooldown | 24h pause after two straight gate failures |
 | Issue attempt cap | 2 failed/killed runs on one issue (since its latest brief) → `imp:needs-human` and one comment; a new brief comment resets it |
 | One PR per issue | closed issue, open/merged `imp/<n>-*` PR, or a merged PR that closes it → skip; open duplicates of a merged fix are closed by the sweep |
-| No-edit fail-fast | `noEditTurns` (default 8, `config.json` / `IMPS_NO_EDIT_TURNS`) tool calls with no edit → run ends `no-edit-timeout` |
+| No-edit fail-fast | `noEditTurns` (default 12, `config.json` / `IMPS_NO_EDIT_TURNS`) tool calls with no edit → run ends `no-edit-timeout` |
 | `no-brief` | an `imp:ready` issue with no brief gets one explanatory comment (not repeated) |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |
 

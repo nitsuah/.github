@@ -418,7 +418,7 @@ test('prGuard: one PR per issue (merged imp/<n>-* branch, or a merged PR that cl
     const base = { issueState: 'OPEN', issue: 54, branch: 'imp/54-new' };
     assert.deepEqual(prGuard({ ...base, prs: [{ state: 'MERGED', headRefName: 'imp/54-old', mergedAt: '2026-01-01', number: 7 }] }),
         { ok: false, reason: 'issue #54 already fixed by merged PR #7' });
-    assert.deepEqual(prGuard({ ...base, prs: [], mergedPrs: [{ number: 8, body: 'Closes #54\n\nby hand' }] }),
+    assert.deepEqual(prGuard({ ...base, prs: [], mergedPrs: [{ number: 8, body: 'Fixes #54\n\n> Imp PR.' }] }),
         { ok: false, reason: 'issue #54 already fixed by merged PR #8' });
     assert.deepEqual(prGuard({ ...base, prs: [], mergedPrs: [{ number: 9, body: 'Fixes #540' }] }), { ok: true });
     assert.deepEqual(prGuard({ ...base, branch: null, prs: [] }), { ok: true }); // pre-claim: no branch yet
@@ -426,8 +426,11 @@ test('prGuard: one PR per issue (merged imp/<n>-* branch, or a merged PR that cl
 
 test('closesIssue matches Fixes/Closes/Resolves #n exactly', () => {
     assert.ok(closesIssue('Fixes #5', 5));
-    assert.ok(closesIssue('resolved nitsuah/x#5', 5));
-    assert.ok(closesIssue('closes: #5', 5));
+    assert.ok(closesIssue('Fixes #5\r\n\r\nrest', 5));
+    // model-written prose must not count
+    assert.ok(!closesIssue('### Imp summary\nThis does not resolve #5 and never fixes #5.', 5));
+    assert.ok(!closesIssue('Closes #5', 5));
+    assert.ok(!closesIssue('see Fixes #5 above', 5));
     assert.ok(!closesIssue('Fixes #55', 5));
     assert.ok(!closesIssue('see #5', 5));
     assert.ok(!closesIssue(undefined, 5));
@@ -439,6 +442,7 @@ test('duplicateImpPrs finds open imp PRs whose issue a merged imp PR fixed', () 
     const d = duplicateImpPrs(open, merged);
     assert.deepEqual(d.map((x) => [x.pr.url, x.mergedPr.url, x.key]), [['u1', 'm1', 'a#5']]);
     assert.deepEqual(duplicateImpPrs(merged, merged), []); // a PR is not its own duplicate
+    assert.deepEqual(duplicateImpPrs([{ repo: 'a', url: 'u9', body: 'Fixes #7' }], [{ repo: 'a', url: 'm9', body: 'Fixes #8\n\nThis does not resolve #7' }]), []);
 });
 
 test('gate denies CODEOWNERS and, for an unscoped brief, the kit itself', () => {

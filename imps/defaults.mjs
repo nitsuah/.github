@@ -31,7 +31,7 @@ export const DEFAULTS = {
     // Fail fast: stop a run that made this many tool calls without a single
     // Edit/Write (ends `no-edit-timeout`). Override in ~/.imps/config.json
     // (`noEditTurns`) or IMPS_NO_EDIT_TURNS; 0 turns the check off.
-    noEditTurns: 8,
+    noEditTurns: 12,
 
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
