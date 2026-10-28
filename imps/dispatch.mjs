@@ -342,6 +342,10 @@ async function work(issue) {
     try {
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
+        if (!id && /claude binary not found/.test(run.out)) {
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return log({ event: 'infra-fail', repo, number, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
+        }
         if (!id) {
             relabel(repo, number, 'imp:failed', ['imp:working']);
             comment(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
@@ -512,7 +516,8 @@ function* pickable() {
         const batch = pickIssues({
             candidates: pool,
             repos: Object.fromEntries(Object.entries(repos).map(([k, v]) => [k, { ...v, impPRs: (v.impPRs || 0) + taken(k) }])),
-            max: Number(o.max) - picked.length, wip: Number(o.wip) - picked.length, perRepo,
+            // wip is not reduced here: the impPRs bump above already counts what is picked.
+            max: Number(o.max) - picked.length, wip: Number(o.wip), perRepo,
             dailyCap: Number(o['daily-cap']) - picked.length, ...budget,
         });
         if (!batch.length) return;

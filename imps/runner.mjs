@@ -239,9 +239,16 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     child.stderr.on('data', () => {});
     const timer = setTimeout(() => child.kill('SIGTERM'), Number(minutes) * 60_000);
     // `close`, not `exit`: stdout can still hold the final result event at exit.
+    // spawn-failed means the process never started. An `error` after `spawn` (e.g. a failed
+    // kill) must not discard the collected events: `close` still follows and ends the run.
     let spawnError = false;
+    let started = false;
+    child.once('spawn', () => { started = true; });
     const code = await new Promise((done) => {
-        child.once('error', (e) => { spawnError = true; console.error(`spawn failed: ${e.message}`); done(null); });
+        child.once('error', (e) => {
+            console.error(`${started ? 'child error' : 'spawn failed'}: ${e.message}`);
+            if (!started) { spawnError = true; done(null); }
+        });
         child.once('close', done);
     });
     clearTimeout(timer);
