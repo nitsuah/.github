@@ -90,41 +90,32 @@ if (-not $SkipDoctor) {
         Write-Hint 'Install Docker Desktop and ensure it starts on login.'
         $failed = $true
     }
-    # 9router: ~/.claude/settings.json ANTHROPIC_BASE_URL
-    $settings = Join-Path $env:USERPROFILE '.claude\settings.json'
-    if (Test-Path -LiteralPath $settings) {
-        try {
-            $envMap = (Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json).env
-            $base = [string]$envMap.ANTHROPIC_BASE_URL
-            if ([string]::IsNullOrWhiteSpace($base)) { $base = 'http://localhost:20128/v1' }
-            $base = $base.TrimEnd('/')
-            # Any HTTP response < 500 means the router is up (401/404 still count).
-            $reachable = $false
-            try {
-                $probe = Invoke-WebRequest -Uri "$base/models" -Method GET -TimeoutSec 5 -UseBasicParsing
-                $reachable = ($probe.StatusCode -ge 100 -and $probe.StatusCode -lt 500)
-            } catch {
-                $resp = $_.Exception.Response
-                if ($resp -and $resp.StatusCode) {
-                    $code = [int]$resp.StatusCode
-                    $reachable = ($code -ge 100 -and $code -lt 500)
-                }
-            }
-            if ($reachable) {
-                Write-Ok "9router reachable at $base"
-            } else {
-                Write-Bad "9router not reachable at $base"
-                Write-Hint 'Start 9router (the local router that serves free models), then re-run.'
-                $failed = $true
-            }
-        } catch {
-            Write-Bad "could not read $settings"
-            Write-Hint 'Ensure ~/.claude/settings.json has env.ANTHROPIC_BASE_URL and a 9router key.'
-            $failed = $true
+    # 9router: user env vars (NINEROUTER_URL/KEY, ANTHROPIC_BASE_URL) first, ~/.claude/settings.json env as fallback
+    . (Join-Path $PSScriptRoot 'router-env.ps1')
+    $router = Resolve-Router
+    $base = $router.BaseUrl
+    # Any HTTP response < 500 means the router is up (401/404 still count).
+    $reachable = $false
+    try {
+        $probe = Invoke-WebRequest -Uri "$base/models" -Method GET -TimeoutSec 5 -UseBasicParsing
+        $reachable = ($probe.StatusCode -ge 100 -and $probe.StatusCode -lt 500)
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -and $resp.StatusCode) {
+            $code = [int]$resp.StatusCode
+            $reachable = ($code -ge 100 -and $code -lt 500)
         }
+    }
+    if ($reachable) {
+        Write-Ok "9router reachable at $base ($($router.Note))"
     } else {
-        Write-Bad "missing $settings"
-        Write-Hint 'Create it with env.ANTHROPIC_BASE_URL (e.g. http://localhost:20128/v1) and NINEROUTER_KEY.'
+        Write-Bad "9router not reachable at $base ($($router.Note))"
+        Write-Hint 'Start 9router (the local router that serves free models), then re-run.'
+        $failed = $true
+    }
+    if ($router.KeyFrom -eq 'MISSING') {
+        Write-Bad 'no 9router key found'
+        Write-Hint 'Set user env NINEROUTER_KEY (imps/README.md "Configure 9router"), or put it in ~/.claude/settings.json env.'
         $failed = $true
     }
     if ($failed) {

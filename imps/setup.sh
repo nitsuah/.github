@@ -50,14 +50,21 @@ else
   bad "docker missing"
 fi
 
-SETTINGS="${HOME}/.claude/settings.json"
-if [[ -f "$SETTINGS" ]]; then
-  BASE=$(node -e "try{const s=require(process.argv[1]).env||{};console.log((s.ANTHROPIC_BASE_URL||'http://localhost:20128/v1').replace(/\/$/,''))}catch{console.log('http://localhost:20128/v1')}" "$SETTINGS")
-  CODE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/models" 2>/dev/null || echo 000)
-  if [[ "$CODE_HTTP" =~ ^[0-9]+$ ]] && (( CODE_HTTP >= 100 && CODE_HTTP < 500 )); then ok "9router at $BASE"
-  else bad "9router not reachable at $BASE"; hint "Start 9router, then re-run."; fi
+# 9router: user env vars (NINEROUTER_URL/KEY, ANTHROPIC_BASE_URL) first, ~/.claude/settings.json env as fallback.
+# Resolution lives in lib.mjs (resolveRouter) so it matches the runner. The key is never printed.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROUTER=$(node --input-type=module -e "const { resolveRouter, describeRouter } = await import(process.argv[1]); const r = resolveRouter(); console.log(r.baseUrl); console.log(describeRouter(r)); console.log(r.keyFrom);" "file://$SCRIPT_DIR/lib.mjs" 2>/dev/null) || ROUTER=""
+if [[ -z "$ROUTER" ]]; then
+  BASE="http://localhost:20128/v1"; NOTE="url from default, key unknown"; KEYFROM="unknown"
 else
-  bad "missing $SETTINGS"
+  BASE=$(sed -n 1p <<<"$ROUTER"); NOTE=$(sed -n 2p <<<"$ROUTER"); KEYFROM=$(sed -n 3p <<<"$ROUTER")
+fi
+CODE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/models" 2>/dev/null || echo 000)
+if [[ "$CODE_HTTP" =~ ^[0-9]+$ ]] && (( CODE_HTTP >= 100 && CODE_HTTP < 500 )); then ok "9router at $BASE ($NOTE)"
+else bad "9router not reachable at $BASE ($NOTE)"; hint "Start 9router, then re-run."; fi
+if [[ "$KEYFROM" == "none" ]]; then
+  bad "no 9router key found"
+  hint "export NINEROUTER_KEY in ~/.profile (imps/README.md 'Configure 9router'), or set it in ~/.claude/settings.json env."
 fi
 
 if [[ "$FAILED" -ne 0 ]]; then

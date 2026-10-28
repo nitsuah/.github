@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveRouter, describeRouter } from './lib.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 const CODE = process.env.IMPS_CODE || join(homedir(), 'code');
@@ -195,24 +196,18 @@ if (ledgerBody === null) {
 }
 
 // ── without 9router the warlock skips every cycle ─────────────────────────
-const settings = (() => {
-    try {
-        return JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
-    } catch {
-        return {};
-    }
-})();
-const base = (settings.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1').replace(/\/$/, '');
+const router = resolveRouter();
+const base = router.baseUrl;
 try {
     const r = await fetch(`${base}/messages`, {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
-        headers: { 'content-type': 'application/json', 'x-api-key': settings.NINEROUTER_KEY || settings.ANTHROPIC_API_KEY || '', 'anthropic-version': '2023-06-01' },
+        headers: { 'content-type': 'application/json', 'x-api-key': router.key, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
     });
-    check('9router answers a MAX probe', r.ok, `${base} → ${r.status}`);
+    check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
 } catch (e) {
-    check('9router answers a MAX probe', false, `${base} → ${e.message}`);
+    check('9router answers a MAX probe', false, `${base} → ${e.message} (${describeRouter(router)})`);
 }
 
 // ── report ────────────────────────────────────────────────────────────────

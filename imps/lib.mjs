@@ -1,6 +1,50 @@
 // Pure helpers for imps: brief parsing, run metrics, the pre-push gate and
 // the RSI report. No I/O beyond defaults.mjs. Tested in lib.test.mjs (node --test).
 import { DEFAULTS } from './defaults.mjs';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+// ── 9router URL/key resolution ────────────────────────────────────────────
+// Secrets belong in OS user-level env vars; ~/.claude/settings.json `env` is
+// the backwards-compatible fallback. Never throws: a fresh machine may have no
+// file, bad JSON, or no `env` block.
+export function readSettingsEnv(path = join(homedir(), '.claude', 'settings.json')) {
+    try {
+        const e = JSON.parse(readFileSync(path, 'utf8')).env;
+        return e && typeof e === 'object' ? e : {};
+    } catch {
+        return {};
+    }
+}
+
+const nonEmpty = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : '');
+const trimSlash = (u) => { let t = u; while (t.endsWith('/')) t = t.slice(0, -1); return t; };
+const withV1 = (u) => { const t = trimSlash(u); return t.endsWith('/v1') ? t : `${t}/v1`; };
+
+// Returns { baseUrl, key, urlFrom, keyFrom } where *From is 'env' | 'settings' | 'default' | 'none'.
+// baseUrl: ANTHROPIC_BASE_URL (env, settings) > NINEROUTER_URL (env, settings, normalized to /v1) > localhost default.
+// key: NINEROUTER_KEY (env) > ANTHROPIC_API_KEY (env) > settings NINEROUTER_KEY > settings ANTHROPIC_API_KEY.
+export function resolveRouter({ env = process.env, settings } = {}) {
+    const s = settings === undefined ? readSettingsEnv() : (settings || {});
+    const pick = (src, ...names) => { for (const n of names) { const v = nonEmpty(src[n]); if (v) return v; } return ''; };
+    let baseUrl, urlFrom;
+    let v;
+    if ((v = pick(env, 'ANTHROPIC_BASE_URL'))) { baseUrl = trimSlash(v); urlFrom = 'env'; }
+    else if ((v = pick(s, 'ANTHROPIC_BASE_URL'))) { baseUrl = trimSlash(v); urlFrom = 'settings'; }
+    else if ((v = pick(env, 'NINEROUTER_URL'))) { baseUrl = withV1(v); urlFrom = 'env'; }
+    else if ((v = pick(s, 'NINEROUTER_URL'))) { baseUrl = withV1(v); urlFrom = 'settings'; }
+    else { baseUrl = 'http://localhost:20128/v1'; urlFrom = 'default'; }
+    let key = '', keyFrom = 'none';
+    if ((v = pick(env, 'NINEROUTER_KEY', 'ANTHROPIC_API_KEY'))) { key = v; keyFrom = 'env'; }
+    else if ((v = pick(s, 'NINEROUTER_KEY', 'ANTHROPIC_API_KEY'))) { key = v; keyFrom = 'settings'; }
+    return { baseUrl, key, urlFrom, keyFrom };
+}
+
+// Safe-to-print description of where the router config came from. Never includes the key.
+export function describeRouter(r) {
+    return `url from ${r.urlFrom}, key ${r.keyFrom === 'none' ? 'MISSING' : `set (${r.keyFrom})`}`;
+}
 
 // A brief is markdown with an optional `---` front matter of `key: value`
 // lines (repo, issue, test, maxLines, allow). Returns { meta, body }.

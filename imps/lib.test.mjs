@@ -520,3 +520,94 @@ test('review fixes: code under docs/, cross-repo refs, bug label precedence', ()
     // the bug label wins over a brief's own kind
     assert.equal(parseBrief(withKind('---\nkind: docs\nrepo: a\n---\nbody', ['bug'])).meta.kind, 'bug');
 });
+
+// ── 9router URL/key resolution ──
+import { resolveRouter, describeRouter, readSettingsEnv } from './lib.mjs';
+import { cleanEnv } from './runner.mjs';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
+
+test('resolveRouter: env beats settings for url and key', () => {
+    const r = resolveRouter({
+        env: { ANTHROPIC_BASE_URL: 'http://env:1/v1/', NINEROUTER_KEY: 'envkey1234' },
+        settings: { ANTHROPIC_BASE_URL: 'http://settings:2/v1', NINEROUTER_KEY: 'setkey' },
+    });
+    assert.equal(r.baseUrl, 'http://env:1/v1');
+    assert.equal(r.key, 'envkey1234');
+    assert.equal(r.urlFrom, 'env');
+    assert.equal(r.keyFrom, 'env');
+});
+
+test('resolveRouter: url order is env BASE_URL > settings BASE_URL > env NINEROUTER_URL > settings NINEROUTER_URL > default', () => {
+    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://e:3' }, settings: { ANTHROPIC_BASE_URL: 'http://s:4/v1' } }).baseUrl, 'http://s:4/v1');
+    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://e:3' }, settings: { NINEROUTER_URL: 'http://s:5' } }).baseUrl, 'http://e:3/v1');
+    const s = resolveRouter({ env: {}, settings: { NINEROUTER_URL: 'http://s:5' } });
+    assert.equal(s.baseUrl, 'http://s:5/v1');
+    assert.equal(s.urlFrom, 'settings');
+    const d = resolveRouter({ env: {}, settings: {} });
+    assert.equal(d.baseUrl, 'http://localhost:20128/v1');
+    assert.equal(d.urlFrom, 'default');
+});
+
+test('resolveRouter: NINEROUTER_URL is normalized to end in /v1 exactly once; ANTHROPIC_BASE_URL is only trimmed', () => {
+    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1' }, settings: {} }).baseUrl, 'http://h:1/v1');
+    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1/' }, settings: {} }).baseUrl, 'http://h:1/v1');
+    assert.equal(resolveRouter({ env: { NINEROUTER_URL: 'http://h:1/v1//' }, settings: {} }).baseUrl, 'http://h:1/v1');
+    assert.equal(resolveRouter({ env: { ANTHROPIC_BASE_URL: 'http://h:1/custom/' }, settings: {} }).baseUrl, 'http://h:1/custom');
+});
+
+test('resolveRouter: key order env NINEROUTER_KEY > env ANTHROPIC_API_KEY > settings NINEROUTER_KEY > settings ANTHROPIC_API_KEY', () => {
+    const k = (env, settings) => resolveRouter({ env, settings }).key;
+    assert.equal(k({ NINEROUTER_KEY: 'a', ANTHROPIC_API_KEY: 'b' }, { NINEROUTER_KEY: 'c' }), 'a');
+    assert.equal(k({ ANTHROPIC_API_KEY: 'b' }, { NINEROUTER_KEY: 'c' }), 'b');
+    assert.equal(k({}, { NINEROUTER_KEY: 'c', ANTHROPIC_API_KEY: 'd' }), 'c');
+    assert.equal(k({}, { ANTHROPIC_API_KEY: 'd' }), 'd');
+    const none = resolveRouter({ env: {}, settings: {} });
+    assert.equal(none.key, '');
+    assert.equal(none.keyFrom, 'none');
+    assert.equal(resolveRouter({ env: { NINEROUTER_KEY: '  ' }, settings: { NINEROUTER_KEY: 'x' } }).keyFrom, 'settings');
+});
+
+test('resolveRouter: settings fallback keeps existing machines working; missing/garbage settings never throw', () => {
+    const dir = mkdtempSync(pjoin(tmpdir(), 'router-'));
+    assert.deepEqual(readSettingsEnv(pjoin(dir, 'nope.json')), {});
+    writeFileSync(pjoin(dir, 'bad.json'), '{not json');
+    assert.deepEqual(readSettingsEnv(pjoin(dir, 'bad.json')), {});
+    writeFileSync(pjoin(dir, 'noenv.json'), '{"model":"x"}');
+    assert.deepEqual(readSettingsEnv(pjoin(dir, 'noenv.json')), {});
+    writeFileSync(pjoin(dir, 'ok.json'), JSON.stringify({ env: { NINEROUTER_KEY: 'k' } }));
+    assert.equal(readSettingsEnv(pjoin(dir, 'ok.json')).NINEROUTER_KEY, 'k');
+    assert.doesNotThrow(() => resolveRouter({ env: {}, settings: null }));
+    assert.equal(resolveRouter({ env: {}, settings: { ANTHROPIC_BASE_URL: 'http://s/v1', NINEROUTER_KEY: 'k' } }).keyFrom, 'settings');
+});
+
+test('describeRouter never contains the key', () => {
+    const key = 'sk-super-secret-1234';
+    const text = describeRouter(resolveRouter({ env: { NINEROUTER_KEY: key }, settings: {} }));
+    assert.ok(!text.includes(key) && !text.includes('1234'));
+    assert.match(text, /key set \(env\)/);
+    assert.match(describeRouter(resolveRouter({ env: {}, settings: {} })), /MISSING/);
+});
+
+test('cleanEnv passes only the allowlist plus the resolved router url/key', () => {
+    const src = {
+        PATH: '/bin', HOME: '/h', GITHUB_TOKEN: 'ghp_leak', GH_TOKEN: 'gh_leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth_leak',
+        ANTHROPIC_AUTH_TOKEN: 'auth_leak', NINEROUTER_URL: 'http://r:9', NINEROUTER_KEY: 'routerkey', SOME_OTHER: 'x',
+    };
+    const env = cleanEnv(src, { NINEROUTER_KEY: 'from-settings' });
+    assert.equal(env.ANTHROPIC_BASE_URL, 'http://r:9/v1');
+    assert.equal(env.ANTHROPIC_API_KEY, 'routerkey');
+    assert.equal(env.PATH, '/bin');
+    for (const k of ['GITHUB_TOKEN', 'GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'NINEROUTER_URL', 'NINEROUTER_KEY', 'SOME_OTHER']) assert.ok(!(k in env), `${k} leaked`);
+    assert.deepEqual(Object.keys(env).sort(), ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'HOME', 'PATH']);
+});
+
+test('cleanEnv falls back to settings and works with no key at all', () => {
+    const env = cleanEnv({ PATH: '/bin' }, { ANTHROPIC_BASE_URL: 'http://s/v1', ANTHROPIC_API_KEY: 'sk' });
+    assert.equal(env.ANTHROPIC_BASE_URL, 'http://s/v1');
+    assert.equal(env.ANTHROPIC_API_KEY, 'sk');
+    const bare = cleanEnv({ PATH: '/bin' }, {});
+    assert.equal(bare.ANTHROPIC_BASE_URL, 'http://localhost:20128/v1');
+    assert.ok(!('ANTHROPIC_API_KEY' in bare));
+});

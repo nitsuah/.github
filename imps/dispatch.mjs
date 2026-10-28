@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK } from './lib.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -91,13 +91,12 @@ process.on('exit', unlock);
 
 // ── 9router must be up ────────────────────────────────────────────────────
 async function routerUp() {
-    const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
-    const base = (s.ANTHROPIC_BASE_URL || 'http://localhost:20128/v1').replace(/\/$/, '');
+    const { baseUrl: base, key } = resolveRouter();
     try {
         const r = await fetch(`${base}/messages`, {
             method: 'POST',
             signal: AbortSignal.timeout(60_000),
-            headers: { 'content-type': 'application/json', 'x-api-key': s.NINEROUTER_KEY || s.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+            headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
             body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
         });
         return r.ok;
