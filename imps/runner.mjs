@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief } from './lib.mjs';
+import { summarizeRun, parseBrief, closesIssue } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -62,6 +62,11 @@ export function resolveMachine(config = {}, env = process.env) {
     return env.IMPS_MACHINE || config.machine || hostname();
 }
 export const machineName = () => resolveMachine({}, process.env);
+// How many edit-less tool calls a run may make: env, then ~/.imps/config.json, then defaults.
+export function resolveNoEditTurns(config = {}, env = process.env) {
+    const n = Number(env.IMPS_NO_EDIT_TURNS ?? config.noEditTurns ?? DEFAULTS.noEditTurns);
+    return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.noEditTurns;
+}
 // Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
 export function isGitDirty(path) {
     try {
@@ -103,6 +108,20 @@ export const sh = (bin, args, opts = {}) => {
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
 
+// Everything prGuard needs about one issue: its state, every imp/<n>-* PR, and
+// merged PRs whose body closes it. Throws when a lookup fails (fail closed).
+export function lookupIssueGuard(slug, issue) {
+    const view = sh('gh', ['issue', 'view', String(issue), '-R', slug, '--json', 'state']);
+    const list = sh('gh', ['pr', 'list', '-R', slug, '--state', 'all', '--search', `head:imp/${issue}-`, '--json', 'number,state,headRefName,mergedAt']);
+    const body = sh('gh', ['pr', 'list', '-R', slug, '--state', 'merged', '--search', `#${issue} in:body`, '--json', 'number,body']);
+    if (view.code !== 0 || list.code !== 0 || body.code !== 0) throw new Error(`cannot look up #${issue}: ${view.err || list.err || body.err}`);
+    return {
+        issueState: JSON.parse(view.out || '{}').state,
+        prs: JSON.parse(list.out || '[]'),
+        mergedPrs: JSON.parse(body.out || '[]').filter((p) => closesIssue(p.body, issue)),
+    };
+}
+
 export function cleanEnv() {
     const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).env || {};
     const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME',
@@ -124,7 +143,8 @@ const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'No
 // calls a tool; past the cap the process is stopped and the run ends
 // `killed-max-turns`.
 // noEditByTurn: stop a worker that has made this many tool calls without a single
-// Edit/Write (vhs#77 ran 41 tool calls exploring and never edited); ends `killed-no-edit`.
+// Edit/Write (vhs#77 ran 41 tool calls exploring and never edited); ends `no-edit-timeout`
+// and records the limit as metrics.noEditTurns.
 // Context trim: the default CLI session sends ~60 slash commands, skills and every
 // built-in tool each turn; workers only need `tools`. IMPS_NO_TRIM=1 turns the trim off.
 export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
@@ -190,9 +210,10 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     await new Promise((done) => out.end(done));
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
     if (capped) metrics.end = 'killed-max-turns';
-    else if (noEdit) metrics.end = 'killed-no-edit';
+    else if (noEdit) metrics.end = 'no-edit-timeout';
     else if (metrics.end === 'no-result') metrics.end = code == null ? 'killed-timeout' : `exit-${code}`;
     metrics.toolTurns = toolTurns;
+    if (noEdit) metrics.noEditTurns = noEditByTurn;
     if (!metrics.turns) metrics.turns = toolTurns;
     return metrics;
 }

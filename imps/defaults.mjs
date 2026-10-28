@@ -23,6 +23,16 @@ export const DEFAULTS = {
     // Repo cooldown after two straight gate failures (ms)
     cooldownMs: 12 * 3600_000,
 
+    // Per-issue attempt cap: this many failed/killed runs on one issue (since its
+    // latest brief) and the dispatcher stops, labels it imp:needs-human, and
+    // comments once. A new brief comment gives it a fresh allowance.
+    maxIssueFailures: 2,
+
+    // Fail fast: stop a run that made this many tool calls without a single
+    // Edit/Write (ends `no-edit-timeout`). Override in ~/.imps/config.json
+    // (`noEditTurns`) or IMPS_NO_EDIT_TURNS; 0 turns the check off.
+    noEditTurns: 8,
+
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
 

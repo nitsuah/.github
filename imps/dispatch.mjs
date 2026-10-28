@@ -14,8 +14,8 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired } from './lib.mjs';
-import { kitSha, machineName } from './runner.mjs';
+import { pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK } from './lib.mjs';
+import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,7 +41,8 @@ const dry = o['dry-run'];
 mkdirSync(join(HOME, 'briefs'), { recursive: true });
 const LOG = join(HOME, 'dispatch.jsonl');
 // Every event carries which machine and which kit commit produced it (#61).
-const PROVENANCE = { machine: machineName(), kitSha: kitSha() };
+const MACHINE = machineName();
+const PROVENANCE = { machine: MACHINE, kitSha: kitSha() };
 const log = (ev) => {
     const line = { at: new Date().toISOString(), ...PROVENANCE, ...ev };
     console.log(JSON.stringify(line));
@@ -125,6 +126,7 @@ const LABELS = {
     'imp:ready': ['0e8a16', 'Has an imp brief; the hourly dispatcher may take it'],
     'imp:working': ['fbca04', 'An imp is working on this now'],
     'imp:pr': ['6f42c1', 'An imp opened a PR for this'],
+    'imp:needs-human': ['d93f0b', 'An imp could not finish this; a human or the hypervisor should look'],
     'imp:failed': ['b60205', 'The imp did not pass the gate; needs a new brief or a human'],
 };
 const ensured = new Set();
@@ -287,6 +289,22 @@ const CLAIM_BEAT_MS = 10 * 60_000;
 async function work(issue) {
     const { repo, number } = issue;
     const slug = `${o.owner}/${repo}`;
+    // One PR per issue: look again right before claiming. The issue may have been
+    // fixed, or a PR opened, since the cycle picked it.
+    let guard;
+    try {
+        guard = prGuard({ branch: null, issue: number, ...lookupIssueGuard(slug, number) });
+    } catch (e) {
+        return log({ event: 'guard-error', repo, number, error: e.message });
+    }
+    if (!guard.ok) {
+        log({ event: 'skip-handled', repo, number, reason: guard.reason });
+        if (/already fixed/.test(guard.reason)) {
+            comment(repo, number, `Not running an imp: ${guard.reason}. Taking it off \`imp:ready\`; close the issue if it is done.`);
+            relabel(repo, number, 'imp:needs-human', ['imp:ready']);
+        }
+        return;
+    }
     const claim = { machine: hostname(), startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(), pr: null };
     let cid = null;
     if (!dry) {
@@ -389,8 +407,44 @@ if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelClear
 // feedback and red CI with a 9router fix round. fix.mjs pushes only to the
 // imp's own PR branch, stops after 2 rounds or on a conflict, and labels
 // imp:needs-human. A PR with nothing to act on costs only gh calls.
-const openImp = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels'])
-    .filter((p) => !p.labels.some((l) => l.name === 'imp:needs-human'));
+const openImpAll = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository'])
+    .map((p) => ({ ...p, repo: p.repository.name }));
+
+// One PR per issue: close open imp PRs whose issue a merged imp PR already fixed.
+try {
+    const mergedImp = ghJson(['search', 'prs', '--owner', o.owner, '--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository'])
+        .map((p) => ({ ...p, repo: p.repository.name }));
+    ledger = readLedger();
+    for (const d of duplicateImpPrs(openImpAll, mergedImp)) {
+        log({ event: 'duplicate-closed', pr: d.pr.url, mergedPr: d.mergedPr.url, issue: d.key });
+        if (dry) continue;
+        const slug = `${o.owner}/${d.pr.repo}`;
+        gh(['pr', 'close', String(d.pr.number), '-R', slug, '--comment', `<!-- imp-duplicate -->
+Closing: ${d.key} was already fixed by merged PR ${d.mergedPr.url}. One PR per issue.`]);
+        const row = ledger.find((r) => r.pr === d.pr.url);
+        if (row) updateRun(row.id, { outcome: 'closed-duplicate' });
+        d.pr.closed = true;
+    }
+} catch (e) {
+    log({ event: 'duplicate-sweep-error', error: e.message });
+}
+
+// Ledger hygiene: fill in `outcome` for runs whose PR has since merged or closed
+// (a human merge, a closed PR). At most 40 gh calls a cycle, oldest first.
+ledger = readLedger();
+for (const r of ledger.filter((x) => x.pr && (!x.outcome || x.outcome === 'open')).slice(0, 40)) {
+    try {
+        const v = ghJson(['pr', 'view', r.pr, '--json', 'state,mergedAt']);
+        const outcome = outcomeFromPr(v);
+        if (outcome === 'open' || dry) continue;
+        updateRun(r.id, { outcome, ...(v.mergedAt ? { mergedAt: v.mergedAt } : {}) });
+        log({ event: 'outcome', id: r.id, outcome });
+    } catch (e) {
+        log({ event: 'outcome-error', id: r.id, error: e.message });
+    }
+}
+
+const openImp = openImpAll.filter((p) => !p.closed && !p.labels.some((l) => l.name === 'imp:needs-human'));
 ledger = readLedger();
 for (const p of openImp) {
     const row = ledger.find((r) => r.pr === p.url);
@@ -434,13 +488,31 @@ const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 const budget = loopBudget(readFileSync(join(HOME, 'runs.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse));
 for (const i of pickIssues({ candidates: queued, repos, max: Number(o.max), wip: Number(o.wip), perRepo, dailyCap: Number(o['daily-cap']), ...budget })) {
-    const brief = briefFromComments(ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments);
+    const comments = ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'comments']).comments;
+    const brief = briefFromComments(comments);
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
+        if (!hasMark(comments, NO_BRIEF_MARK))
+            comment(i.repo, i.number, `${NO_BRIEF_MARK}
+This is labelled \`imp:ready\` but has no brief comment, so no imp will run on it. A brief is a comment starting with \`<!-- imp-brief -->\` (see imps/STANDARD.md). Not repeating this note.`);
+        continue;
+    }
+    // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
+    // brief comment (a human re-brief) resets the count.
+    const briefAt = briefCommentAt(comments);
+    const fails = issueFailures(readLedger(), i.repo, i.number, briefAt);
+    if (fails >= DEFAULTS.maxIssueFailures) {
+        log({ event: 'issue-cap', repo: i.repo, number: i.number, failures: fails });
+        if (!dry) {
+            if (!hasMark(comments.filter((c) => Date.parse(c.createdAt || '') >= briefAt), CAP_MARK))
+                comment(i.repo, i.number, `${CAP_MARK}
+${fails} imp attempts on this issue failed or were killed without a PR, so the dispatcher stops here. Labelled \`imp:needs-human\`: re-brief it (a new brief comment resets the count) or fix it by hand.`);
+            relabel(i.repo, i.number, 'imp:needs-human', ['imp:ready']);
+        }
         continue;
     }
     i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);
-    writeFileSync(i.briefPath, brief);
+    writeFileSync(i.briefPath, withKind(brief, i.labels));
     picked.push(i);
 }
 log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });

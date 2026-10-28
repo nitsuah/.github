@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -46,7 +46,7 @@ const say = (event, extra = {}) => console.log(JSON.stringify({ id, pr: r.pr, ev
 // ── 1. collect ────────────────────────────────────────────────────────────
 const pr = ghJson(['pr', 'view', String(number), '-R', slug, '--json', 'state,isDraft,mergeable,reviewDecision,headRefName,reviews']);
 if (pr.state !== 'OPEN') {
-    update(id, { outcome: pr.state.toLowerCase() });
+    update(id, (row) => ({ outcome: row.outcome === 'closed-duplicate' ? row.outcome : outcomeFromPr({ state: pr.state }) }));
     say('closed', { state: pr.state });
     process.exit(0);
 }
