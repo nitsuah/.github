@@ -5,7 +5,7 @@
 // needs (or gets) a general `docker run` permission. Exit code 0 only if both pass.
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { rows, loadBrief } from './runner.mjs';
+import { rows, loadBrief, gateShell } from './runner.mjs';
 
 const here = resolve(process.cwd()).replaceAll('\\', '/').toLowerCase();
 const run = rows()
@@ -20,7 +20,7 @@ let code = 0;
 for (const [name, cmd] of [['test', meta.test], ['lint', meta.lint]]) {
     if (!cmd) continue;
     console.log(`── ${name}: ${cmd}`);
-    const r = spawnSync(cmd, { cwd: run.worktree, shell: true, stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+    const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
     console.log(`── ${name} exit ${r.status}`);
     if (r.status !== 0) code = r.status ?? 1;
 }

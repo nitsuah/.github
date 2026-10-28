@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -145,7 +145,7 @@ async function run() {
 function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
-    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: true, stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
+    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
     // Formatting is mechanical, so the runner does it, not the model: run the
     // repo's formatter and commit any change as a separate runner commit.
     let formatted = false;

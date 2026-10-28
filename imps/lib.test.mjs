@@ -492,6 +492,14 @@ test('issueFailures counts ended runs without a PR since the latest brief', () =
     assert.equal(issueFailures([run('imp_6', '2026-10-23T00:00:00Z', { metrics: { end: 'spawn-failed' } })], 'a', 5), 0);
 });
 
+test('gateShell: Git Bash on Windows (not WSL bash), IMPS_SHELL override, default shell elsewhere', () => {
+    const gitBash = pjoin('C:/Program Files', 'Git', 'bin', 'bash.exe');
+    assert.equal(gateShell({ ProgramFiles: 'C:/Program Files' }, 'win32', (p) => p === gitBash), gitBash);
+    assert.equal(gateShell({ ProgramFiles: 'C:/Program Files' }, 'win32', () => false), true); // no Git Bash: platform default
+    assert.equal(gateShell({ IMPS_SHELL: 'D:/sh.exe' }, 'win32', () => false), 'D:/sh.exe');
+    assert.equal(gateShell({}, 'linux', () => false), true);
+});
+
 test('resolveClaudeBin: env override, npm global exe on Windows, PATH elsewhere, null when missing', () => {
     const exists = (set) => (p) => set.includes(p);
     assert.equal(resolveClaudeBin({ IMPS_CLAUDE_BIN: 'C:/x/claude.exe' }, 'win32', exists(['C:/x/claude.exe'])), 'C:/x/claude.exe');
@@ -534,7 +542,7 @@ test('review fixes: code under docs/, cross-repo refs, bug label precedence', ()
 
 // ── 9router URL/key resolution ──
 import { resolveRouter, describeRouter, readSettingsEnv, isAnthropicHost } from './lib.mjs';
-import { cleanEnv, resolveClaudeBin } from './runner.mjs';
+import { cleanEnv, resolveClaudeBin, gateShell } from './runner.mjs';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';

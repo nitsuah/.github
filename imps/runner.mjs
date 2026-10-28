@@ -165,6 +165,17 @@ export function resolveClaudeBin(env = process.env, platform = process.platform,
     if (platform !== 'win32' && !env.IMPS_CLAUDE_BIN) return 'claude';
     return claudeBinCandidates(env, platform).find((p) => exists(p)) || null;
 }
+// The shell for a brief's `test:` / `lint:` commands. Briefs are written POSIX-style
+// (`sh -c '...&&...'`); node's `shell: true` is cmd.exe on Windows, which does not group
+// single quotes, so the command split and the container's sh died with exit 2 before
+// the imp's code was ever tested. Use Git Bash (IMPS_SHELL overrides). The WSL
+// bash.exe in System32 is not it. `true` (the platform default) elsewhere.
+export function gateShell(env = process.env, platform = process.platform, exists = existsSync) {
+    if (env.IMPS_SHELL) return env.IMPS_SHELL;
+    if (platform !== 'win32') return true;
+    const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs')].filter(Boolean);
+    return roots.map((r) => join(r, 'Git', 'bin', 'bash.exe')).find((p) => exists(p)) || true;
+}
 function spawnFailed(t0) {
     const metrics = summarizeRun([], { startedAt: t0, endedAt: Date.now() });
     metrics.end = 'spawn-failed';

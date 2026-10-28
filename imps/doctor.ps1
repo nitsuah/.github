@@ -43,6 +43,12 @@ $claudeBin = @($env:IMPS_CLAUDE_BIN, (Join-Path $env:APPDATA 'npm\node_modules\@
 if ($claudeBin) { Ok "claude binary $claudeBin" }
 else { Bad 'claude binary not found where the runner looks (npm i -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code, or set IMPS_CLAUDE_BIN)' }
 
+# Briefs' test:/lint: commands are POSIX-style and run through Git Bash (cmd.exe does not
+# group single quotes and the gate fails "tests exit 2" before testing the imp's code).
+$gitBash = @($env:IMPS_SHELL, "$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe", "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe") |
+    Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+if ($gitBash) { Ok "gate shell $gitBash" } else { Bad 'Git Bash not found (install Git for Windows or set IMPS_SHELL); brief test commands will run under cmd.exe and fail' }
+
 . (Join-Path $PSScriptRoot 'router-env.ps1')
 $router = Resolve-Router
 $base = $router.BaseUrl
