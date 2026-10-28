@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE } from './lib.mjs';
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -310,4 +310,42 @@ test('staleImpLabels strips state labels but keeps imp:pr (#58)', () => {
     assert.deepEqual(staleImpLabels([]), []);
     assert.deepEqual(staleImpLabels(), []);
     assert.deepEqual(staleImpLabels(undefined), []);
+});
+
+test('lockIsStale checks pid-dead before before-boot, uses >= for expiry', () => {
+    const host = 'myhost';
+    const bootTimeMs = Date.parse('2026-10-23T12:00:00Z');
+    const now = bootTimeMs + 10 * 60_000; // 10 min after boot
+    const maxAgeMs = 5 * 60_000; // 5 min
+    const alive = (p) => p === 9999; // only 9999 is alive
+
+    // pid-dead: same host, pid not alive
+    assert.equal(lockIsStale({
+        text: JSON.stringify({ pid: 123, host, startedAt: '2026-10-23T12:05:00Z' }),
+        mtimeMs: 0, now, bootTimeMs, host, alive, maxAgeMs
+    }), 'pid-dead');
+
+    // before-boot: started before boot
+    assert.equal(lockIsStale({
+        text: JSON.stringify({ pid: 9999, host, startedAt: '2026-10-23T11:00:00Z' }),
+        mtimeMs: 0, now, bootTimeMs, host, alive, maxAgeMs
+    }), 'before-boot');
+
+    // expired: now - started >= maxAgeMs (exact boundary)
+    assert.equal(lockIsStale({
+        text: JSON.stringify({ pid: 9999, host, startedAt: '2026-10-23T12:00:00Z' }),
+        mtimeMs: 0, now: bootTimeMs + 5 * 60_000, bootTimeMs, host, alive, maxAgeMs
+    }), 'expired');
+
+    // legacy '1234' lock older than boot (mtime used, no startedAt, no host)
+    assert.equal(lockIsStale({
+        text: '1234',
+        mtimeMs: bootTimeMs - 1_000, now, bootTimeMs, host, alive, maxAgeMs
+    }), 'before-boot');
+
+    // live same-host lock returns null (age 4 min < maxAgeMs)
+    assert.equal(lockIsStale({
+        text: JSON.stringify({ pid: 9999, host, startedAt: '2026-10-23T12:06:00Z' }),
+        mtimeMs: 0, now, bootTimeMs, host, alive, maxAgeMs
+    }), null);
 });
