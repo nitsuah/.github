@@ -293,7 +293,7 @@ async function work(issue) {
     // fixed, or a PR opened, since the cycle picked it.
     let guard;
     try {
-        guard = prGuard({ branch: null, issue: number, ...lookupIssueGuard(slug, number) });
+        guard = prGuard({ branch: null, issue: number, slug, ...lookupIssueGuard(slug, number) });
     } catch (e) {
         return log({ event: 'guard-error', repo, number, error: e.message });
     }
@@ -414,12 +414,12 @@ if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelClear
 // imp's own PR branch, stops after 2 rounds or on a conflict, and labels
 // imp:needs-human. A PR with nothing to act on costs only gh calls.
 const openImpAll = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository'])
-    .map((p) => ({ ...p, repo: p.repository.name }));
+    .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
 
 // One PR per issue: close open imp PRs whose issue a merged imp PR already fixed.
 try {
     const mergedImp = ghJson(['search', 'prs', '--owner', o.owner, '--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository'])
-        .map((p) => ({ ...p, repo: p.repository.name }));
+        .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
     ledger = readLedger();
     for (const d of duplicateImpPrs(openImpAll, mergedImp)) {
         log({ event: 'duplicate-closed', pr: d.pr.url, mergedPr: d.mergedPr.url, issue: d.key });

@@ -470,7 +470,7 @@ test('withKind tags bug-labelled briefs and leaves the rest alone', () => {
     assert.equal(withKind('---\nrepo: a\n---\nbody', ['bug']), '---\nkind: bug\nrepo: a\n---\nbody');
     assert.equal(withKind('body', ['bug']), '---\nkind: bug\n---\nbody');
     assert.equal(withKind('---\nrepo: a\n---\nbody', ['enhancement']), '---\nrepo: a\n---\nbody');
-    assert.equal(withKind('---\nkind: docs\n---\nbody', ['bug']), '---\nkind: docs\n---\nbody');
+    assert.equal(withKind('---\nkind: docs\n---\nbody', ['bug']), '---\nkind: bug\n---\nbody'); // the bug label wins
     assert.equal(parseBrief(withKind('---\nrepo: a\n---\nbody', ['bug'])).meta.kind, 'bug');
 });
 
@@ -501,4 +501,22 @@ test('briefCommentAt, hasMark and outcomeFromPr', () => {
     assert.equal(outcomeFromPr({ state: 'CLOSED' }), 'abandoned');
     assert.equal(outcomeFromPr({ state: 'OPEN' }), 'open');
     assert.equal(outcomeFromPr({}), 'open');
+});
+
+test('review fixes: code under docs/, cross-repo refs, bug label precedence', () => {
+    const run = (numstat) => gate({ numstat, commits: [ok], testExit: 0, bugfix: true }).reasons;
+    const why = 'no code change (docs/screenshot-only diff) for a bug fix';
+    assert.ok(!run('3\t1\tdocs/build.js').includes(why));
+    assert.ok(!run('3\t1\tsrc/docs/renderer.js').includes(why));
+    assert.ok(run('3\t1\tdocs/guide.md\n1\t0\tdocs/data.json').includes(why));
+    // cross-repo refs never match this repo's issue
+    assert.ok(!closesIssue('Fixes other/repo#54', 54, 'nitsuah/x'));
+    assert.ok(closesIssue('Fixes nitsuah/x#54', 54, 'nitsuah/x'));
+    assert.ok(closesIssue('Fixes #54', 54, 'nitsuah/x'));
+    assert.deepEqual(duplicateImpPrs([{ repo: 'a', owner: 'o', url: 'u', body: 'Fixes #5' }], [{ repo: 'a', owner: 'o', url: 'm', body: 'Fixes other/a#5' }]), []);
+    assert.equal(duplicateImpPrs([{ repo: 'a', owner: 'o', url: 'u', body: 'Fixes #5' }], [{ repo: 'a', owner: 'o', url: 'm', body: 'Fixes o/a#5' }]).length, 1);
+    assert.equal(prGuard({ issueState: 'OPEN', issue: 54, slug: 'o/r', mergedPrs: [{ number: 3, body: 'Fixes o/r#54' }] }).ok, false);
+    assert.equal(prGuard({ issueState: 'OPEN', issue: 54, slug: 'o/r', mergedPrs: [{ number: 3, body: 'Fixes z/q#54' }] }).ok, true);
+    // the bug label wins over a brief's own kind
+    assert.equal(parseBrief(withKind('---\nkind: docs\nrepo: a\n---\nbody', ['bug'])).meta.kind, 'bug');
 });

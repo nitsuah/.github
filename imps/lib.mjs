@@ -104,7 +104,10 @@ const KIT = /^imps\//;
 
 // Not a code change: docs, task/changelog bookkeeping, screenshots and other media.
 // A bug-fix diff made only of these fixed nothing.
-const NON_CODE = /(\.(md|mdx|txt|rst|png|jpe?g|gif|webp|svg|ico|pdf)$|(^|\/)(docs?|screenshots?)\/|(^|\/)(TASKS|CHANGELOG|ROADMAP|README)(\.[a-z]+)?$)/i;
+// Extension decides first: a code file is code even under docs/ (docs/build.js).
+const CODE_EXT = /\.(m?[jt]sx?|cjs|py|go|rs|java|rb|php|sh|ps1|cmd|css|scss|html|vue|svelte|c|cc|cpp|h|hpp|cs|sql)$/i;
+const NON_CODE_RE = /(\.(md|mdx|txt|rst|png|jpe?g|gif|webp|svg|ico|pdf)$|(^|\/)(docs?|screenshots?)\/|(^|\/)(TASKS|CHANGELOG|ROADMAP|README)(\.[a-z]+)?$)/i;
+const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 
 // An imp that edited and verified but never committed is salvageable: the
 // runner commits for it rather than failing a run whose work is already done (#54).
@@ -148,7 +151,7 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
 // Refuse to open a PR for an issue that closed while the imp was working,
 // for a branch already merged, or when the issue already has an open imp PR (#56).
 // A failed lookup is not proof the issue is open, so it fails closed.
-export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [] } = {}) {
+export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [], slug = '' } = {}) {
     if (String(issueState).toUpperCase() !== 'OPEN') {
         return { ok: false, reason: `issue #${issue ?? '?'} is closed` };
     }
@@ -159,7 +162,7 @@ export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [] } 
     // One PR per issue: a merged imp/<n>-* branch, or any merged PR whose body
     // closes the issue, means the work is already on main.
     const done = prs.find((p) => p.mergedAt && String(p.headRefName || '').startsWith(`imp/${issue}-`))
-        || mergedPrs.find((p) => closesIssue(p.body, issue));
+        || mergedPrs.find((p) => closesIssue(p.body, issue, slug));
     if (done) {
         return { ok: false, reason: `issue #${issue ?? '?'} already fixed by merged PR #${done.number}` };
     }
@@ -173,21 +176,26 @@ export function prGuard({ issueState, branch, issue, prs = [], mergedPrs = [] } 
 // Only the line the kit itself writes (imp.mjs PR body: `Fixes #n`, alone on its
 // line). Prose in a model-written summary ("does not resolve #12") must not count.
 
-// Does a PR body carry the kit's own `Fixes #n` line for this issue?
-export function closesIssue(body = '', issue) {
-    return new RegExp(`^Fixes #${Number(issue)}[ \\t]*$`, 'm').test(String(body || '').replace(/\r/g, ''));
+const fixesRefs = (body) => [...String(body || '').replace(/\r/g, '').matchAll(/^Fixes (?:([\w.-]+\/[\w.-]+))?#(\d+)[ \t]*$/gm)].map((m) => ({ slug: m[1] || '', n: m[2] }));
+
+// Does a PR body carry the kit's own `Fixes #n` line for this issue? Same repo
+// only: bare `#n`, or `<slug>#n` when `slug` (owner/repo) is given.
+export function closesIssue(body = '', issue, slug = '') {
+    return fixesRefs(body).some((r) => r.n === String(Number(issue)) && (!r.slug || (slug && r.slug.toLowerCase() === slug.toLowerCase())));
 }
 
 // Open imp PRs whose issue a merged imp PR already closed: duplicates the
 // sweep can close. Both lists are [{ repo, number, body, url }] (gh search prs).
 // Returns [{ pr, mergedPr, key }].
 export function duplicateImpPrs(open = [], merged = []) {
-    const refs = (b) => [...String(b || '').replace(/\r/g, '').matchAll(/^Fixes #(\d+)[ \t]*$/gm)].map((m) => m[1]);
+    const refs = (x) => fixesRefs(x.body)
+        .filter((r) => !r.slug || (x.owner ? r.slug.toLowerCase() === `${x.owner}/${x.repo}`.toLowerCase() : r.slug.split('/')[1].toLowerCase() === String(x.repo).toLowerCase()))
+        .map((r) => r.n);
     const fixed = new Map();
-    for (const m of merged) for (const n of refs(m.body)) fixed.set(`${m.repo}#${n}`, m);
+    for (const m of merged) for (const n of refs(m)) fixed.set(`${m.repo}#${n}`, m);
     const dups = [];
     for (const p of open) {
-        for (const n of refs(p.body)) {
+        for (const n of refs(p)) {
             const m = fixed.get(`${p.repo}#${n}`);
             if (m && m.url !== p.url) dups.push({ pr: p, mergedPr: m, key: `${p.repo}#${n}` });
         }
@@ -228,7 +236,9 @@ export const hasMark = (comments = [], mark) => comments.some((c) => (c.body || 
 // refuse a docs-only diff. Adds `kind: bug` to the front matter; no-op otherwise.
 export function withKind(brief, labels = []) {
     const { meta } = parseBrief(brief);
-    if (!labels.includes('bug') || meta.kind) return brief;
+    if (!labels.includes('bug') || meta.kind === 'bug') return brief;
+    // The bug label wins over a brief's own kind: it must not opt out of the code-change gate.
+    if (meta.kind) return brief.replace(/^kind:.*$/m, 'kind: bug');
     if (/^---\r?\n/.test(brief)) return brief.replace(/^---\r?\n/, '---\nkind: bug\n');
     return `---\nkind: bug\n---\n${brief}`;
 }

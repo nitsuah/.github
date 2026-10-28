@@ -38,5 +38,8 @@ test('no-edit fail-fast is on by default and configurable', async () => {
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, {}), 12);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, { IMPS_NO_EDIT_TURNS: '5' }), 5);
     assert.equal(resolveNoEditTurns({ noEditTurns: 0 }, {}), 0); // 0 turns it off
+    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '' }), 12); // empty is unset, not 0
+    assert.equal(resolveNoEditTurns({ noEditTurns: 7 }, { IMPS_NO_EDIT_TURNS: '  ' }), 7);
+    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '0' }), 0); // explicit 0 still disables
     assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 12); // junk falls back
 });

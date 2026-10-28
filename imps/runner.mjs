@@ -64,7 +64,9 @@ export function resolveMachine(config = {}, env = process.env) {
 export const machineName = () => resolveMachine({}, process.env);
 // How many edit-less tool calls a run may make: env, then ~/.imps/config.json, then defaults.
 export function resolveNoEditTurns(config = {}, env = process.env) {
-    const n = Number(env.IMPS_NO_EDIT_TURNS ?? config.noEditTurns ?? DEFAULTS.noEditTurns);
+    // An empty string is "unset", not 0 (Number('') is 0); only an explicit 0 disables.
+    const set = (v) => (v == null || String(v).trim() === '' ? undefined : v);
+    const n = Number(set(env.IMPS_NO_EDIT_TURNS) ?? set(config.noEditTurns) ?? DEFAULTS.noEditTurns);
     return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.noEditTurns;
 }
 // Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
@@ -118,7 +120,7 @@ export function lookupIssueGuard(slug, issue) {
     return {
         issueState: JSON.parse(view.out || '{}').state,
         prs: JSON.parse(list.out || '[]'),
-        mergedPrs: JSON.parse(body.out || '[]').filter((p) => closesIssue(p.body, issue)),
+        mergedPrs: JSON.parse(body.out || '[]').filter((p) => closesIssue(p.body, issue, slug)),
     };
 }
 

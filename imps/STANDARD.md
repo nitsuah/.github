@@ -251,7 +251,7 @@ First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority r
 What the kit does about it:
 
 - **Context trim.** Workers start with `--disable-slash-commands --no-session-persistence --tools <only what they use>`. A trivial prompt went from 14.5k to 7.7k input tokens (-47%) with the same answer. `IMPS_NO_TRIM=1` turns it off. Compare `metrics.init` (tool / slash-command / skill counts) in the ledger across versions.
-- **Fail fast.** An imp with 15 tool calls and no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is now `defaults.noEditTurns`, 12, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
+- **Fail fast.** An imp that makes `noEditTurns` tool calls (default 12, configurable) with no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is `defaults.noEditTurns`, overridable in `config.json` or `IMPS_NO_EDIT_TURNS`, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
 - **One-shot reviews.** `review.mjs` defaults to `--mode chat`: one `/v1/chat/completions` call with the diff, brief and issue in the prompt (about 5k input) instead of a read-only agent session (about 500k). It falls back to the agent session if the answer is unusable. `review.mode` in the ledger tells them apart.
 - **Honest metrics.** Killed runs now record `turns` from tool calls and `unmetered: true` instead of zeros.
 

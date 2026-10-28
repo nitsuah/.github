@@ -258,7 +258,7 @@ function openPr(id) {
     // Refuse before pushing: a closed issue, a branch already merged, or an
     // issue that already has an open imp PR means the work is done or duplicated
     // (#56).
-    const guard = prGuard({ branch: r.branch, issue: r.issue, ...lookupIssueGuard(repoSlug, r.issue) });
+    const guard = prGuard({ branch: r.branch, issue: r.issue, slug: repoSlug, ...lookupIssueGuard(repoSlug, r.issue) });
     if (!guard.ok) throw new Error(guard.reason);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
