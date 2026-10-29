@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -753,6 +753,7 @@ test('isApiInfraError flags a run that died on a router/provider error before an
     assert.equal(isApiInfraError(run('API Error: upstream connection lost')), true);
     assert.equal(isApiInfraError(run('API Error: 503 Service Unavailable')), true);
     assert.equal(isApiInfraError(run('API Error: Overloaded, try again later')), true);
+    assert.equal(isApiInfraError(run('API Error: 429 Too Many Requests')), true);
     assert.equal(isApiInfraError(run('API Error: 400 prompt is too long')), false);
     assert.equal(isApiInfraError(run('API Error: upstream connection lost', { toolTurns: 3 })), false);
     assert.equal(isApiInfraError(run('API Error: upstream connection lost', { isError: false })), false);
@@ -763,4 +764,19 @@ test('isApiInfraError flags a run that died on a router/provider error before an
 test('issueFailures does not count an infra-flagged run as an attempt', () => {
     const row = (id, extra = {}) => ({ id, repo: 'r', issue: 1, startedAt: '2026-10-29T00:00:00Z', endedAt: '2026-10-29T00:05:00Z', ...extra });
     assert.equal(issueFailures([row('imp_1'), row('imp_2', { infra: 'api-error' })], 'r', 1), 1);
+});
+
+test('infraRuns counts only infra-flagged runs of this issue inside the window', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const row = (id, startedAt, extra = {}) => ({ id, repo: 'r', issue: 1, startedAt, ...extra });
+    const rows = [
+        row('imp_1', '2026-10-29T11:00:00Z', { infra: 'api-error' }),
+        row('imp_2', '2026-10-29T10:00:00Z', { infra: 'api-error' }),
+        row('imp_3', '2026-10-29T03:00:00Z', { infra: 'api-error' }),
+        row('imp_4', '2026-10-29T11:30:00Z'),
+        { ...row('imp_5', '2026-10-29T11:30:00Z', { infra: 'api-error' }), issue: 2 },
+    ];
+    assert.equal(infraRuns(rows, 'r', 1, now - 6 * 3600_000), 2);
+    assert.equal(infraRuns(rows, 'r', 1, 0), 3);
+    assert.ok(INFRA_RETRY_CAP >= 2);
 });

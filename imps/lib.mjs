@@ -853,5 +853,12 @@ export function outputSection(label, exit, tail, max = 900) {
 export function isApiInfraError(metrics) {
     if (!metrics || !metrics.isError || metrics.toolTurns > 0) return false;
     const text = String(metrics.finalText || '');
-    return /^API Error:/i.test(text) && /upstream|connection|overloaded|\b5\d\d\b|time.?d? ?out|rate.?limit|unavailable|ECONN|hang up|try again/i.test(text);
+    return /^API Error:/i.test(text) && /upstream|connection|overloaded|\b(?:429|5\d\d)\b|time.?d? ?out|rate.?limit|unavailable|ECONN|hang up|try again/i.test(text);
+}
+
+// How many infra-flagged runs this issue had since `sinceMs`: caps the free retries so a router that keeps
+// failing cannot re-queue one issue every cycle and spend the shared daily budget.
+export const INFRA_RETRY_CAP = 3;
+export function infraRuns(rows = [], repo, issue, sinceMs = 0) {
+    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && r.infra && Date.parse(r.startedAt) >= sinceMs).length;
 }
