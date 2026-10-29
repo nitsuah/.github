@@ -871,3 +871,11 @@ export function isSizeOnlyFailure(gate) {
     const reasons = gate?.reasons;
     return !!gate && gate.pass === false && Array.isArray(reasons) && reasons.length > 0 && reasons.every((x) => /^diff \d+ lines > \d+/.test(String(x)));
 }
+
+// A brief that has a `lint:` but no `format:` still gets the runner's free auto-format step: the same eslint
+// command with --fix. Anything that is not a plain `eslint` invocation, or already fixes, gets none.
+export function deriveFormat(lint) {
+    if (!lint || /--fix\b/.test(lint)) return null;
+    const next = lint.replace(/(\bnpx\s+|\s)eslint(\s)/, '$1eslint --fix$2');
+    return next === lint ? null : next;
+}

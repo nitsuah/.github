@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, isSizeOnlyFailure, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -807,4 +807,15 @@ test('loopBudget cooldown ignores size-only gate failures but still counts real 
     assert.equal(loopBudget([run('imp_1', 3, size), run('imp_2', 2, size)], now).cooldown.r, undefined, 'two size-only misses: no cooldown');
     assert.ok(loopBudget([run('imp_1', 3, ['lint exit 2']), run('imp_2', 2, ['tests exit 1'])], now).cooldown.r, 'two real failures: cooldown');
     assert.equal(loopBudget([run('imp_1', 3, ['lint exit 2']), run('imp_2', 2, size)], now).cooldown.r, undefined, 'one real + one size-only: not two straight real failures');
+});
+
+test('deriveFormat turns a plain eslint lint command into its --fix twin and leaves anything else alone', () => {
+    const lint = 'docker run --rm -v {wt}://app -w //app node:22 sh -c "npm ci >/dev/null 2>&1 && npx eslint --config config/eslint.config.mjs app/lib/a.js"';
+    const fmt = deriveFormat(lint);
+    assert.ok(fmt.includes('npx eslint --fix --config config/eslint.config.mjs app/lib/a.js'));
+    assert.equal(fmt.replace(' --fix', ''), lint, 'the only difference is --fix');
+    assert.equal(deriveFormat('npx eslint --fix src'), null, 'already fixes');
+    assert.equal(deriveFormat('npm run lint'), null, 'not a plain eslint call');
+    assert.equal(deriveFormat(''), null);
+    assert.equal(deriveFormat(undefined), null);
 });
