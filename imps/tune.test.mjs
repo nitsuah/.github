@@ -1,7 +1,11 @@
 // node --test imps/tune.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MIN_SAMPLES, percentile, sizeOnlyShare, suggestMaxLines, suggestions } from './tune.mjs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { MIN_SAMPLES, percentile, readLedgerRows, sizeOnlyShare, suggestMaxLines, suggestions } from './tune.mjs';
 
 test('percentile picks from the sorted values and ignores non-numbers', () => {
     assert.equal(percentile([5, 1, 3, 2, 4], 0.5), 3);
@@ -32,4 +36,24 @@ test('suggestions reports the maxLines evidence from passing runs only', () => {
     const [maxLines] = suggestions(rows, { now: Date.parse('2026-10-29T12:00:00Z') });
     assert.equal(maxLines.suggested, 140);
     assert.match(maxLines.evidence, /p90 138, max 138 lines over 10 passing runs/);
+});
+
+test('readLedgerRows reads the ledger without creating anything and skips a half-written last line', () => {
+    const home = mkdtempSync(join(tmpdir(), 'imps-tune-'));
+    try {
+        assert.deepEqual(readLedgerRows(join(home, 'nope')), [], 'a missing home is an empty ledger');
+        assert.equal(existsSync(join(home, 'nope')), false, 'reading must not create the directory');
+        writeFileSync(join(home, 'runs.jsonl'), ['{"id":"imp_1"}', '{"id":"imp_2"}', '{"id":"imp_3","ga'].join('\n'));
+        assert.deepEqual(readLedgerRows(home).map((r) => r.id), ['imp_1', 'imp_2']);
+        assert.deepEqual(readdirSync(home), ['runs.jsonl'], 'nothing else was written');
+    } finally {
+        rmSync(home, { recursive: true, force: true });
+    }
+});
+
+test('importing the helpers without a script path (node -e) does not throw', () => {
+    const url = new URL('./tune.mjs', import.meta.url).href;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { suggestMaxLines } from ${JSON.stringify(url)}; console.log(suggestMaxLines(Array(12).fill(40)))`], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), '60');
 });

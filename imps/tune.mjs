@@ -3,11 +3,28 @@
 //   node tune.mjs [--since 7d|24h|all] [--json]
 // Prints each threshold with its current value, the value the data supports, and the evidence. It never
 // writes anything: defaults.mjs is a guardrail file that only a reviewed PR may change.
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from './defaults.mjs';
 import { isSizeOnlyFailure } from './lib.mjs';
-import { rows } from './runner.mjs';
+
+// Not runner.mjs's rows(): importing runner.mjs runs its start-up code, which creates directories under IMPS_HOME.
+// A read-only report must not write anything, and must still work when that directory cannot be created.
+export function readLedgerRows(home = process.env.IMPS_HOME || join(homedir(), '.imps')) {
+    const file = join(home, 'runs.jsonl');
+    if (!existsSync(file)) return [];
+    const out = [];
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        try {
+            out.push(JSON.parse(line));
+        } catch { /* a half-written last line */ }
+    }
+    return out;
+}
 
 export function percentile(values, p) {
     const a = values.filter(Number.isFinite).sort((x, y) => x - y);
@@ -55,11 +72,11 @@ export function suggestions(all = [], { now = Date.now(), sinceMs = 0 } = {}) {
     return out;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const { values: o } = parseArgs({ options: { since: { type: 'string', default: 'all' }, json: { type: 'boolean', default: false } } });
     const sinceMs = { all: 0, '24h': 864e5, '7d': 7 * 864e5 }[o.since];
     if (sinceMs === undefined) throw new Error('--since must be 24h, 7d or all');
-    const s = suggestions(rows(), { sinceMs });
+    const s = suggestions(readLedgerRows(), { sinceMs });
     if (o.json) console.log(JSON.stringify(s, null, 2));
     else {
         for (const x of s) {
