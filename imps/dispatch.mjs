@@ -554,7 +554,9 @@ for (const p of openImp) {
 // opens a PR, so anything not ready then sat open and ate the open-PR cap. Kill switch: IMPS_DEMONGUARD=0.
 if (process.env.IMPS_DEMONGUARD !== '0' && !dry) {
     try {
-        await node(['demonguard'], 'demonguard.mjs');
+        // node() resolves { code, out } and never rejects, so a crash only shows in code.
+        const dg = await node(['demonguard'], 'demonguard.mjs');
+        if (dg.code) log({ event: 'demonguard-error', code: dg.code, out: String(dg.out || '').slice(-300) });
     } catch (e) {
         log({ event: 'demonguard-error', error: String(e.message).slice(0, 200) });
     }

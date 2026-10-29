@@ -44,11 +44,12 @@ export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeSta
     if (age < minAgeMs) return { action: 'wait', reason: 'young; give review and CI time' };
     if (mergeState === 'DIRTY') return old ? { action: 'needs-human', reason: 'merge conflicts for over a day' } : { action: 'wait-fix', reason: 'merge conflicts' };
     if (botChangesRequested && openThreads === 0) return { action: 'dismiss-stale-review', reason: 'a bot review still requests changes but none of its threads is open' };
-    if (!verdict) return { action: 'rereview', reason: 'no imp review is recorded' };
+    if (!verdict) return old ? { action: 'needs-human', reason: 'no imp review could be recorded for over a day' } : { action: 'rereview', reason: 'no imp review is recorded' };
     if (verdict !== 'approve') return old ? { action: 'needs-human', reason: `review ${verdict} for over a day` } : { action: 'wait-fix', reason: `review was ${verdict}; the fix-sweep handles it` };
     const ev = evaluateChecks(checks);
     if (!ev.green) return old ? { action: 'needs-human', reason: `checks not green for over a day (${ev.reason})` } : { action: 'wait', reason: `checks: ${ev.reason}` };
-    if (botChangesRequested) return { action: 'wait', reason: 'a bot still requests changes and has open threads' };
+    if (openThreads > 0) return { action: 'wait', reason: `${openThreads} review thread(s) still open` };
+    if (botChangesRequested) return { action: 'wait', reason: 'a bot still requests changes' };
     if (!trust.ok) return { action: 'owner', reason: trust.reason };
     return { action: 'merge', reason: trust.reason };
 }
@@ -58,19 +59,27 @@ const ghJson = (args) => { const r = gh(args); try { return JSON.parse(r.out || 
 
 function openThreadCount(slug, number) {
     const [owner, name] = slug.split('/');
-    const q = `query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${number}){reviewThreads(first:100){nodes{isResolved}}}}}`;
+    const q = `query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${number}){reviewThreads(first:100){totalCount nodes{isResolved}}}}}`;
     const r = ghJson(['api', 'graphql', '-f', `query=${q}`]);
-    const nodes = r?.data?.repository?.pullRequest?.reviewThreads?.nodes;
-    return Array.isArray(nodes) ? nodes.filter((n) => !n.isResolved).length : 0;
+    const t = r?.data?.repository?.pullRequest?.reviewThreads;
+    // null = unknown (GitHub failed, or more threads than one page): the caller skips the PR for this tick, never "0 open".
+    if (!t || !Array.isArray(t.nodes) || t.totalCount > t.nodes.length) return null;
+    return t.nodes.filter((n) => !n.isResolved).length;
 }
 
-function botReviews(reviews = []) {
-    const latest = new Map();
+/**
+ * Does a bot's review still block the PR? GitHub keeps a CHANGES_REQUESTED review in force until the same reviewer
+ * approves or it is dismissed; a later plain COMMENTED review does not clear it, so look at each bot's latest
+ * review that is not just a comment.
+ */
+export function botChangesRequestedIn(reviews = []) {
+    const effective = new Map();
     for (const r of reviews) {
         const login = r.author?.login || '';
-        if (/bot\]?$|coderabbit/i.test(login)) latest.set(login, r);
+        if (!/bot\]?$|coderabbit/i.test(login)) continue;
+        if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state)) effective.set(login, r.state);
     }
-    return [...latest.values()];
+    return [...effective.values()].includes('CHANGES_REQUESTED');
 }
 
 async function main() {
@@ -87,12 +96,14 @@ async function main() {
         const m = r.pr.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (!m) continue;
         const [, slug, num] = m;
-        const pr = ghJson(['pr', 'view', r.pr, '--json', 'state,mergeStateStatus,headRefOid,createdAt,reviews']);
+        const pr = ghJson(['pr', 'view', r.pr, '--json', 'state,mergeStateStatus,headRefOid,createdAt,reviews,labels']);
         if (!pr) continue; // GitHub unreachable this tick: try again next one
+        if ((pr.labels || []).some((l) => l.name === 'imp:needs-human')) continue; // a human owns it now (the fix-sweep skips these too)
         const checks = ghJson(['pr', 'checks', r.pr, '--json', 'name,state']) || [];
-        const bots = botReviews(pr.reviews);
-        const botChangesRequested = bots.some((b) => b.state === 'CHANGES_REQUESTED');
-        const openThreads = botChangesRequested ? openThreadCount(slug, num) : 0;
+        const botChangesRequested = botChangesRequestedIn(pr.reviews);
+        // Every PR that could be merged must have its open threads counted; unknown means skip this tick.
+        const openThreads = openThreadCount(slug, num);
+        if (openThreads === null) continue;
         const verdict = r.review?.verdict;
         const ledgerCount = cleanMergesForRepo(ledger, r.repo);
         let githubCount = 0, githubSeedError = null;
