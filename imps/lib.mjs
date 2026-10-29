@@ -805,3 +805,11 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
     }
     return kits;
 }
+
+// fix-sweep runs on every tick (5-minute label-watch included) and a PR with nothing to fix answers
+// `clean` each time, which buried real events. Log `clean` once, then only when the result changes.
+export function sweepIsRepeat(events, pr, result) {
+    if (result !== 'clean') return false;
+    const last = [...events].reverse().find((e) => e && e.event === 'fix-sweep' && e.pr === pr);
+    return !!last && last.result === 'clean';
+}
