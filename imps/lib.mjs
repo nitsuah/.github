@@ -806,6 +806,11 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
     return kits;
 }
 
+// The machine could not reach GitHub or the router (not a verdict on the issue or the imp).
+export function isTransientNetworkError(text = '') {
+    return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|TLS handshake timeout|Connection timed out|Operation timed out|Network is unreachable|ssh: connect to host \S+ port \d+: (Connection (refused|timed out)|Network is unreachable)/i.test(String(text));
+}
+
 // Test output can echo credentials (a failed assertion that prints a request, a .env dump). Blank the common
 // shapes before anything is stored or posted; this is a safety net, not a guarantee.
 export function redactSecrets(text = '') {

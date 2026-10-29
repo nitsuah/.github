@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -142,6 +142,15 @@ function relabel(repo, number, add, remove = []) {
     gh(['issue', 'edit', String(number), '-R', slug, '--add-label', add, ...remove.flatMap((l) => ['--remove-label', l])]);
 }
 const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
+// Outcome comments are advisory: a GitHub blip while posting one must not throw out of work() after the
+// label already changed (fire#335 went imp:failed with no gate-fail event).
+const note = (repo, number, body) => {
+    try {
+        comment(repo, number, body);
+    } catch (e) {
+        log({ event: 'comment-error', repo, number, error: String(e.message).slice(0, 200) });
+    }
+};
 
 // ── claim heartbeat ───────────────────────────────────────────────────────
 // A run can take 25 minutes plus gate, PR and review, and while it runs the
@@ -346,9 +355,17 @@ async function work(issue) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return log({ event: 'infra-fail', repo, number, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
         }
+        if (!id && isTransientNetworkError(run.out)) {
+            // GitHub or the network was unreachable before the imp started: nothing was tried on the issue.
+            // Record first: if the network is still down the relabel below throws, and the issue (left on
+            // imp:working) is released by the stale-claim sweep, with this event explaining why.
+            log({ event: 'infra-fail', repo, number, reason: 'network', out: run.out.slice(-300) });
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return;
+        }
         if (!id) {
             relabel(repo, number, 'imp:failed', ['imp:working']);
-            comment(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
+            note(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
             return log({ event: 'run-error', repo, number, out: run.out.slice(-500) });
         }
         if (ledgerRow(id)?.metrics?.end === 'spawn-failed') {
@@ -367,16 +384,16 @@ async function work(issue) {
             if (url) {
                 beat(url);
                 relabel(repo, number, 'imp:pr', ['imp:working']);
-                comment(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
+                note(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
                 // The review + merge decision live inside `imp.mjs pr`.
                 return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
             }
             relabel(repo, number, 'imp:failed', ['imp:working']);
-            comment(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
+            note(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
             return log({ event: 'pr-error', repo, number, id, out: pr.out.slice(-500) });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
+        note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
         clearInterval(hb);

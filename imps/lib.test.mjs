@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -684,6 +684,18 @@ test('kitTable groups runs by kit sha and shows which gate failures appeared or 
     assert.deepEqual(t[0].top, ['no commits x2', 'diff N lines > N x1']);
     assert.deepEqual(t[1].newReasons, ['lint exit N']);
     assert.deepEqual(t[1].gone.sort(), ['diff N lines > N', 'no commits']);
+});
+
+test('isTransientNetworkError separates network blips from real run failures', () => {
+    assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443 after 22131 ms"), true);
+    assert.equal(isTransientNetworkError('Post "https://api.github.com/graphql": dial tcp 140.82.113.5:443: connectex: A connection attempt failed'), true);
+    assert.equal(isTransientNetworkError('getaddrinfo EAI_AGAIN api.github.com'), true);
+    assert.equal(isTransientNetworkError('ssh: connect to host github.com port 22: Connection refused'), true);
+    assert.equal(isTransientNetworkError('ssh: connect to host github.com port 22: Connection timed out'), true);
+    assert.equal(isTransientNetworkError('git@github.com: Permission denied (publickey).'), false);
+    assert.equal(isTransientNetworkError('Error: brief front matter needs repo and issue'), false);
+    assert.equal(isTransientNetworkError(''), false);
+    assert.equal(isTransientNetworkError(undefined), false);
 });
 
 test('tailOutput keeps the end of the output, strips ANSI and cuts at a line boundary', () => {
