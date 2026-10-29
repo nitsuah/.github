@@ -357,8 +357,11 @@ async function work(issue) {
         }
         if (!id && isTransientNetworkError(run.out)) {
             // GitHub or the network was unreachable before the imp started: nothing was tried on the issue.
+            // Record first: if the network is still down the relabel below throws, and the issue (left on
+            // imp:working) is released by the stale-claim sweep, with this event explaining why.
+            log({ event: 'infra-fail', repo, number, reason: 'network', out: run.out.slice(-300) });
             relabel(repo, number, 'imp:ready', ['imp:working']);
-            return log({ event: 'infra-fail', repo, number, reason: 'network', out: run.out.slice(-300) });
+            return;
         }
         if (!id) {
             relabel(repo, number, 'imp:failed', ['imp:working']);

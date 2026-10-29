@@ -690,6 +690,9 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443 after 22131 ms"), true);
     assert.equal(isTransientNetworkError('Post "https://api.github.com/graphql": dial tcp 140.82.113.5:443: connectex: A connection attempt failed'), true);
     assert.equal(isTransientNetworkError('getaddrinfo EAI_AGAIN api.github.com'), true);
+    assert.equal(isTransientNetworkError('ssh: connect to host github.com port 22: Connection refused'), true);
+    assert.equal(isTransientNetworkError('ssh: connect to host github.com port 22: Connection timed out'), true);
+    assert.equal(isTransientNetworkError('git@github.com: Permission denied (publickey).'), false);
     assert.equal(isTransientNetworkError('Error: brief front matter needs repo and issue'), false);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
