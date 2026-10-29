@@ -13,6 +13,7 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 const KB = 1024;
+const STALL_MS = 2 * 60 * 1000;
 const STALE_RUN_MS = 6 * 3600 * 1000;
 const SHOWN = new Set(['pr', 'gate-fail', 'run-error', 'infra-fail', 'pr-error', 'fix-sweep', 'issue-cap', 'no-brief', 'error']);
 
@@ -63,6 +64,7 @@ const alive = (pid) => {
 // What the imp is doing right now: its last tool_use, reduced to a safe label.
 export function lastTool(transcript) {
     const evs = tailJson(transcript, 32 * KB);
+    const ts = evs.reduce((m, e) => (Number.isFinite(e?._ts) && e._ts > m ? e._ts : m), 0);
     for (let i = evs.length - 1; i >= 0; i--) {
         const blocks = evs[i]?.message?.content;
         if (!Array.isArray(blocks)) continue;
@@ -74,10 +76,26 @@ export function lastTool(transcript) {
             if (b.name === 'Bash') arg = String(inp.command || '').trim().split(/\s+/)[0];
             else if (inp.file_path || inp.path) arg = basename(String(inp.file_path || inp.path).replace(/\\/g, '/'));
             else if (inp.pattern) arg = String(inp.pattern);
-            return clean(`${b.name} ${clean(arg, 40)}`, 52);
+            return { label: clean(`${b.name} ${clean(arg, 40)}`, 52), ts };
         }
     }
-    return '';
+    return { label: '', ts };
+}
+
+// Throughput over the last 24 h (as far back as the tail reaches): outcomes and the commonest gate reason.
+export function dayStats(events, now) {
+    const s = { pr: 0, fail: 0, reasons: {} };
+    for (const e of events) {
+        const t = Date.parse(e.at);
+        if (!Number.isFinite(t) || now - t > 24 * 3600 * 1000) continue;
+        if (e.event === 'pr') s.pr++;
+        else if (e.event === 'gate-fail' || e.event === 'run-error' || e.event === 'infra-fail') {
+            s.fail++;
+            for (const r of Array.isArray(e.reasons) && e.reasons.length ? e.reasons : [e.event]) s.reasons[clean(r, 30)] = (s.reasons[clean(r, 30)] || 0) + 1;
+        }
+    }
+    s.top = Object.entries(s.reasons).sort((a, b) => b[1] - a[1])[0] || null;
+    return s;
 }
 
 export function collect(home, now = Date.now()) {
@@ -87,8 +105,9 @@ export function collect(home, now = Date.now()) {
         const startedAt = Date.parse(lock.startedAt);
         if (Number.isFinite(startedAt)) d.lock = { startedAt, pid: lock.pid };
     }
-    const events = tailJson(join(home, 'dispatch.jsonl'), 64 * KB);
+    const events = tailJson(join(home, 'dispatch.jsonl'), 128 * KB);
     for (let i = events.length - 1; i >= 0 && !d.cycle; i--) if (events[i].event === 'cycle') d.cycle = events[i];
+    d.day = dayStats(events, now);
     d.events = events.filter((e) => SHOWN.has(e.event)).slice(-12).reverse();
     const quota = readJson(join(home, 'model_quota.json')) || {};
     d.quota = Object.entries(quota).filter(([, v]) => v && v.used > 0).map(([m, v]) => [clean(m, 14), Number(v.used)]);
@@ -101,7 +120,7 @@ export function collect(home, now = Date.now()) {
         d.running.push({
             repo: r.repo, issue: r.issue, t0,
             turns: r.metrics?.turns, toolErrors: r.metrics?.toolErrors,
-            tool: lastTool(r.transcript || join(home, 'runs', `${r.id}.jsonl`)),
+            ...(({ label, ts }) => ({ tool: label, lastActive: ts }))(lastTool(r.transcript || join(home, 'runs', `${r.id}.jsonl`))),
         });
     }
     d.running.sort((a, b) => a.t0 - b.t0);
@@ -140,15 +159,22 @@ export function render(d, { color = true, full = false } = {}) {
     head.push(d.lock ? c.green(`● imps running ${dur(d.now - d.lock.startedAt)}`) : c.dim('○ imps idle'));
     if (d.cycle) {
         const picked = Array.isArray(d.cycle.picked) ? d.cycle.picked.length : 0;
-        head.push(`queue ${clean(d.cycle.queued ?? '?', 5)}`, `picked ${picked}`);
+        head.push(`queue ${clean(d.cycle.queued ?? '?', 5)}${Number(d.cycle.queued) > picked ? ` (${d.cycle.queued - picked} waiting)` : ''}`, `picked ${picked}`);
+        const cool = Object.keys(d.cycle.cooldown || {}).map((k) => clean(k, 14));
+        if (Number.isFinite(d.cycle.runsLast24h)) head.push(`runs ${d.cycle.runsLast24h}/24h`);
+        if (cool.length) head.push(c.yellow(`cooldown ${cool.slice(0, 3).join(',')}`));
         if (!d.lock && Number.isFinite(Date.parse(d.cycle.at))) head.push(c.dim(`last cycle ${dur(d.now - Date.parse(d.cycle.at))} ago`));
     }
     if (d.quota.length) head.push(`quota ${d.quota.map(([m, u]) => `${m} ${u}`).join(' ')}`);
     rows.push(head.join(c.dim(' │ ')));
+    if (d.day && d.day.pr + d.day.fail > 0) {
+        const top = d.day.top ? ` · top: ${d.day.top[0]} ×${d.day.top[1]}` : '';
+        rows.push(`  24h: ${c.green(`${d.day.pr} pr`)} ${c.red(`${d.day.fail} fail`)}${c.dim(top)}`);
+    }
     const lanes = d.running.slice(0, full ? 8 : 3);
     for (const r of lanes) {
         const errs = r.toolErrors > 0 ? c.red(`e${r.toolErrors}`) : c.dim(`e${r.toolErrors ?? 0}`);
-        rows.push(`  ${c.bold(pad(`${clean(r.repo, 16)}#${clean(r.issue, 6)}`, 22))} ${pad(dur(d.now - r.t0), 7)} t${pad(String(r.turns ?? 0), 3)} ${errs} ${c.dim(r.tool)}`);
+        rows.push(`  ${c.bold(pad(`${clean(r.repo, 16)}#${clean(r.issue, 6)}`, 22))} ${pad(dur(d.now - r.t0), 7)} t${pad(String(r.turns ?? 0), 3)} ${errs} ${c.dim(r.tool)}${r.lastActive && d.now - r.lastActive > STALL_MS ? ` ${c.yellow(`stalled ${dur(d.now - r.lastActive)}`)}` : ''}`);
     }
     if (d.running.length > lanes.length) rows.push(c.dim(`  +${d.running.length - lanes.length} more`));
     const evs = d.events.slice(0, full ? 12 : 3);

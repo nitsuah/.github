@@ -24,7 +24,7 @@ test('idle: no lock, last cycle, quota, no lanes', () => {
     put(h, 'dispatch.jsonl', jl([cycle(50), { at: at(49), event: 'done' }]));
     put(h, 'model_quota.json', JSON.stringify({ MAX: { used: 3, window: 1 }, other: { used: 0, window: 1 } }));
     const out = frame(h);
-    assert.match(out, /^○ imps idle │ queue 7 │ picked 1 │ last cycle 50m00s ago │ quota MAX 3/);
+    assert.match(out, /^○ imps idle │ queue 7 (6 waiting) │ picked 1 │ last cycle 50m00s ago │ quota MAX 3/);
     assert.doesNotMatch(out, /other/);
     rmSync(h, { recursive: true });
 });
@@ -45,7 +45,7 @@ test('one running imp: lock elapsed, lane with turns, errors and last tool', () 
 test('tool detail: Bash shows only the first token, long patterns are cut, control chars stripped', () => {
     const h = home();
     put(h, 'runs.jsonl', jl([{ id: 'imp_b', repo: 'r', issue: 1, startedAt: at(1), metrics: {} }]));
-    put(h, 'runs/imp_b.jsonl', jl([toolUse('Bash', { command: 'curl -H "Authorization: Bearer abc123" https://x' }, 1)]));
+    put(h, 'runs/imp_b.jsonl', jl([toolUse('Bash', { command: 'curl -H "Authorization: Bearer abc123" https://x' }, NOW)]));
     assert.match(frame(h), /Bash curl$/m);
     put(h, 'runs/imp_b.jsonl', jl([toolUse('Grep', { pattern: `a\x1b[31m${'z'.repeat(80)}` }, 1)]));
     const out = frame(h);
@@ -102,6 +102,32 @@ test('dead pid or old unfinished row is not a lane', () => {
         { id: 'imp_dead', repo: 'b', issue: 2, pid: 2 ** 22 + 12345, startedAt: at(2), metrics: {} },
     ]));
     assert.doesNotMatch(frame(h), /a#1|b#2/);
+    rmSync(h, { recursive: true });
+});
+
+test('throughput: 24h pr/fail counts, top gate reason, budget and cooldown in the header', () => {
+    const h = home();
+    put(h, 'dispatch.jsonl', jl([
+        { at: at(60 * 30), event: 'gate-fail', repo: 'old', number: 1, reasons: ['too old'] },
+        { at: at(50), event: 'gate-fail', repo: 'a', number: 1, reasons: ['tests not run', 'no commits'] },
+        { at: at(40), event: 'gate-fail', repo: 'b', number: 2, reasons: ['tests not run'] },
+        { at: at(30), event: 'pr', repo: 'c', number: 3, url: 'https://github.com/x/c/pull/9' },
+        { ...cycle(5), queued: 6, picked: ['a#1', 'b#2'], runsLast24h: 3, cooldown: { vhs: {} } },
+    ]));
+    const out = frame(h);
+    assert.match(out, /queue 6 \(4 waiting\) │ picked 2 │ runs 3\/24h │ cooldown vhs/);
+    assert.match(out, /24h: 1 pr 2 fail · top: tests not run ×2/);
+    assert.doesNotMatch(out, /too old/);
+    rmSync(h, { recursive: true });
+});
+
+test('stall: a lane with no transcript activity for over 2 minutes is flagged', () => {
+    const h = home();
+    put(h, 'runs.jsonl', jl([{ id: 'imp_s', repo: 'vhs', issue: 1, startedAt: at(10), metrics: { turns: 4 } }]));
+    put(h, 'runs/imp_s.jsonl', jl([toolUse('Read', { file_path: 'a.js' }, NOW - 5 * 60000)]));
+    assert.match(frame(h), /Read a\.js stalled 5m00s/);
+    put(h, 'runs/imp_s.jsonl', jl([toolUse('Read', { file_path: 'a.js' }, NOW - 20000)]));
+    assert.doesNotMatch(frame(h), /stalled/);
     rmSync(h, { recursive: true });
 });
 
