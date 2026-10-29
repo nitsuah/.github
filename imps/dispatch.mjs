@@ -379,14 +379,47 @@ async function work(issue) {
         const m = row.metrics || {};
         const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
         if (row.gate?.pass) {
-            const pr = await node(['pr', id]);
-            const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
+            const prUrl = (out) => (out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
+            let pr = await node(['pr', id]);
+            let url = prUrl(pr.out);
+            // The work already passed the gate: a GitHub blip while opening the PR (stash#344, "see githubstatus.com")
+            // is retried instead of failing the issue. The PR may exist even though its URL never came back (response
+            // lost after creation), and a retry then fails the "already has an open imp PR" guard, which is not a
+            // transient error. So remember that a transient failure happened and look the branch up before retrying
+            // and again at the end; an adopted PR skips imp.mjs's review/merge step (a fix-sweep and the owner cover it).
+            let adopted = false;
+            let transientSeen = !url && isTransientNetworkError(pr.out);
+            const adoptByBranch = () => {
+                try {
+                    const branch = ledgerRow(id)?.branch;
+                    const found = branch ? ghJson(['pr', 'list', '-R', slug, '--head', branch, '--state', 'open', '--json', 'url']) : [];
+                    if (found?.[0]?.url) {
+                        updateRun(id, { pr: found[0].url });
+                        adopted = true;
+                        return found[0].url;
+                    }
+                } catch (e) {
+                    log({ event: 'pr-lookup-error', repo, number, id, error: String(e.message).slice(0, 200) });
+                }
+                return undefined;
+            };
+            for (const waitMs of [20_000, 60_000]) {
+                if (url || !transientSeen) break;
+                url = adoptByBranch();
+                if (url) break;
+                log({ event: 'pr-retry', repo, number, id, waitMs });
+                await new Promise((r) => setTimeout(r, waitMs));
+                pr = await node(['pr', id]);
+                url = prUrl(pr.out);
+                if (!url && isTransientNetworkError(pr.out)) transientSeen = true;
+            }
+            if (!url && transientSeen) url = adoptByBranch();
             if (url) {
                 beat(url);
                 relabel(repo, number, 'imp:pr', ['imp:working']);
                 note(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
                 // The review + merge decision live inside `imp.mjs pr`.
-                return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
+                return log({ event: 'pr', repo, number, id, url, review: adopted ? 'skipped (adopted after a lost response)' : (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
             }
             relabel(repo, number, 'imp:failed', ['imp:working']);
             note(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
