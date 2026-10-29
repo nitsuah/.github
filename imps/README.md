@@ -157,6 +157,26 @@ Repos that call the kit through thin wrappers (`scripts/imp-run.ps1`, `.github/i
 
 No change to wrapper *CLI* contract is required if they already resolve `IMPS_KIT_PATH` → `imps/imp.mjs`. See STANDARD.md § Stash.
 
+## Watching a run
+
+Live view of the imps without a second window. `watch.mjs` is read-only (no writes, no network, no spawns) and reads only the tail of `~/.imps/dispatch.jsonl`, `runs.jsonl` and the running imps' transcripts, so it costs the same after a year of history.
+
+**In a Claude Code session (status line).** Add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node \"$(tr -d '\r\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/watch.mjs\" --statusline",
+    "refreshInterval": 2
+  }
+}
+```
+
+Claude Code runs this under Git Bash on Windows, so `%VAR%` does not expand; the command resolves the kit from `kit-path.txt` (setup writes it with CRLF, hence the `tr`). Verified in a real `claude` 2.1.312 session on Windows 11. Rows: cycle state (running + elapsed from `dispatch.lock`, queue, picked, quota used), one lane per running imp (`repo#issue  elapsed  turns  tool errors  last tool`), then the latest dispatch events (PR green, gate-fail/error red, fix-sweep cyan). Anything read from files is sanitized and truncated; Bash shows only its first word.
+
+**In a spare pane (full screen).** `node imps/watch.mjs` redraws at 1 Hz; `q` quits. Flags for both modes: `--once` (one frame, no TTY), `--home <dir>` (default `IMPS_HOME` or `~/.imps`), `--no-color`.
+
 ## Tests
 
 ```bash
