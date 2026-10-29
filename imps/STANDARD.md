@@ -99,7 +99,7 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
 | Imp runs per 24 h / `--daily-cap` | 60 | `loopBudget` |
-| Repo cooldown | 24 h after two straight gate failures in a repo | `loopBudget` |
+| Repo cooldown | 12 h (`defaults.cooldownMs`) after two straight gate failures in a repo | `loopBudget` |
 | Attempts per issue | 2 failed/killed runs without a PR (since the latest brief), then `imp:needs-human` + one comment | `defaults.maxIssueFailures`, `issueFailures` |
 | No-edit fail-fast | 12 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
@@ -268,3 +268,18 @@ What 9router offers that we are not using yet (from its source, v0.5.104):
 - **Baseline tests.** The gate fails on any failing test. It should also run the test command on `baseSha` and only count failures that are new. fire's server fail-fast tests time out locally while main's CI is green.
 - **Model probe.** Runs 1–2 went through a 9router build that sent `MAX` to OpenRouter's free auto-router: 10–11 models and 43–65 switches per run. Rebuilt on v0.5.104, `MAX` serves one model (run 3: 0 switches, gate pass). Add a pre-run probe that holds the run if the served model changes mid-run (IMPS-PLAN D9).
 - **Prompt caching.** Run 3 sent 1.57M input tokens with 0 cache reads for a 40-line fix. Find a 9router route for `MAX` that caches, or trim the context each turn resends.
+
+## demonguard (lingering PRs)
+
+`imp.mjs pr` decides about auto-merge once, when it opens a PR. A PR that was not ready then (CI still running, trust not yet earned, the reviewer never answered) used to sit open until the open-PR cap stalled dispatch. `demonguard.mjs` runs on every dispatch tick and gives each open imp PR exactly one action, chosen by the pure `assessPr()`:
+
+| Action | When | What it does |
+| --- | --- | --- |
+| `merge` | imp review `approve`, every check green, repo trust earned, no open bot threads | squash-merge with `--match-head-commit`; the same rules as `imp.mjs pr`, applied later |
+| `rereview` | no imp review recorded | reruns `review.mjs` (9router) |
+| `dismiss-stale-review` | a bot's latest review is CHANGES_REQUESTED and none of its threads is open | dismisses it |
+| `owner` | all good but trust is not earned | logged in the `demonguard` event's `owner` list; never merged |
+| `needs-human` | red checks, conflicts or a non-approve review for over 24 h | labels the PR `imp:needs-human` |
+| `wait` / `wait-fix` | too young (< 30 min), checks pending, or the fix-sweep is on it | nothing |
+
+Each tick logs one `demonguard` event with the counts. It never uses `--admin`. Kill switch: `IMPS_DEMONGUARD=0`; manual: `node imps/demonguard.mjs --dry-run`.

@@ -340,7 +340,7 @@ export function loopBudget(rows, now = Date.now()) {
     for (const repo of new Set(runs.map((r) => r.repo))) {
         const gated = runs.filter((r) => r.repo === repo && r.gate).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
-        if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < day) cooldown[repo] = b.startedAt;
+        if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
     return { runsLast24h, cooldown };
 }

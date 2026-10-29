@@ -550,6 +550,16 @@ for (const p of openImp) {
     if (!sweepIsRepeat(recentEvents, p.url, result)) log({ event: 'fix-sweep', pr: p.url, id: row.id, result });
 }
 
+// demonguard: the deterministic watch over imp PRs that linger. imp.mjs decides about auto-merge once, when it
+// opens a PR, so anything not ready then sat open and ate the open-PR cap. Kill switch: IMPS_DEMONGUARD=0.
+if (process.env.IMPS_DEMONGUARD !== '0' && !dry) {
+    try {
+        await node(['demonguard'], 'demonguard.mjs');
+    } catch (e) {
+        log({ event: 'demonguard-error', error: String(e.message).slice(0, 200) });
+    }
+}
+
 // Release stale imp:working claims whose heartbeat is older than 90 min (#69).
 for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
     const slug = `${o.owner}/${w.repository.name}`;
