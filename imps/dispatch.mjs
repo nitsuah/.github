@@ -655,14 +655,14 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
         rows: readLedger(),
         isOpen: (dep) => {
             try {
-                return ghJson(['issue', 'view', String(dep.number), '-R', `${o.owner}/${dep.repo}`, '--json', 'state']).state === 'OPEN';
+                return ghJson(['issue', 'view', String(dep.number), '-R', `${dep.owner || o.owner}/${dep.repo}`, '--json', 'state']).state === 'OPEN';
             } catch {
                 return true;
             }
         },
     });
     if (blockers.length) {
-        log({ event: 'blocked-dep', repo: i.repo, number: i.number, on: blockers.map((b) => `${b.repo}#${b.number}`) });
+        log({ event: 'blocked-dep', repo: i.repo, number: i.number, on: blockers.map((b) => `${b.owner ? b.owner + '/' : ''}${b.repo}#${b.number}`) });
         continue;
     }
     i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);

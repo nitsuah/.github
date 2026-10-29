@@ -338,7 +338,7 @@ export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && (!kit || !r.kitSha || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
@@ -886,14 +886,14 @@ export function deriveFormat(lint) {
 // dependency is closed or merged.
 export function parseDepends(value, defaultRepo) {
     const out = [];
-    for (const m of String(value || '').matchAll(/(?:(?:[\w.-]+\/)?([\w.-]+))?#(\d+)/g)) out.push({ repo: m[1] || defaultRepo, number: Number(m[2]) });
+    for (const m of String(value || '').matchAll(/(?:(?:([\w.-]+)\/)?([\w.-]+))?#(\d+)/g)) out.push({ ...(m[1] ? { owner: m[1] } : {}), repo: m[2] || defaultRepo, number: Number(m[3]) });
     return out;
 }
 
-/** The dependencies that still block: open on GitHub and not merged according to the ledger. */
+/** The dependencies that still block: open on GitHub and not merged according to the ledger (ledger rows carry no owner, so an `owner/` reference is always looked up on GitHub). */
 export function unmetDepends(deps = [], { isOpen, rows = [] }) {
     return deps.filter((d) => {
-        if (rows.some((r) => r.repo === d.repo && Number(r.issue) === d.number && r.outcome === 'merged')) return false;
+        if (!d.owner && rows.some((r) => r.repo === d.repo && Number(r.issue) === d.number && r.outcome === 'merged')) return false;
         return isOpen(d); // unknown counts as open: wait rather than run too early
     });
 }

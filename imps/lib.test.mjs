@@ -822,9 +822,16 @@ test('deriveFormat turns a plain eslint lint command into its --fix twin and lea
 
 test('parseDepends reads #N, repo#N and owner/repo#N, defaulting to the same repo as the issue', () => {
     assert.deepEqual(parseDepends('#318', 'fire'), [{ repo: 'fire', number: 318 }]);
-    assert.deepEqual(parseDepends('#318, vigil#12, nitsuah/stash#7', 'fire'), [{ repo: 'fire', number: 318 }, { repo: 'vigil', number: 12 }, { repo: 'stash', number: 7 }]);
+    assert.deepEqual(parseDepends('#318, vigil#12, nitsuah/stash#7', 'fire'), [{ repo: 'fire', number: 318 }, { repo: 'vigil', number: 12 }, { owner: 'nitsuah', repo: 'stash', number: 7 }]);
+    assert.deepEqual(parseDepends('other/fire#7', 'fire'), [{ owner: 'other', repo: 'fire', number: 7 }], 'the owner survives parsing');
     assert.deepEqual(parseDepends('', 'fire'), []);
     assert.deepEqual(parseDepends(undefined, 'fire'), []);
+});
+
+test('unmetDepends: a foreign-owner reference is never satisfied by a same-named merged row in the ledger', () => {
+    const rows = [{ repo: 'fire', issue: 7, outcome: 'merged' }];
+    assert.equal(unmetDepends([{ owner: 'other', repo: 'fire', number: 7 }], { rows, isOpen: () => true }).length, 1);
+    assert.equal(unmetDepends([{ repo: 'fire', number: 7 }], { rows, isOpen: () => true }).length, 0);
 });
 
 test('unmetDepends: open issues block unless the ledger shows them merged; a failed lookup blocks (fail closed)', () => {
