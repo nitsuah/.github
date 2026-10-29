@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -669,4 +669,19 @@ test('cleanEnv never emits an anthropic.com URL or an ambient anthropic key', ()
         assert.ok(!isAnthropicHost(env.ANTHROPIC_BASE_URL));
         assert.ok(!('ANTHROPIC_API_KEY' in env));
     }
+});
+
+test('kitTable groups runs by kit sha and shows which gate failures appeared or went away', () => {
+    const run = (id, kitSha, t, gate, pr) => ({ id, repo: 'r', issue: 1, startedAt: t, kitSha, gate, pr });
+    const t = kitTable([
+        run('imp_1', 'aaa', '2026-10-28T00:00:00Z', { pass: false, reasons: ['no commits', 'diff 70 lines > 60'] }),
+        run('imp_2', 'aaa', '2026-10-28T01:00:00Z', { pass: false, reasons: ['no commits'] }),
+        run('imp_3', 'bbb', '2026-10-28T05:00:00Z', { pass: true, reasons: [] }, 'https://x/pull/1'),
+        run('imp_4', 'bbb', '2026-10-28T06:00:00Z', { pass: false, reasons: ['lint exit 1'] }),
+        { id: 'imp_5', repo: 'r', issue: 1, startedAt: '2026-10-28T07:00:00Z', gate: { pass: true } },
+    ]);
+    assert.deepEqual(t.map((k) => [k.kit, k.runs, k.pass, k.pr]), [['aaa', 2, 0, 0], ['bbb', 2, 1, 1]]);
+    assert.deepEqual(t[0].top, ['no commits x2', 'diff N lines > N x1']);
+    assert.deepEqual(t[1].newReasons, ['lint exit N']);
+    assert.deepEqual(t[1].gone.sort(), ['diff N lines > N', 'no commits']);
 });
