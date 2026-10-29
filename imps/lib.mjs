@@ -853,6 +853,8 @@ export function outputSection(label, exit, tail, max = 900) {
 export function isApiInfraError(metrics) {
     if (!metrics || !metrics.isError || metrics.toolTurns > 0) return false;
     const text = String(metrics.finalText || '');
+    // Permanent request errors win over any transient-sounding text ("... try again with a shorter prompt").
+    if (/\b40[0-4]\b|prompt is too long|invalid.?request|context.?(?:length|window)|too many tokens/i.test(text)) return false;
     return /^API Error:/i.test(text) && /upstream|connection|overloaded|\b(?:429|5\d\d)\b|time.?d? ?out|rate.?limit|unavailable|ECONN|hang up|try again/i.test(text);
 }
 

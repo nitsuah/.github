@@ -755,6 +755,8 @@ test('isApiInfraError flags a run that died on a router/provider error before an
     assert.equal(isApiInfraError(run('API Error: Overloaded, try again later')), true);
     assert.equal(isApiInfraError(run('API Error: 429 Too Many Requests')), true);
     assert.equal(isApiInfraError(run('API Error: 400 prompt is too long')), false);
+    assert.equal(isApiInfraError(run('API Error: 400 prompt is too long; try again with a shorter prompt')), false);
+    assert.equal(isApiInfraError(run('API Error: 401 invalid x-api-key, try again')), false);
     assert.equal(isApiInfraError(run('API Error: upstream connection lost', { toolTurns: 3 })), false);
     assert.equal(isApiInfraError(run('API Error: upstream connection lost', { isError: false })), false);
     assert.equal(isApiInfraError(run('I could not find the file')), false);
