@@ -806,6 +806,14 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
     return kits;
 }
 
+// fix-sweep runs on every tick (5-minute label-watch included) and a PR with nothing to fix answers
+// `clean` each time, which buried real events. Log `clean` once, then only when the result changes.
+export function sweepIsRepeat(events, pr, result) {
+    if (result !== 'clean') return false;
+    const last = [...events].reverse().find((e) => e && e.event === 'fix-sweep' && e.pr === pr);
+    return !!last && last.result === 'clean';
+}
+
 // The machine could not reach GitHub or the router (not a verdict on the issue or the imp).
 export function isTransientNetworkError(text = '') {
     return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|TLS handshake timeout|Connection timed out|Operation timed out|Network is unreachable|ssh: connect to host \S+ port \d+: (Connection (refused|timed out)|Network is unreachable)/i.test(String(text));

@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -480,12 +480,26 @@ for (const r of ledger.filter((x) => x.pr && (!x.outcome || x.outcome === 'open'
 
 const openImp = openImpAll.filter((p) => !p.closed && !p.labels.some((l) => l.name === 'imp:needs-human'));
 ledger = readLedger();
+const recentEvents = (() => {
+    try {
+        return readFileSync(LOG, 'utf8').trim().split('\n').filter((x) => x.includes('"event":"fix-sweep"')).map((x) => {
+            try {
+                return JSON.parse(x);
+            } catch {
+                return null;
+            }
+        });
+    } catch {
+        return [];
+    }
+})();
 for (const p of openImp) {
     const row = ledger.find((r) => r.pr === p.url);
     if (!row) continue; // opened from another machine's ledger
     const f = await node(['fix', row.id, ...(dry ? ['--dry-run'] : [])], 'fix.mjs');
     const last = f.out.trim().split('\n').reverse().find((l) => l.startsWith('{"id"'));
-    log({ event: 'fix-sweep', pr: p.url, id: row.id, result: last ? JSON.parse(last).event : `exit ${f.code}` });
+    const result = last ? JSON.parse(last).event : `exit ${f.code}`;
+    if (!sweepIsRepeat(recentEvents, p.url, result)) log({ event: 'fix-sweep', pr: p.url, id: row.id, result });
 }
 
 // Release stale imp:working claims whose heartbeat is older than 90 min (#69).

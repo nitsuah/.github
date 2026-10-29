@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -684,6 +684,17 @@ test('kitTable groups runs by kit sha and shows which gate failures appeared or 
     assert.deepEqual(t[0].top, ['no commits x2', 'diff N lines > N x1']);
     assert.deepEqual(t[1].newReasons, ['lint exit N']);
     assert.deepEqual(t[1].gone.sort(), ['diff N lines > N', 'no commits']);
+});
+
+test('sweepIsRepeat hides a repeated clean fix-sweep but never a change or a non-clean result', () => {
+    const ev = [{ event: 'fix-sweep', pr: 'p1', result: 'clean' }, { event: 'cycle' }, { event: 'fix-sweep', pr: 'p2', result: 'needs-human' }, null];
+    assert.equal(sweepIsRepeat(ev, 'p1', 'clean'), true);
+    assert.equal(sweepIsRepeat(ev, 'p3', 'clean'), false);
+    assert.equal(sweepIsRepeat(ev, 'p2', 'needs-human'), false);
+    assert.equal(sweepIsRepeat([...ev, { event: 'fix-sweep', pr: 'p1', result: 'pushed' }], 'p1', 'clean'), false);
+    assert.equal(sweepIsRepeat([], 'p1', 'clean'), false);
+    const noise = Array.from({ length: 1000 }, () => ({ event: 'cycle' }));
+    assert.equal(sweepIsRepeat([{ event: 'fix-sweep', pr: 'p1', result: 'clean' }, ...noise], 'p1', 'clean'), true);
 });
 
 test('isTransientNetworkError separates network blips from real run failures', () => {
