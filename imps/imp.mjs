@@ -154,12 +154,17 @@ function runGate(id) {
     const { meta } = loadBrief(r.brief, r.worktree);
     // Output is echoed as before, and the tail of 'test' and 'lint' runs is kept for the ledger and the issue comment.
     const tails = {};
+    const ends = {};
     const shell = (c, key) => {
         const p = spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
         process.stdout.write(p.stdout || '');
         process.stderr.write(p.stderr || '');
         // Each stream keeps its own bounded tail so a noisy stderr cannot push the failure out of stdout.
-        if (key) tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
+        if (key) {
+            tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
+            // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
+            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}) };
+        }
         return p.status;
     };
     // Formatting is mechanical, so the runner does it, not the model: run the
@@ -231,7 +236,7 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), head, at: new Date().toISOString() } });
+    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
