@@ -385,7 +385,7 @@ if (-not $SkipTask) {
         # Next :07, not today's — a past start would fire the task immediately on every re-run.
         $start = (Get-Date).Date.AddMinutes(7)
         while ($start -le (Get-Date)) { $start = $start.AddHours(1) }
-        $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+        $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650)
         $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c `"{0}`"" -f $hourly)
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $hourlyTrigger -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07)"
