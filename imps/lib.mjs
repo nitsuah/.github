@@ -338,7 +338,7 @@ export function loopBudget(rows, now = Date.now()) {
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
@@ -863,4 +863,11 @@ export function isApiInfraError(metrics) {
 export const INFRA_RETRY_CAP = 3;
 export function infraRuns(rows = [], repo, issue, sinceMs = 0) {
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && r.infra && Date.parse(r.startedAt) >= sinceMs).length;
+}
+
+// A gate that failed only because the diff outgrew the brief's cap (tests, lint, scope and trailers were all fine).
+// That is a brief-sizing miss, not a sign the repo is unhealthy, so it must not count toward a repo cooldown.
+export function isSizeOnlyFailure(gate) {
+    const reasons = gate?.reasons;
+    return !!gate && gate.pass === false && Array.isArray(reasons) && reasons.length > 0 && reasons.every((x) => /^diff \d+ lines > \d+/.test(String(x)));
 }
