@@ -3,7 +3,7 @@
 // Everything that talks to a model goes through runClaude, so both workers
 // get the same guardrails (clean env, 9router only, no shell splitting).
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,20 +78,62 @@ export function isGitDirty(path) {
         return false;
     }
 }
+// A cross-process lock around every ledger write. update() reads the whole file, patches one row and renames a
+// temp file over it, while imp.mjs appends a row when a run starts: an append that landed between the read and
+// the rename used to be lost. An exclusive lock file (O_EXCL) serialises them; a lock whose owner is dead, or older
+// than LOCK_STALE_MS, is broken. IMPS_LEDGER_LOCK=0 turns it off.
+const LOCK = `${LEDGER}.lock`;
+export const LOCK_STALE_MS = 30_000;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+let lockDepth = 0;
+export function withLedgerLock(fn, { timeoutMs = 15_000 } = {}) {
+    if (process.env.IMPS_LEDGER_LOCK === '0' || lockDepth > 0) return fn(); // reentrant: update() -> save()
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        try {
+            const fd = openSync(LOCK, 'wx');
+            writeFileSync(fd, String(process.pid));
+            closeSync(fd);
+            break;
+        } catch (e) {
+            if (e.code !== 'EEXIST') throw e;
+            let stale = false;
+            try {
+                const owner = Number(readFileSync(LOCK, 'utf8').trim());
+                stale = (Number.isFinite(owner) && owner > 0 && !pidAlive(owner)) || Date.now() - statSync(LOCK).mtimeMs > LOCK_STALE_MS;
+            } catch { stale = true; } // the lock vanished or is unreadable: try to take it again
+            if (stale) { try { unlinkSync(LOCK); } catch { /* someone else broke it first */ } continue; }
+            if (Date.now() > deadline) throw new Error(`ledger lock busy for ${timeoutMs} ms (${LOCK})`);
+            sleepSync(15 + Math.floor(Math.random() * 25));
+        }
+    }
+    lockDepth++;
+    try {
+        return fn();
+    } finally {
+        lockDepth--;
+        try { unlinkSync(LOCK); } catch { /* already gone */ }
+    }
+}
 // Atomic: a crash mid-write must not truncate the run history.
-export const save = (all) => {
+export const save = (all) => withLedgerLock(() => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;
     writeFileSync(tmp, all.map((r) => JSON.stringify(r)).join('\n') + '\n');
     renameSync(tmp, LEDGER);
-};
+});
 export function update(id, patch) {
-    const all = rows();
-    const r = all.find((x) => x.id === id);
-    if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
-    Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
-    save(all);
-    return r;
+    return withLedgerLock(() => {
+        const all = rows();
+        const r = all.find((x) => x.id === id);
+        if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
+        Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
+        save(all);
+        return r;
+    });
 }
+/** Append one run row under the same lock update() takes. */
+export const appendRow = (row) => withLedgerLock(() => appendFileSync(LEDGER, JSON.stringify(row) + '\n'));
 
 // ── processes ─────────────────────────────────────────────────────────────
 const LOG_FILE = join(HOME, 'logs', 'tool-errors.log');

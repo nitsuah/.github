@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -137,7 +137,7 @@ async function run() {
         pid: process.pid,
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };
-    appendFileSync(LEDGER, JSON.stringify(row) + '\n');
+    appendRow(row);
     console.log(`${id}  ${wt}`);
 
     const tools = IMP_TOOLS;
