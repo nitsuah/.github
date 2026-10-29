@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -170,11 +170,16 @@ test('README statusLine snippet: no raw CR/LF in the command, and it runs agains
     assert.ok(block, 'statusLine snippet not found in README');
     const { command } = JSON.parse(block[1]).statusLine;
     assert.doesNotMatch(command, /[\r\n]/, 'a JSON \\r\\n escape became a real CR/LF; write \\\\r\\\\n');
-    const bash = spawnSync('bash', ['-c', 'echo ok'], { encoding: 'utf8' });
-    if (bash.status !== 0 || bash.stdout.trim() !== 'ok') return t.skip('no bash on PATH');
+    // Claude Code runs the command under Git Bash on Windows; a bare `bash` there can be WSL, which
+    // does not inherit IMPS_HOME or share the Windows path, so pick Git Bash explicitly.
+    const bash = process.platform === 'win32'
+        ? [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs')]
+            .filter(Boolean).map((d) => join(d, 'Git', 'bin', 'bash.exe')).find((p) => existsSync(p))
+        : 'bash';
+    if (!bash) return t.skip('Git Bash not found');
     const h = home();
     put(h, 'kit-path.txt', `${dirname(dirname(WATCH))}\r\n`);
-    const r = spawnSync('bash', ['-c', command], { encoding: 'utf8', timeout: 10000, env: { ...process.env, IMPS_HOME: h } });
+    const r = spawnSync(bash, ['-c', command], { encoding: 'utf8', timeout: 10000, env: { ...process.env, IMPS_HOME: h } });
     assert.match(r.stdout, /imps idle/, r.stderr);
     rmSync(h, { recursive: true });
 });
