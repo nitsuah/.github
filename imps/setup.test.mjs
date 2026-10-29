@@ -33,8 +33,8 @@ test('setup.ps1 does not contain /SC ONSTART', () => {
 test('setup.sh contains @reboot sleep 120 && $HOURLY', () => {
   assert.match(sh, /@reboot sleep 120 && \$HOURLY/);
 });
-test('setup.ps1 registers the hourly task without backslash-quotes (cmd.exe ignores them, so the task silently did nothing)', () => {
-  const action = ps1.split(/\r?\n/).find((l) => l.includes('New-ScheduledTaskAction'));
-  assert.ok(action, 'New-ScheduledTaskAction line not found');
-  assert.doesNotMatch(action, /\\`"/);
+test('setup.ps1 never hard-codes a backslash-quote in a task command (cmd.exe ignores it, so the task silently did nothing)', () => {
+  const lines = ps1.split(/\r?\n/).filter((l) => !l.includes('Write-Hint') && /New-ScheduledTaskAction|schtasks .*\/Create/.test(l));
+  assert.ok(lines.length >= 3, 'task registration lines not found');
+  for (const l of lines) assert.doesNotMatch(l, /\\[`"]/, l);
 });
