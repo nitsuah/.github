@@ -864,3 +864,11 @@ export const INFRA_RETRY_CAP = 3;
 export function infraRuns(rows = [], repo, issue, sinceMs = 0) {
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && r.infra && Date.parse(r.startedAt) >= sinceMs).length;
 }
+
+// A brief that has a `lint:` but no `format:` still gets the runner's free auto-format step: the same eslint
+// command with --fix. Anything that is not a plain `eslint` invocation, or already fixes, gets none.
+export function deriveFormat(lint) {
+    if (!lint || /--fix\b/.test(lint)) return null;
+    const next = lint.replace(/(\bnpx\s+|\s)eslint(\s)/, '$1eslint --fix$2');
+    return next === lint ? null : next;
+}
