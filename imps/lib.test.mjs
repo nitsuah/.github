@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -818,4 +818,37 @@ test('deriveFormat turns a plain eslint lint command into its --fix twin and lea
     assert.equal(deriveFormat('npm run lint'), null, 'not a plain eslint call');
     assert.equal(deriveFormat(''), null);
     assert.equal(deriveFormat(undefined), null);
+});
+
+test('parseDepends reads #N, repo#N and owner/repo#N, defaulting to the same repo as the issue', () => {
+    assert.deepEqual(parseDepends('#318', 'fire'), [{ repo: 'fire', number: 318 }]);
+    assert.deepEqual(parseDepends('#318, vigil#12, nitsuah/stash#7', 'fire'), [{ repo: 'fire', number: 318 }, { repo: 'vigil', number: 12 }, { owner: 'nitsuah', repo: 'stash', number: 7 }]);
+    assert.deepEqual(parseDepends('other/fire#7', 'fire'), [{ owner: 'other', repo: 'fire', number: 7 }], 'the owner survives parsing');
+    assert.deepEqual(parseDepends('', 'fire'), []);
+    assert.deepEqual(parseDepends(undefined, 'fire'), []);
+});
+
+test('unmetDepends: a foreign-owner reference is never satisfied by a same-named merged row in the ledger', () => {
+    const rows = [{ repo: 'fire', issue: 7, outcome: 'merged' }];
+    assert.equal(unmetDepends([{ owner: 'other', repo: 'fire', number: 7 }], { rows, isOpen: () => true }).length, 1);
+    assert.equal(unmetDepends([{ repo: 'fire', number: 7 }], { rows, isOpen: () => true }).length, 0);
+});
+
+test('unmetDepends: open issues block unless the ledger shows them merged; a failed lookup blocks (fail closed)', () => {
+    const deps = [{ repo: 'fire', number: 318 }, { repo: 'fire', number: 12 }];
+    const rows = [{ repo: 'fire', issue: 12, outcome: 'merged' }];
+    assert.deepEqual(unmetDepends(deps, { rows, isOpen: () => true }), [{ repo: 'fire', number: 318 }]);
+    assert.deepEqual(unmetDepends(deps, { rows, isOpen: (d) => d.number === 12 }), [], '318 closed, 12 merged in the ledger');
+    assert.deepEqual(unmetDepends(deps, { rows: [], isOpen: () => true }).length, 2);
+    assert.deepEqual(unmetDepends([], { rows, isOpen: () => true }), []);
+});
+
+test('loopBudget cooldown only counts failures from the kit that is running now', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const fail = (id, hoursAgo, kitSha) => ({ id, repo: 'r', issue: 1, kitSha, startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } });
+    const rows = [fail('imp_1', 3, 'old'), fail('imp_2', 2, 'old')];
+    assert.ok(loopBudget(rows, now).cooldown.r, 'no kit given: unchanged behaviour');
+    assert.ok(loopBudget(rows, now, { kit: 'old' }).cooldown.r, 'same kit still cools the repo');
+    assert.equal(loopBudget(rows, now, { kit: 'new' }).cooldown.r, undefined, 'a newer kit may have fixed the cause: no cooldown');
+    assert.ok(loopBudget([fail('imp_1', 3, 'new'), fail('imp_2', 2, 'new')], now, { kit: 'new' }).cooldown.r, 'failures on the new kit cool it again');
 });
