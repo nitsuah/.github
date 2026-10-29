@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, tailOutput, outputSection, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -703,4 +703,19 @@ test('outputSection fences a failing step output and is empty otherwise', () => 
     assert.equal(outputSection('Test', 0, 'FAIL x'), '');
     assert.equal(outputSection('Test', 1, ''), '');
     assert.equal(outputSection('Lint', 1, undefined), '');
+});
+
+test('redactSecrets blanks tokens, keys and credential assignments but leaves ordinary output', () => {
+    const out = redactSecrets([
+        'token ghp_abcdefghijklmnopqrstuv1234 used',
+        'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123',
+        'ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx',
+        'password: "hunter2hunter2"',
+        'NINEROUTER_KEY=abc123',
+        'AKIAABCDEFGHIJKLMNOP',
+        'FAIL src/a.test.ts > renders 3 rows',
+    ].join('\n'));
+    assert.doesNotMatch(out, /ghp_abc|abcdefghijklmnopqrstuvwxyz0123|sk-ant|hunter2|abc123|AKIAABC/);
+    assert.match(out, /FAIL src\/a\.test\.ts > renders 3 rows/);
+    assert.match(tailOutput('x token=supersecretvalue'), /token=\[redacted\]/);
 });

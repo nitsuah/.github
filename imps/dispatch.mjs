@@ -376,7 +376,7 @@ async function work(issue) {
             return log({ event: 'pr-error', repo, number, id, out: pr.out.slice(-500) });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${outputSection('Test', 1, row.gate?.testTail)}${outputSection('Lint', 1, row.gate?.lintTail)}\n\nNeeds a new brief or a human.`);
+        comment(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
         clearInterval(hb);
