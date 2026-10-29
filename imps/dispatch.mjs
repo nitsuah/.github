@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -373,6 +373,14 @@ async function work(issue) {
             // and say nothing on it. `doctor.ps1` reports the missing binary.
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return log({ event: 'infra-fail', repo, number, id, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
+        }
+        if (isApiInfraError(ledgerRow(id)?.metrics)) {
+            // The router's upstream dropped before the imp did anything: put the issue back and don't count an attempt.
+            const why = String(ledgerRow(id)?.metrics?.finalText || '').slice(0, 120);
+            updateRun(id, { infra: 'api-error' });
+            log({ event: 'infra-fail', repo, number, id, reason: `api error: ${why}` });
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return;
         }
         await node(['gate', id]);
         const row = ledgerRow(id);
