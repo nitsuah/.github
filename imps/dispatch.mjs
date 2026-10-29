@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -373,6 +373,21 @@ async function work(issue) {
             // and say nothing on it. `doctor.ps1` reports the missing binary.
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return log({ event: 'infra-fail', repo, number, id, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
+        }
+        if (isApiInfraError(ledgerRow(id)?.metrics)) {
+            // The router's upstream dropped before the imp did anything: put the issue back and don't count an attempt.
+            const why = String(ledgerRow(id)?.metrics?.finalText || '').slice(0, 120);
+            updateRun(id, { infra: 'api-error' });
+            const recent = infraRuns(readLedger(), repo, number, Date.now() - 6 * 3600_000);
+            if (recent >= INFRA_RETRY_CAP) {
+                // The router keeps failing this issue: stop re-queueing it every cycle (each retry still spends a daily slot).
+                relabel(repo, number, 'imp:failed', ['imp:working']);
+                note(repo, number, `Stopped retrying: ${recent} runs in 6 hours ended on a router error before the imp did anything (\`${why}\`). Re-queue it with imp:ready once the router is healthy.`);
+                return log({ event: 'infra-giveup', repo, number, id, runs: recent, reason: `api error: ${why}` });
+            }
+            log({ event: 'infra-fail', repo, number, id, reason: `api error: ${why}` });
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return;
         }
         await node(['gate', id]);
         const row = ledgerRow(id);

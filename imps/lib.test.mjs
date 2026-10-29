@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -746,4 +746,39 @@ test('redactSecrets blanks tokens, keys and credential assignments but leaves or
     assert.doesNotMatch(out, /ghp_abc|abcdefghijklmnopqrstuvwxyz0123|sk-ant|hunter2|abc123|AKIAABC/);
     assert.match(out, /FAIL src\/a\.test\.ts > renders 3 rows/);
     assert.match(tailOutput('x token=supersecretvalue'), /token=\[redacted\]/);
+});
+
+test('isApiInfraError flags a run that died on a router/provider error before any tool use, and nothing else', () => {
+    const run = (finalText, extra = {}) => ({ isError: true, toolTurns: 0, finalText, ...extra });
+    assert.equal(isApiInfraError(run('API Error: upstream connection lost')), true);
+    assert.equal(isApiInfraError(run('API Error: 503 Service Unavailable')), true);
+    assert.equal(isApiInfraError(run('API Error: Overloaded, try again later')), true);
+    assert.equal(isApiInfraError(run('API Error: 429 Too Many Requests')), true);
+    assert.equal(isApiInfraError(run('API Error: 400 prompt is too long')), false);
+    assert.equal(isApiInfraError(run('API Error: 400 prompt is too long; try again with a shorter prompt')), false);
+    assert.equal(isApiInfraError(run('API Error: 401 invalid x-api-key, try again')), false);
+    assert.equal(isApiInfraError(run('API Error: upstream connection lost', { toolTurns: 3 })), false);
+    assert.equal(isApiInfraError(run('API Error: upstream connection lost', { isError: false })), false);
+    assert.equal(isApiInfraError(run('I could not find the file')), false);
+    assert.equal(isApiInfraError(undefined), false);
+});
+
+test('issueFailures does not count an infra-flagged run as an attempt', () => {
+    const row = (id, extra = {}) => ({ id, repo: 'r', issue: 1, startedAt: '2026-10-29T00:00:00Z', endedAt: '2026-10-29T00:05:00Z', ...extra });
+    assert.equal(issueFailures([row('imp_1'), row('imp_2', { infra: 'api-error' })], 'r', 1), 1);
+});
+
+test('infraRuns counts only infra-flagged runs of this issue inside the window', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const row = (id, startedAt, extra = {}) => ({ id, repo: 'r', issue: 1, startedAt, ...extra });
+    const rows = [
+        row('imp_1', '2026-10-29T11:00:00Z', { infra: 'api-error' }),
+        row('imp_2', '2026-10-29T10:00:00Z', { infra: 'api-error' }),
+        row('imp_3', '2026-10-29T03:00:00Z', { infra: 'api-error' }),
+        row('imp_4', '2026-10-29T11:30:00Z'),
+        { ...row('imp_5', '2026-10-29T11:30:00Z', { infra: 'api-error' }), issue: 2 },
+    ];
+    assert.equal(infraRuns(rows, 'r', 1, now - 6 * 3600_000), 2);
+    assert.equal(infraRuns(rows, 'r', 1, 0), 3);
+    assert.ok(INFRA_RETRY_CAP >= 2);
 });

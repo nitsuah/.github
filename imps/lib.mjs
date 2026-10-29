@@ -273,7 +273,7 @@ export function duplicateImpPrs(open = [], merged = []) {
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs).length;
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && !r.infra && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs).length;
 }
 
 // What happened to an imp PR, for the ledger's `outcome`. `open` while it is
@@ -845,4 +845,22 @@ export function tailOutput(text = '', max = 2000) {
 export function outputSection(label, exit, tail, max = 900) {
     if (!exit || !tail) return '';
     return `\n\n${label} output (tail):\n\`\`\`\n${tailOutput(tail, max).replace(/\`\`\`/g, "'''")}\n\`\`\``;
+}
+
+// A run that ended before the imp did anything because the router or its upstream provider failed
+// (stash#346: one turn, "API Error: upstream connection lost", then "no commits, tests not run").
+// That is infrastructure, not a verdict on the issue, so it must not use up an attempt.
+export function isApiInfraError(metrics) {
+    if (!metrics || !metrics.isError || metrics.toolTurns > 0) return false;
+    const text = String(metrics.finalText || '');
+    // Permanent request errors win over any transient-sounding text ("... try again with a shorter prompt").
+    if (/\b40[0-4]\b|prompt is too long|invalid.?request|context.?(?:length|window)|too many tokens/i.test(text)) return false;
+    return /^API Error:/i.test(text) && /upstream|connection|overloaded|\b(?:429|5\d\d)\b|time.?d? ?out|rate.?limit|unavailable|ECONN|hang up|try again/i.test(text);
+}
+
+// How many infra-flagged runs this issue had since `sinceMs`: caps the free retries so a router that keeps
+// failing cannot re-queue one issue every cycle and spend the shared daily budget.
+export const INFRA_RETRY_CAP = 3;
+export function infraRuns(rows = [], repo, issue, sinceMs = 0) {
+    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && r.infra && Date.parse(r.startedAt) >= sinceMs).length;
 }
