@@ -367,6 +367,11 @@ node imps\dispatch.mjs %IMPS_DRY_ARGS% >> "%IMPS_HOME%\label-watch.log" 2>&1
     Write-Ok "wrote $watch (5-min label watch; lock prevents overlap)"
 }
 
+# An embedded quote in a native-command argument: pwsh 7.3+ escapes it for the child itself,
+# so a pre-escaped \" would land in the task as a literal backslash-quote (cmd.exe ignores it).
+# Windows PowerShell 5.1 passes the string as written, so it needs the \" spelling.
+$q = if ($PSNativeCommandArgumentPassing -and $PSNativeCommandArgumentPassing -ne 'Legacy') { '"' } else { '\"' }
+
 # ── Scheduled Task ────────────────────────────────────────────────────────
 if (-not $SkipTask) {
     Write-Host "`nscheduled task:" -ForegroundColor Cyan
@@ -381,14 +386,14 @@ if (-not $SkipTask) {
         $start = (Get-Date).Date.AddMinutes(7)
         while ($start -le (Get-Date)) { $start = $start.AddHours(1) }
         $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c \`"{0}\`"" -f $hourly)
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c `"{0}`"" -f $hourly)
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $hourlyTrigger -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07)"
     } catch {
         # Policy or elevation refused the logon trigger: keep the hourly task anyway.
-        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
+        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c {1}{0}{1}" -f $hourly, $q) /RL LIMITED /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR ("cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
+            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR ("cmd.exe /d /c {1}{0}{1}" -f $hourly, $q) /RL LIMITED /F 2>$null | Out-Null
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Bad "no at-logon trigger: $($_.Exception.Message)"
@@ -415,7 +420,7 @@ if (-not $SkipTask) {
 
     & schtasks /Delete /TN $WatchName /F 2>$null | Out-Null
     if ($wantLabelWatch) {
-        & schtasks /Create /TN $WatchName /SC MINUTE /MO 5 /TR "conhost.exe --headless cmd.exe /d /c \`"$watch\`"" /RL LIMITED /F | Out-Null
+        & schtasks /Create /TN $WatchName /SC MINUTE /MO 5 /TR "conhost.exe --headless cmd.exe /d /c $q$watch$q" /RL LIMITED /F | Out-Null
         if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$WatchName' (every 5 min; lock prevents overlap)" }
         else { Write-Bad "could not register '$WatchName'" }
     } else {
