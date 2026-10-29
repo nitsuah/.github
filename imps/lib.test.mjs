@@ -705,6 +705,9 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError('ssh: connect to host github.com port 22: Connection timed out'), true);
     assert.equal(isTransientNetworkError('git@github.com: Permission denied (publickey).'), false);
     assert.equal(isTransientNetworkError('Error: brief front matter needs repo and issue'), false);
+    assert.equal(isTransientNetworkError('gh: Something went wrong. Check https://www.githubstatus.com for more info'), true);
+    assert.equal(isTransientNetworkError('HTTP 502: Bad Gateway (https://api.github.com/graphql)'), true);
+    assert.equal(isTransientNetworkError('HTTP 404: Not Found'), false);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
 });

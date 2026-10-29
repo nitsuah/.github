@@ -379,8 +379,18 @@ async function work(issue) {
         const m = row.metrics || {};
         const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
         if (row.gate?.pass) {
-            const pr = await node(['pr', id]);
-            const url = (pr.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
+            const prUrl = (out) => (out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/) || [])[0];
+            let pr = await node(['pr', id]);
+            let url = prUrl(pr.out);
+            // The work already passed the gate: a GitHub blip while opening the PR (stash#344, "see githubstatus.com")
+            // is retried instead of failing the issue.
+            for (const waitMs of [20_000, 60_000]) {
+                if (url || !isTransientNetworkError(pr.out)) break;
+                log({ event: 'pr-retry', repo, number, id, waitMs });
+                await new Promise((r) => setTimeout(r, waitMs));
+                pr = await node(['pr', id]);
+                url = prUrl(pr.out);
+            }
             if (url) {
                 beat(url);
                 relabel(repo, number, 'imp:pr', ['imp:working']);
