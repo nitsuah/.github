@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, tailOutput, outputSection, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -684,4 +684,23 @@ test('kitTable groups runs by kit sha and shows which gate failures appeared or 
     assert.deepEqual(t[0].top, ['no commits x2', 'diff N lines > N x1']);
     assert.deepEqual(t[1].newReasons, ['lint exit N']);
     assert.deepEqual(t[1].gone.sort(), ['diff N lines > N', 'no commits']);
+});
+
+test('tailOutput keeps the end of the output, strips ANSI and cuts at a line boundary', () => {
+    const noisy = '\u001b[31mFAIL\u001b[0m a\r\n' + Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
+    const t = tailOutput(noisy, 100);
+    assert.ok(t.length <= 100);
+    assert.match(t, /line 199$/);
+    assert.doesNotMatch(t, /\u001b|\r/);
+    assert.match(t, /^line \d+/, 'starts on a whole line');
+    assert.equal(tailOutput('  short  '), 'short');
+    assert.equal(tailOutput(undefined), '');
+});
+
+test('outputSection fences a failing step output and is empty otherwise', () => {
+    const s = outputSection('Test', 1, 'FAIL x\n``` nested');
+    assert.match(s, /^\n\nTest output \(tail\):\n```\nFAIL x\n''' nested\n```$/);
+    assert.equal(outputSection('Test', 0, 'FAIL x'), '');
+    assert.equal(outputSection('Test', 1, ''), '');
+    assert.equal(outputSection('Lint', 1, undefined), '');
 });

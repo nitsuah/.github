@@ -805,3 +805,19 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
     }
     return kits;
 }
+
+// The gate only kept `tests exit 1`, never why, so a repeating failure could not be diagnosed afterwards.
+// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the ledger and on the issue.
+export function tailOutput(text = '', max = 2000) {
+    const plain = String(text).replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '').replace(/\r/g, '').trim();
+    if (plain.length <= max) return plain;
+    const cut = plain.slice(-max);
+    const nl = cut.indexOf('\n');
+    return (nl > -1 && nl < cut.length - 1 ? cut.slice(nl + 1) : cut).trim();
+}
+
+/** A comment fragment with the failing command's output, or '' when there is none or the step passed. */
+export function outputSection(label, exit, tail, max = 900) {
+    if (!exit || !tail) return '';
+    return `\n\n${label} output (tail):\n\`\`\`\n${tailOutput(tail, max).replace(/\`\`\`/g, "'''")}\n\`\`\``;
+}

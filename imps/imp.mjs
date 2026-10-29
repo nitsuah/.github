@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr } from './lib.mjs';
+import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -152,7 +152,15 @@ async function run() {
 function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
-    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
+    // Output is echoed as before, and the tail of 'test' and 'lint' runs is kept for the ledger and the issue comment.
+    const tails = {};
+    const shell = (c, key) => {
+        const p = spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+        process.stdout.write(p.stdout || '');
+        process.stderr.write(p.stderr || '');
+        if (key) tails[key] = tailOutput(`${p.stdout || ''}\n${p.stderr || ''}`);
+        return p.status;
+    };
     // Formatting is mechanical, so the runner does it, not the model: run the
     // repo's formatter and commit any change as a separate runner commit.
     let formatted = false;
@@ -182,7 +190,7 @@ function runGate(id) {
     const leftover = git(r.worktree, 'status', '--porcelain').out;
     if (meta.test && leftover && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out === '0') {
         console.log(`tests (dirty tree): ${meta.test}`);
-        earlyTestExit = shell(meta.test);
+        earlyTestExit = shell(meta.test, 'test');
         const dirtyOut = git(r.worktree, 'status', '--porcelain').out;
         if (shouldAutoCommit({ impCommits: 0, dirty: dirtyOut, testExit: earlyTestExit })) {
             git(r.worktree, 'add', '-A');
@@ -204,11 +212,11 @@ function runGate(id) {
     let lintExit = null;
     if (meta.test && commits.length && testExit == null) {
         console.log(`tests: ${meta.test}`);
-        testExit = shell(meta.test);
+        testExit = shell(meta.test, 'test');
     }
     if (meta.lint && commits.length) {
         console.log(`lint: ${meta.lint}`);
-        lintExit = shell(meta.lint);
+        lintExit = shell(meta.lint, 'lint');
     }
     const g = gate({
         numstat, commits, testExit, dirty: Boolean(dirty),
@@ -222,7 +230,7 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, head, at: new Date().toISOString() } });
+    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(testExit ? { testTail: tails.test } : {}), ...(lintExit ? { lintTail: tails.lint } : {}), head, at: new Date().toISOString() } });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
