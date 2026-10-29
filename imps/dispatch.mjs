@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -596,7 +596,7 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 // readLedger, not readFileSync: a fresh machine has no runs.jsonl yet.
-const budget = loopBudget(readLedger());
+const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha });
 // An issue with no brief is skipped below, so it must not use up one of the --max
 // slots (with --max 1 a briefless issue at the head of the queue starved the cycle
 // every hour). Pick in batches until the slots hold issues that can run.
@@ -648,6 +648,21 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
                 log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
             }
         }
+        continue;
+    }
+    // A brief can name issues it cannot start before (front matter `depends:`). Hold it until they are closed or merged.
+    const blockers = unmetDepends(parseDepends(parseBrief(brief).meta.depends, i.repo), {
+        rows: readLedger(),
+        isOpen: (dep) => {
+            try {
+                return ghJson(['issue', 'view', String(dep.number), '-R', `${o.owner}/${dep.repo}`, '--json', 'state']).state === 'OPEN';
+            } catch {
+                return true;
+            }
+        },
+    });
+    if (blockers.length) {
+        log({ event: 'blocked-dep', repo: i.repo, number: i.number, on: blockers.map((b) => `${b.repo}#${b.number}`) });
         continue;
     }
     i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);
