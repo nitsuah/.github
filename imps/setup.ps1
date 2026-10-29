@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Bootstrap or repair a detached imps-runner checkout and (on Windows) the
 # hourly Scheduled Task + 5-minute label-watch (on by default). Idempotent:
 # re-running updates the kit without clobbering ~/.imps state (locks, logs,

@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Check prerequisites without installing. Exit 0 if all ok, 1 otherwise.
 #
 #   pwsh -File imps/doctor.ps1
