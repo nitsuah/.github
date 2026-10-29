@@ -465,7 +465,7 @@ const openImp = openImpAll.filter((p) => !p.closed && !p.labels.some((l) => l.na
 ledger = readLedger();
 const recentEvents = (() => {
     try {
-        return readFileSync(LOG, 'utf8').trim().split('\n').slice(-400).map((x) => {
+        return readFileSync(LOG, 'utf8').trim().split('\n').filter((x) => x.includes('"event":"fix-sweep"')).map((x) => {
             try {
                 return JSON.parse(x);
             } catch {

@@ -693,4 +693,6 @@ test('sweepIsRepeat hides a repeated clean fix-sweep but never a change or a non
     assert.equal(sweepIsRepeat(ev, 'p2', 'needs-human'), false);
     assert.equal(sweepIsRepeat([...ev, { event: 'fix-sweep', pr: 'p1', result: 'pushed' }], 'p1', 'clean'), false);
     assert.equal(sweepIsRepeat([], 'p1', 'clean'), false);
+    const noise = Array.from({ length: 1000 }, () => ({ event: 'cycle' }));
+    assert.equal(sweepIsRepeat([{ event: 'fix-sweep', pr: 'p1', result: 'clean' }, ...noise], 'p1', 'clean'), true);
 });
