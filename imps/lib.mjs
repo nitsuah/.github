@@ -810,3 +810,31 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
 export function isTransientNetworkError(text = '') {
     return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|TLS handshake timeout|Connection timed out|Operation timed out|Network is unreachable|ssh: connect to host \S+ port \d+: (Connection (refused|timed out)|Network is unreachable)/i.test(String(text));
 }
+
+// Test output can echo credentials (a failed assertion that prints a request, a .env dump). Blank the common
+// shapes before anything is stored or posted; this is a safety net, not a guarantee.
+export function redactSecrets(text = '') {
+    return String(text)
+        .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, '[redacted]')
+        .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, '[redacted]')
+        .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]')
+        .replace(/\b([A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD))(\s*[:=]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/g, '$1$2[redacted]')
+        .replace(/\bBearer\s+[A-Za-z0-9._~+\/=-]{12,}/gi, 'Bearer [redacted]')
+        .replace(/\b([A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|authorization))(["']?\s*[:=]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/gi, '$1$2[redacted]');
+}
+
+// The gate only kept `tests exit 1`, never why, so a repeating failure could not be diagnosed afterwards.
+// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the ledger and on the issue.
+export function tailOutput(text = '', max = 2000) {
+    const plain = redactSecrets(String(text)).replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '').replace(/\r/g, '').trim();
+    if (plain.length <= max) return plain;
+    const cut = plain.slice(-max);
+    const nl = cut.indexOf('\n');
+    return (nl > -1 && nl < cut.length - 1 ? cut.slice(nl + 1) : cut).trim();
+}
+
+/** A comment fragment with the failing command's output, or '' when there is none or the step passed. */
+export function outputSection(label, exit, tail, max = 900) {
+    if (!exit || !tail) return '';
+    return `\n\n${label} output (tail):\n\`\`\`\n${tailOutput(tail, max).replace(/\`\`\`/g, "'''")}\n\`\`\``;
+}

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,5 +161,25 @@ test('latency: a 50k-line dispatch.jsonl and big ledger render in under 100 ms',
     const ms = performance.now() - t0;
     assert.ok(ms < 100, `render took ${ms.toFixed(1)} ms`);
     assert.match(out, /queue 7/);
+    rmSync(h, { recursive: true });
+});
+
+test('README statusLine snippet: no raw CR/LF in the command, and it runs against a CRLF kit-path.txt', (t) => {
+    const readme = readFileSync(join(dirname(WATCH), 'README.md'), 'utf8');
+    const block = readme.match(/```json\r?\n([\s\S]*?"statusLine"[\s\S]*?)```/);
+    assert.ok(block, 'statusLine snippet not found in README');
+    const { command } = JSON.parse(block[1]).statusLine;
+    assert.doesNotMatch(command, /[\r\n]/, 'a JSON \\r\\n escape became a real CR/LF; write \\\\r\\\\n');
+    // Claude Code runs the command under Git Bash on Windows; a bare `bash` there can be WSL, which
+    // does not inherit IMPS_HOME or share the Windows path, so pick Git Bash explicitly.
+    const bash = process.platform === 'win32'
+        ? [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs')]
+            .filter(Boolean).map((d) => join(d, 'Git', 'bin', 'bash.exe')).find((p) => existsSync(p))
+        : 'bash';
+    if (!bash) return t.skip('Git Bash not found');
+    const h = home();
+    put(h, 'kit-path.txt', `${dirname(dirname(WATCH))}\r\n`);
+    const r = spawnSync(bash, ['-c', command], { encoding: 'utf8', timeout: 10000, env: { ...process.env, IMPS_HOME: h } });
+    assert.match(r.stdout, /imps idle/, r.stderr);
     rmSync(h, { recursive: true });
 });

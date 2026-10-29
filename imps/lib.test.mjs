@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, isTransientNetworkError, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -696,4 +696,38 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError('Error: brief front matter needs repo and issue'), false);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
+});
+
+test('tailOutput keeps the end of the output, strips ANSI and cuts at a line boundary', () => {
+    const noisy = '\u001b[31mFAIL\u001b[0m a\r\n' + Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
+    const t = tailOutput(noisy, 100);
+    assert.ok(t.length <= 100);
+    assert.match(t, /line 199$/);
+    assert.doesNotMatch(t, /\u001b|\r/);
+    assert.match(t, /^line \d+/, 'starts on a whole line');
+    assert.equal(tailOutput('  short  '), 'short');
+    assert.equal(tailOutput(undefined), '');
+});
+
+test('outputSection fences a failing step output and is empty otherwise', () => {
+    const s = outputSection('Test', 1, 'FAIL x\n``` nested');
+    assert.match(s, /^\n\nTest output \(tail\):\n```\nFAIL x\n''' nested\n```$/);
+    assert.equal(outputSection('Test', 0, 'FAIL x'), '');
+    assert.equal(outputSection('Test', 1, ''), '');
+    assert.equal(outputSection('Lint', 1, undefined), '');
+});
+
+test('redactSecrets blanks tokens, keys and credential assignments but leaves ordinary output', () => {
+    const out = redactSecrets([
+        'token ghp_abcdefghijklmnopqrstuv1234 used',
+        'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123',
+        'ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx',
+        'password: "hunter2hunter2"',
+        'NINEROUTER_KEY=abc123',
+        'AKIAABCDEFGHIJKLMNOP',
+        'FAIL src/a.test.ts > renders 3 rows',
+    ].join('\n'));
+    assert.doesNotMatch(out, /ghp_abc|abcdefghijklmnopqrstuvwxyz0123|sk-ant|hunter2|abc123|AKIAABC/);
+    assert.match(out, /FAIL src\/a\.test\.ts > renders 3 rows/);
+    assert.match(tailOutput('x token=supersecretvalue'), /token=\[redacted\]/);
 });
