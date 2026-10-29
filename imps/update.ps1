@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Pull the latest merged kit into the detached imps-runner checkout.
 # Does not touch ~/.imps state (ledger, locks, logs, config).
 #
