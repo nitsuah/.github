@@ -391,12 +391,29 @@ async function work(issue) {
                 pr = await node(['pr', id]);
                 url = prUrl(pr.out);
             }
+            // The PR may exist even though its URL never came back (response lost after creation). Adopt it by the
+            // run's branch rather than reporting a failure; imp.mjs's review/merge step did not run for it, so a
+            // later fix-sweep and the owner handle it.
+            let adopted = false;
+            if (!url && isTransientNetworkError(pr.out)) {
+                try {
+                    const branch = ledgerRow(id)?.branch;
+                    const found = branch ? ghJson(['pr', 'list', '-R', slug, '--head', branch, '--state', 'open', '--json', 'url']) : [];
+                    if (found?.[0]?.url) {
+                        url = found[0].url;
+                        adopted = true;
+                        updateRun(id, { pr: url });
+                    }
+                } catch (e) {
+                    log({ event: 'pr-lookup-error', repo, number, id, error: String(e.message).slice(0, 200) });
+                }
+            }
             if (url) {
                 beat(url);
                 relabel(repo, number, 'imp:pr', ['imp:working']);
                 note(repo, number, `An imp opened a PR: ${url} (run \`${id}\`: ${stats}). Auto-merge runs only after review approve, every check green, and earned trust.`);
                 // The review + merge decision live inside `imp.mjs pr`.
-                return log({ event: 'pr', repo, number, id, url, review: (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
+                return log({ event: 'pr', repo, number, id, url, review: adopted ? 'skipped (adopted after a lost response)' : (pr.out.match(/posted (\w+)/) || [])[1] || 'failed' });
             }
             relabel(repo, number, 'imp:failed', ['imp:working']);
             note(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);

@@ -707,6 +707,8 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError('Error: brief front matter needs repo and issue'), false);
     assert.equal(isTransientNetworkError('gh: Something went wrong. Check https://www.githubstatus.com for more info'), true);
     assert.equal(isTransientNetworkError('HTTP 502: Bad Gateway (https://api.github.com/graphql)'), true);
+    assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 503"), true);
+    assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 403"), false);
     assert.equal(isTransientNetworkError('HTTP 404: Not Found'), false);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
