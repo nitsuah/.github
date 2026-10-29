@@ -167,7 +167,7 @@ Live view of the imps without a second window. `watch.mjs` is read-only (no writ
 {
   "statusLine": {
     "type": "command",
-    "command": "node \"$(tr -d '\r\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/watch.mjs\" --statusline",
+    "command": "node \"$(tr -d '\\r\\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/watch.mjs\" --statusline",
     "refreshInterval": 2
   }
 }
