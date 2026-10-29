@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDepends, unmetDepends, deriveFormat, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
@@ -788,6 +788,25 @@ test('loopBudget cooldown follows defaults.cooldownMs: two straight gate failure
     const fail = (id, hoursAgo) => ({ id, repo: 'r', issue: 1, startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons: ['x'] } });
     assert.ok(loopBudget([fail('imp_1', 14), fail('imp_2', 10)], now).cooldown.r, 'last failure 10 h ago: still cooling');
     assert.equal(loopBudget([fail('imp_1', 20), fail('imp_2', 13)], now).cooldown.r, undefined, 'last failure 13 h ago: cooled down');
+});
+
+test('isSizeOnlyFailure is true only when every failure reason is the diff cap', () => {
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: ['diff 136 lines > 100'] }), true);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: ['diff 70 lines > 60', 'diff 70 lines > 60'] }), true);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: ['diff 70 lines > 60', 'tests exit 1'] }), false);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: ['lint exit 2'] }), false);
+    assert.equal(isSizeOnlyFailure({ pass: true, reasons: [] }), false);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: [] }), false);
+    assert.equal(isSizeOnlyFailure(undefined), false);
+});
+
+test('loopBudget cooldown ignores size-only gate failures but still counts real ones', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const run = (id, hoursAgo, reasons) => ({ id, repo: 'r', issue: 1, startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons } });
+    const size = ['diff 136 lines > 100'];
+    assert.equal(loopBudget([run('imp_1', 3, size), run('imp_2', 2, size)], now).cooldown.r, undefined, 'two size-only misses: no cooldown');
+    assert.ok(loopBudget([run('imp_1', 3, ['lint exit 2']), run('imp_2', 2, ['tests exit 1'])], now).cooldown.r, 'two real failures: cooldown');
+    assert.equal(loopBudget([run('imp_1', 3, ['lint exit 2']), run('imp_2', 2, size)], now).cooldown.r, undefined, 'one real + one size-only: not two straight real failures');
 });
 
 test('deriveFormat turns a plain eslint lint command into its --fix twin and leaves anything else alone', () => {
