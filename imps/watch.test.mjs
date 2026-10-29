@@ -24,7 +24,7 @@ test('idle: no lock, last cycle, quota, no lanes', () => {
     put(h, 'dispatch.jsonl', jl([cycle(50), { at: at(49), event: 'done' }]));
     put(h, 'model_quota.json', JSON.stringify({ MAX: { used: 3, window: 1 }, other: { used: 0, window: 1 } }));
     const out = frame(h);
-    assert.match(out, /^○ imps idle │ queue 7 (6 waiting) │ picked 1 │ last cycle 50m00s ago │ quota MAX 3/);
+    assert.match(out, /^○ imps idle │ queue 7 \(6 waiting\) │ picked 1 │ last cycle 50m00s ago │ quota MAX 3/);
     assert.doesNotMatch(out, /other/);
     rmSync(h, { recursive: true });
 });
