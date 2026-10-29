@@ -805,3 +805,8 @@ export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
     }
     return kits;
 }
+
+// The machine could not reach GitHub or the router (not a verdict on the issue or the imp).
+export function isTransientNetworkError(text = '') {
+    return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|TLS handshake timeout|Connection timed out|Operation timed out/i.test(String(text));
+}
