@@ -771,3 +771,37 @@ export function tokenTable(all, { sinceMs = 0, now = Date.now() } = {}) {
         reviews: Object.entries(reviews).map(([mode, v]) => ({ mode, runs: v.n, avgInput: Math.round(v.input / v.n), avgOutput: Math.round(v.output / v.n) })),
     };
 }
+
+// Did a kit change help? Groups imp runs by the kit commit they ran on so a merged PR shows up as
+// a before/after in PR rate and in which gate failures appear or disappear (`kitSha` is on every row).
+export function kitTable(all, { sinceMs = 0, now = Date.now() } = {}) {
+    const runs = all.filter((r) => r.startedAt && r.kitSha && /^imp_\d/.test(r.id) && (!sinceMs || now - Date.parse(r.startedAt) < sinceMs));
+    const by = new Map();
+    for (const r of runs) {
+        const k = by.get(r.kitSha) || { kit: r.kitSha, first: r.startedAt, runs: 0, gated: 0, pass: 0, pr: 0, reasons: {} };
+        k.runs++;
+        if (r.startedAt < k.first) k.first = r.startedAt;
+        if (r.gate) {
+            k.gated++;
+            if (r.gate.pass) k.pass++;
+            else for (const why of r.gate.reasons || []) k.reasons[why.replace(/\d+/g, 'N')] = (k.reasons[why.replace(/\d+/g, 'N')] || 0) + 1;
+        }
+        if (r.pr) k.pr++;
+        by.set(r.kitSha, k);
+    }
+    const kits = [...by.values()].sort((a, b) => (a.first < b.first ? -1 : 1)).map((k) => ({
+        kit: k.kit, first: k.first, runs: k.runs, gated: k.gated, pass: k.pass, pr: k.pr,
+        top: Object.entries(k.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([why, n]) => `${why} x${n}`),
+    }));
+    const seen = new Set();
+    for (const k of kits) {
+        k.newReasons = Object.keys(by.get(k.kit).reasons).filter((why) => !seen.has(why));
+        for (const why of Object.keys(by.get(k.kit).reasons)) seen.add(why);
+    }
+    for (let i = 1; i < kits.length; i++) {
+        const prev = Object.keys(by.get(kits[i - 1].kit).reasons);
+        const cur = new Set(Object.keys(by.get(kits[i].kit).reasons));
+        kits[i].gone = prev.filter((why) => !cur.has(why));
+    }
+    return kits;
+}
