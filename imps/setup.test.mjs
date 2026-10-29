@@ -38,3 +38,6 @@ test('setup.ps1 never hard-codes a backslash-quote in a task command (cmd.exe ig
   assert.ok(lines.length >= 3, 'task registration lines not found');
   for (const l of lines) assert.doesNotMatch(l, /\\[`"]/, l);
 });
+test('setup.ps1 uses a finite repetition duration (TimeSpan.MaxValue is out of range for the task XML)', () => {
+  assert.doesNotMatch(ps1, /\[TimeSpan\]::MaxValue/);
+});
