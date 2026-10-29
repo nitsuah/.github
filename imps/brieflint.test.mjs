@@ -40,3 +40,10 @@ test('a test config missing on origin/main is a problem; a new allow file is onl
     assert.deepEqual(r.problems, ['test config not on origin/main: config/v.mjs']);
     assert.deepEqual(r.warnings, ['allow path not on origin/main (new file?): a.test.js']);
 });
+
+test('a body that talks about a dependency needs a `depends:` line', () => {
+    const body = '## Issue o/r#1\nThis needs the helper from #318: if the #318 PR has not merged yet, stop.\n';
+    const r = lintBrief(brief('', body));
+    assert.ok(r.warnings.some((w) => w.includes('depends:')));
+    assert.deepEqual(lintBrief(brief('depends: #318\n', body)).warnings, []);
+});

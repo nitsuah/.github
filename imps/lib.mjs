@@ -332,13 +332,13 @@ export function staleImpLabels(labels = []) {
 // `runsLast24h` counts imp runs in the last 24 h (the daily cap), and a repo
 // whose last two gated runs both failed sits out for 24 h after the latest
 // failure (`cooldown`), until triage fixes the brief or the cause.
-export function loopBudget(rows, now = Date.now()) {
+export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     const day = 24 * 3600_000;
     const runs = rows.filter((r) => r.startedAt && !r.ingested && /^imp_\d/.test(r.id));
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
@@ -903,4 +903,22 @@ export function feedbackSection(gate, id) {
         if (tail) parts.push('', `${label} output (tail):`, '~~~', String(tail).replace(/^~~~/gm, '---').slice(-1500), '~~~');
     }
     return `\n\n${parts.join('\n')}\n`;
+}
+
+// A brief may name the issues it cannot start before, as `depends: #318, vigil#12, nitsuah/fire#7` in its front
+// matter. fire#319 was queued next to fire#318 (whose helper it needs), correctly stopped with "no commits" and
+// counted as a failure that cooled the whole repo. This reads the list; the dispatcher holds the issue until each
+// dependency is closed or merged.
+export function parseDepends(value, defaultRepo) {
+    const out = [];
+    for (const m of String(value || '').matchAll(/(?:(?:([\w.-]+)\/)?([\w.-]+))?#(\d+)/g)) out.push({ ...(m[1] ? { owner: m[1] } : {}), repo: m[2] || defaultRepo, number: Number(m[3]) });
+    return out;
+}
+
+/** The dependencies that still block: open on GitHub and not merged according to the ledger (ledger rows carry no owner, so an `owner/` reference is always looked up on GitHub). */
+export function unmetDepends(deps = [], { isOpen, rows = [] }) {
+    return deps.filter((d) => {
+        if (!d.owner && rows.some((r) => r.repo === d.repo && Number(r.issue) === d.number && r.outcome === 'merged')) return false;
+        return isOpen(d); // unknown counts as open: wait rather than run too early
+    });
 }
