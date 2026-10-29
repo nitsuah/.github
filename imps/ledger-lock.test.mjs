@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -39,24 +39,26 @@ test('concurrent appends and updates from several processes lose nothing', async
         assert.ok(rows.filter((r) => r.id.startsWith('imp_w')).every((r) => r.n === 1), 'every per-row update survived');
         assert.equal(existsSync(join(home, 'runs.jsonl.lock')), false, 'the lock file is released');
     } finally {
-        rmSync(home, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 });
 
-test('a lock left by a dead process is broken, not waited on', async () => {
+test('a lock left by a crashed process is broken once it is older than the stale age, not waited on forever', async () => {
     const home = mkdtempSync(join(tmpdir(), 'imps-lock-'));
     try {
         writeFileSync(join(home, 'runs.jsonl'), JSON.stringify({ id: 'imp_x', repo: 'r', issue: 1 }) + '\n');
         writeFileSync(join(home, 'runs.jsonl.lock'), String(2 ** 22 + 4242)); // no such pid
+        const old = new Date(Date.now() - 60_000);
+        utimesSync(join(home, 'runs.jsonl.lock'), old, old); // a minute old: stale
         const t0 = Date.now();
         await new Promise((resolve, reject) => {
             const code = `import { update } from ${JSON.stringify(RUNNER)}; update('imp_x', { ok: true });`;
             const p = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, IMPS_HOME: home }, stdio: 'ignore' });
             p.on('close', (c) => (c === 0 ? resolve() : reject(new Error(`exit ${c}`))));
         });
-        assert.ok(Date.now() - t0 < 10_000, 'did not wait out the stale-lock timeout');
+        assert.ok(Date.now() - t0 < 10_000, 'broke the stale lock instead of timing out');
         assert.equal(JSON.parse(readFileSync(join(home, 'runs.jsonl'), 'utf8').trim()).ok, true);
     } finally {
-        rmSync(home, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 });

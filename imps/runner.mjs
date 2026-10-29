@@ -80,12 +80,14 @@ export function isGitDirty(path) {
 }
 // A cross-process lock around every ledger write. update() reads the whole file, patches one row and renames a
 // temp file over it, while imp.mjs appends a row when a run starts: an append that landed between the read and
-// the rename used to be lost. An exclusive lock file (O_EXCL) serialises them; a lock whose owner is dead, or older
-// than LOCK_STALE_MS, is broken. IMPS_LEDGER_LOCK=0 turns it off.
+// the rename used to be lost. An exclusive lock file (O_EXCL) serialises them. A lock is broken ONLY by age:
+// nobody holds it for more than milliseconds, and checking the owner pid first is a check-then-delete race (the
+// owner can finish and a new holder take the lock between the check and the unlink, which then deletes a live
+// lock and lets two writers in). A crashed holder therefore costs at most LOCK_STALE_MS. IMPS_LEDGER_LOCK=0
+// turns the lock off.
 const LOCK = `${LEDGER}.lock`;
-export const LOCK_STALE_MS = 30_000;
+export const LOCK_STALE_MS = 10_000;
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 let lockDepth = 0;
 export function withLedgerLock(fn, { timeoutMs = 15_000 } = {}) {
     if (process.env.IMPS_LEDGER_LOCK === '0' || lockDepth > 0) return fn(); // reentrant: update() -> save()
@@ -97,13 +99,17 @@ export function withLedgerLock(fn, { timeoutMs = 15_000 } = {}) {
             closeSync(fd);
             break;
         } catch (e) {
-            if (e.code !== 'EEXIST') throw e;
-            let stale = false;
+            // Windows reports EPERM/EACCES (not EEXIST) while another process's delete of the lock is still pending.
+            if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+            let age = 0;
             try {
-                const owner = Number(readFileSync(LOCK, 'utf8').trim());
-                stale = (Number.isFinite(owner) && owner > 0 && !pidAlive(owner)) || Date.now() - statSync(LOCK).mtimeMs > LOCK_STALE_MS;
-            } catch { stale = true; } // the lock vanished or is unreadable: try to take it again
-            if (stale) { try { unlinkSync(LOCK); } catch { /* someone else broke it first */ } continue; }
+                age = Date.now() - statSync(LOCK).mtimeMs;
+            } catch (er) {
+                // Vanished between our failed create and this stat: retry the create at once. Never unlink here: a new
+                // holder may already have made a fresh lock at the same path, and deleting it lets two writers in.
+                if (er.code === 'ENOENT') continue;
+            }
+            if (age > LOCK_STALE_MS) { try { unlinkSync(LOCK); } catch { /* someone else broke it first */ } continue; }
             if (Date.now() > deadline) throw new Error(`ledger lock busy for ${timeoutMs} ms (${LOCK})`);
             sleepSync(15 + Math.floor(Math.random() * 25));
         }
@@ -120,7 +126,16 @@ export function withLedgerLock(fn, { timeoutMs = 15_000 } = {}) {
 export const save = (all) => withLedgerLock(() => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;
     writeFileSync(tmp, all.map((r) => JSON.stringify(r)).join('\n') + '\n');
-    renameSync(tmp, LEDGER);
+    // Windows can refuse the rename for a moment while another process (a viewer, an indexer) has the file open.
+    for (let attempt = 0; ; attempt++) {
+        try {
+            renameSync(tmp, LEDGER);
+            return;
+        } catch (e) {
+            if (attempt >= 8 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+            sleepSync(25 * (attempt + 1));
+        }
+    }
 });
 export function update(id, patch) {
     return withLedgerLock(() => {
