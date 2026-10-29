@@ -201,11 +201,16 @@ function runGate(id) {
         const dirtyOut = git(r.worktree, 'status', '--porcelain').out;
         if (shouldAutoCommit({ impCommits: 0, dirty: dirtyOut, testExit: earlyTestExit })) {
             git(r.worktree, 'add', '-A');
-            git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
-            autoCommitted = true;
-            // The imp's work is this commit. impHead was read before it existed, so the
-            // size check below compared baseSha..baseSha and saw zero lines.
-            impHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+            const salvage = git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
+            if (salvage.code) {
+                // A rejected commit (a hook, a lock) means the work is still uncommitted: say so, and do not format over it.
+                console.log(`salvage commit failed (${String(salvage.err).slice(0, 200)}); leaving the edits uncommitted`);
+            } else {
+                autoCommitted = true;
+                // The imp's work is this commit. impHead was read before it existed, so the
+                // size check below compared baseSha..baseSha and saw zero lines.
+                impHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+            }
         }
     }
     // The format step above skips a dirty tree, so work the runner just salvaged was never formatted: five of the six
@@ -216,8 +221,12 @@ function runGate(id) {
         shell(formatCmd);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
-            git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
-            formatted = true;
+            const style = git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
+            if (!style.code) {
+                formatted = true;
+                // The salvage test ran on the unformatted tree; test the final commit instead.
+                earlyTestExit = null;
+            }
         }
     }
     const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
