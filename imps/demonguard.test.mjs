@@ -65,3 +65,12 @@ test('the order matters: conflicts and a stale bot review are handled before the
     assert.equal(act({ mergeState: 'DIRTY', botChangesRequested: true }), 'wait-fix');
     assert.notEqual(act({ botChangesRequested: true, openThreads: 0 }), 'merge');
 });
+
+test('a PR changed after a non-approving review is re-reviewed instead of waiting a day for a human (the merge bottleneck)', () => {
+    const changed = { verdict: 'request_changes', reviewedAt: ago(3 * 3600_000), lastCommitAt: ago(1 * 3600_000) };
+    assert.equal(act(changed), 'rereview');
+    assert.equal(act({ ...changed, createdAt: ago(30 * 3600_000) }), 'rereview', 'even when it is old: the fix round is what changed');
+    assert.equal(act({ ...changed, lastCommitAt: ago(4 * 3600_000) }), 'wait-fix', 'no commit since the review: still waiting for the fix-sweep');
+    assert.equal(act({ ...changed, reviewedAt: undefined }), 'wait-fix', 'unknown review time: old behaviour');
+    assert.equal(act({ ...changed, verdict: 'approve' }), 'merge', 'an approving review is never re-run');
+});
