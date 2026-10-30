@@ -74,8 +74,11 @@ test('no kit-path and no env var is reported, not guessed', () => {
     }
 });
 
-const helperSource = readFileSync(SCRIPT, 'utf8').match(/export function countDispatchSchedulers[\\s\\S]*?\\n}/)?.[0];
-assert.ok(helperSource, 'scheduler topology helper is exported');
+const warlockSource = readFileSync(SCRIPT, 'utf8');
+const helperStart = warlockSource.indexOf('export function countDispatchSchedulers');
+const helperEnd = warlockSource.indexOf('\\n}', helperStart) + 2;
+const helperSource = warlockSource.slice(helperStart, helperEnd);
+assert.ok(helperSource.startsWith('export function'), 'scheduler topology helper is exported');
 const countDispatchSchedulers = runInNewContext('(' + helperSource.replace(/^export /, '') + ')');
 
 test('Unix dispatch scheduler topology counts exactly one active dispatch scheduler', () => {
@@ -92,5 +95,5 @@ test('Unix dispatch scheduler topology counts exactly one active dispatch schedu
         assert.equal(result.count, fixture.count);
         assert.equal(result.names.length, fixture.count);
     }
-    assert.deepEqual(countDispatchSchedulers(cases[3].cron, hourly, false).names, ['cron: hourly.sh #1', 'cron: hourly.sh #2']);
+    assert.equal(countDispatchSchedulers(cases[3].cron, hourly, false).names.join(','), 'cron: hourly.sh #1,cron: hourly.sh #2');
 });
