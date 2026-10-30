@@ -4,7 +4,7 @@
 // runs that brief's `test:` then `lint:` exactly as written, so the imp never
 // needs (or gets) a general `docker run` permission. Exit code 0 only if both pass.
 import { spawnSync } from 'node:child_process';
-import { openSync, closeSync, fstatSync, readSync, rmSync } from 'node:fs';
+import { openSync, closeSync, fstatSync, readSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolve } from 'node:path';
@@ -39,15 +39,24 @@ for (const [name, cmd] of [['test', meta.test], ['lint', meta.lint]]) {
     if (!cmd) continue;
     console.log(`── ${name}: ${cmd}`);
     // Only the tail is printed: a full vitest/eslint log per re-run is what filled the imps' context and turn budget.
-    // Output goes to a temp file, not a pipe: no buffer limit can turn a passing command into a failure, and only the end is read back.
-    const outPath = join(tmpdir(), `runtest-${process.pid}-${name}.log`);
-    const fd = openSync(outPath, 'w');
-    const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: ['ignore', fd, fd], windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
-    closeSync(fd);
-    console.log(lastLines(readTail(outPath)));
-    rmSync(outPath, { force: true });
-    console.log(`── ${name} exit ${r.status}`);
-    if (r.status !== 0) code = r.status ?? 1;
+    // Output goes to a file in a private temp directory, not a pipe: no buffer limit can turn a passing command into a failure,
+    // the file is created exclusively and owner-only, and only the end is read back.
+    const dir = mkdtempSync(join(tmpdir(), 'runtest-'));
+    const outPath = join(dir, `${name}.log`);
+    let tail = '';
+    let status;
+    try {
+        const fd = openSync(outPath, 'wx', 0o600);
+        const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: ['ignore', fd, fd], windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+        closeSync(fd);
+        status = r.status;
+        tail = readTail(outPath);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+    console.log(lastLines(tail));
+    console.log(`── ${name} exit ${status}`);
+    if (status !== 0) code = status ?? 1;
 }
 if (!meta.test && !meta.lint) console.log('runtest: this brief has no test or lint command');
 process.exit(code);

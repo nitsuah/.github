@@ -48,6 +48,9 @@ test('runtest prints only the last 60 lines of long output', () => {
     assert.match(r.out, /\.\.\. 140 earlier lines omitted/);
     assert.match(r.out, /line200/);
     assert.match(r.out, /line141\b/);
+    const lines = r.out.split(/\r?\n/);
+    const at = lines.findIndex((l) => l.includes('earlier lines omitted'));
+    assert.deepEqual(lines.slice(at + 1, at + 61), Array.from({ length: 60 }, (_, i) => `line${141 + i}`), 'exactly the final 60 lines, in order');
     assert.doesNotMatch(r.out, /line140\b/);
     assert.doesNotMatch(r.out, /line1\b/);
 });
