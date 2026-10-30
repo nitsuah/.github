@@ -939,3 +939,10 @@ export function unmetDepends(deps = [], { isOpen, rows = [] }) {
         return isOpen(d); // unknown counts as open: wait rather than run too early
     });
 }
+
+/** The last `n` lines of command output, with a marker for what was cut, so a re-run does not flood an imp's context. */
+export function lastLines(text = '', n = 60) {
+    const lines = String(text).replace(/\r/g, '').replace(/\n+$/, '').split('\n');
+    if (lines.length <= n) return lines.join('\n');
+    return `... ${lines.length - n} earlier lines omitted\n${lines.slice(-n).join('\n')}`;
+}
