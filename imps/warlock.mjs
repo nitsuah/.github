@@ -21,7 +21,9 @@ const STALE_LOCK_MS = 3 * 3600_000;
 
 export function countDispatchSchedulers(cronLines, hourlyPath, systemdActive) {
     const cron = cronLines.filter((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes(hourlyPath));
-    return { count: cron.length + Number(systemdActive), names: [...cron.map(() => 'cron: hourly.sh'), ...(systemdActive ? ['systemd: imps-hourly.timer'] : [])] };
+    const names = cron.map((_, i) => 'cron: hourly.sh' + (cron.length > 1 ? ' #' + (i + 1) : ''));
+    if (systemdActive) names.push('systemd: imps-hourly.timer');
+    return { count: names.length, names };
 }
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok, detail });
