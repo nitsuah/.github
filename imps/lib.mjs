@@ -272,8 +272,20 @@ export function duplicateImpPrs(open = [], merged = []) {
 // gives the issue a fresh allowance.
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
-    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && !r.infra && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs).length;
+    const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && !r.infra && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
+    // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
+    return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
+}
+
+// A run the model ended almost at once without touching the repo (a failover model that answers and stops):
+// "success" from the model's side, 0-2 tool turns, nothing committed. It says nothing about the issue or the brief.
+export const NOOP_FREE = 2;
+export function isNoopRun(r) {
+    const m = r && r.metrics;
+    if (!m || m.end !== 'success' || !r.gate || r.gate.pass !== false) return false;
+    const tools = Number.isFinite(m.toolTurns) ? m.toolTurns : m.turns;
+    return tools <= 2 && Array.isArray(r.gate.reasons) && r.gate.reasons.includes('no commits');
 }
 
 // What happened to an imp PR, for the ledger's `outcome`. `open` while it is
@@ -338,7 +350,7 @@ export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
