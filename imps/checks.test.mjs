@@ -293,4 +293,6 @@ test('a diff over 100 lines with no test file is never auto-merged', () => {
     assert.equal(mayAutoMerge(base).ok, true, 'no gate info: unchanged behaviour');
     assert.equal(bigUntestedDiff({ lines: 101, files: ['x.py', 'test_x.py'] }), false);
     assert.equal(bigUntestedDiff({ lines: 101, files: [] }), true);
+    assert.equal(bigUntestedDiff({ lines: 101, files: ['app/a.js', 'tests/fixtures/input.json'] }), true, 'a fixture is not a test file');
+    assert.equal(bigUntestedDiff({ lines: 101, files: ['app/a.js', 'tests/unit/a.mjs'] }), false);
 });

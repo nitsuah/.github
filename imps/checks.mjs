@@ -143,7 +143,7 @@ export function earnedTrustCount({ ledgerCount = 0, githubCount = 0 } = {}) {
 }
 
 export const BIG_DIFF_LINES = 100;
-const TEST_PATH = /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go)$/i;
+const TEST_PATH = /(^|\/)(tests?|__tests__|e2e)\/.*\.(?:[cm]?[jt]sx?|py|go)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go)$/i;
 
 /** True when a gate result shows a big diff with no test file in it. */
 export function bigUntestedDiff(gate) {
