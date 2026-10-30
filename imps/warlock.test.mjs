@@ -88,7 +88,7 @@ test('Unix dispatch scheduler topology counts exactly one active dispatch schedu
             const { json } = run(home, { IMPS_WARLOCK_TEST_MODE: '1', IMPS_WARLOCK_TEST_FIXTURE: JSON.stringify(fixture) });
             const result = byName(json, 'exactly one dispatch task');
             assert.equal(result.ok, fixture.count === 1);
-            assert.equal((result.detail.match(/cron: hourly\\.sh/g) || []).length + Number(result.detail.includes('systemd: imps-hourly.timer')), fixture.count);
+            assert.equal((result.detail.match(/cron: hourly\.sh/g) || []).length + Number(result.detail.includes('systemd: imps-hourly.timer')), fixture.count);
         }
     } finally { rmSync(home, { recursive: true, force: true }); }
 });
