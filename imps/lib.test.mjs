@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
@@ -912,4 +912,13 @@ test('loopBudget cooldown only counts failures from the kit that is running now'
     assert.ok(loopBudget(rows, now, { kit: 'old' }).cooldown.r, 'same kit still cools the repo');
     assert.equal(loopBudget(rows, now, { kit: 'new' }).cooldown.r, undefined, 'a newer kit may have fixed the cause: no cooldown');
     assert.ok(loopBudget([fail('imp_1', 3, 'new'), fail('imp_2', 2, 'new')], now, { kit: 'new' }).cooldown.r, 'failures on the new kit cool it again');
+});
+
+test('lastLines keeps the tail and says how much was cut', () => {
+    assert.equal(lastLines('a\nb\nc', 5), 'a\nb\nc', 'shorter than n is unchanged');
+    assert.equal(lastLines('a\nb\nc', 3), 'a\nb\nc', 'exactly n is unchanged');
+    assert.equal(lastLines('1\n2\n3\n4\n5', 2), '... 3 earlier lines omitted\n4\n5');
+    assert.equal(lastLines('x\r\ny\r\nz\r\n', 2), '... 1 earlier lines omitted\ny\nz', 'CRLF and a trailing newline');
+    assert.equal(lastLines('', 3), '');
+    assert.equal(lastLines(Array.from({ length: 200 }, (_, i) => i).join('\n')).split('\n').length, 61, 'default is 60 lines plus the marker');
 });

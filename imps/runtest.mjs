@@ -6,6 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { rows, loadBrief, gateShell } from './runner.mjs';
+import { lastLines } from './lib.mjs';
 
 const here = resolve(process.cwd()).replaceAll('\\', '/').toLowerCase();
 const run = rows()
@@ -20,7 +21,9 @@ let code = 0;
 for (const [name, cmd] of [['test', meta.test], ['lint', meta.lint]]) {
     if (!cmd) continue;
     console.log(`── ${name}: ${cmd}`);
-    const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+    // Only the tail is printed: a full vitest/eslint log per re-run is what filled the imps' context and turn budget.
+    const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+    console.log(lastLines(`${r.stdout || ''}${r.stderr || ''}`));
     console.log(`── ${name} exit ${r.status}`);
     if (r.status !== 0) code = r.status ?? 1;
 }
