@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -440,6 +440,13 @@ async function work(issue) {
             note(repo, number, `The imp passed the gate but the PR couldn't be opened (run \`${id}\`).`);
             return log({ event: 'pr-error', repo, number, id, out: pr.out.slice(-500) });
         }
+        // A run the model ended almost at once with nothing done (a failover model that answers and stops) is the router's fault:
+        // put the issue straight back on imp:ready, at most NOOP_FREE times (see noopRetryOk), without spending an attempt.
+        if (isNoopRun(row) && noopRetryOk(readLedger(), repo, number, issue.briefAt || 0)) {
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            note(repo, number, `The model ended the run without doing anything (run ${id}: ${stats}). That is not counted against this issue; retrying automatically.`);
+            return log({ event: 'retry-noop', repo, number, id });
+        }
         // One automatic second attempt, with the failing output in the brief, when a second try can plausibly fix it
         // (test / lint / uncommitted edits, output recorded). The per-issue cap and the daily cap still bound it.
         // Kill switch: IMPS_RETRY_FEEDBACK=0.
@@ -642,6 +649,7 @@ This is labelled \`imp:ready\` but has no brief comment, so no imp will run on i
     // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
     // brief comment (a human re-brief) resets the count.
     const briefAt = briefCommentAt(comments);
+    i.briefAt = briefAt;
     const fails = issueFailures(readLedger(), i.repo, i.number, briefAt);
     if (fails >= DEFAULTS.maxIssueFailures) {
         log({ event: 'issue-cap', repo: i.repo, number: i.number, failures: fails });
@@ -677,8 +685,8 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
     // A second attempt gets the first one's recorded failing output (see retry-feedback above).
     let briefText = withKind(brief, i.labels);
     if (process.env.IMPS_RETRY_FEEDBACK !== '0' && fails === 1) {
-        const prev = readLedger().filter((r) => r.repo === i.repo && Number(r.issue) === i.number && r.gate && r.gate.pass === false).at(-1);
-        if (prev && feedbackEligible(prev.gate)) briefText += feedbackSection(prev.gate, prev.id);
+        const prev = readLedger().filter((r) => r.repo === i.repo && Number(r.issue) === i.number && r.gate && r.gate.pass === false && feedbackEligible(r.gate)).at(-1);
+        if (prev) briefText += feedbackSection(prev.gate, prev.id);
     }
     writeFileSync(i.briefPath, briefText);
     picked.push(i);

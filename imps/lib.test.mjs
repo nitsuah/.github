@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
@@ -972,4 +972,23 @@ test('loopBudget: two real failures cool the repo even when a do-nothing run sit
     const b = loopBudget([real('imp_1', 20), noop, real('imp_2', 2)], Date.now(), { kit: 'k' });
     assert.ok(b.cooldown.r, 'the repo cools down: the no-op neither hides nor replaces the real failures');
     assert.equal(loopBudget([real('imp_1', 20), noop], Date.now(), { kit: 'k' }).cooldown.r, undefined, 'one real failure plus a no-op is not two failures');
+});
+
+test('noopRetryOk: two free automatic retries for do-nothing runs, then it stops', () => {
+    const noop = (n) => ({ id: `imp_${n}`, repo: 'r', issue: 7, metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } });
+    const real = { id: 'imp_9', repo: 'r', issue: 7, metrics: { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: ['tests exit 1'] } };
+    assert.equal(noopRetryOk([noop(1)], 'r', 7), true, 'first do-nothing run: retry');
+    assert.equal(noopRetryOk([noop(1), noop(2)], 'r', 7), true, 'second: retry');
+    assert.equal(noopRetryOk([noop(1), noop(2), noop(3)], 'r', 7), false, 'third: stop, it counts as a failure');
+    assert.equal(noopRetryOk([real, noop(1)], 'r', 7), true, 'a real failure is not a do-nothing run');
+    assert.equal(noopRetryOk([{ ...noop(1), issue: 8 }, { ...noop(2), issue: 8 }, { ...noop(3), issue: 8 }], 'r', 7), true, 'other issues do not count');
+});
+
+test('noopRetryOk: a real failure never uses up the allowance, and a newer brief resets it', () => {
+    const noop = (n, at) => ({ id: `imp_${n}`, repo: 'r', issue: 7, startedAt: at, metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } });
+    const real = { id: 'imp_9', repo: 'r', issue: 7, startedAt: '2026-10-30T09:00:00Z', metrics: { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: ['tests exit 1'] } };
+    assert.equal(noopRetryOk([noop(1, '2026-10-30T07:00:00Z'), noop(2, '2026-10-30T08:00:00Z'), real], 'r', 7), true, 'two no-ops plus a real failure: still within the allowance');
+    const three = [noop(1, '2026-10-30T07:00:00Z'), noop(2, '2026-10-30T08:00:00Z'), noop(3, '2026-10-30T10:00:00Z')];
+    assert.equal(noopRetryOk(three, 'r', 7), false, 'three since the start: stop');
+    assert.equal(noopRetryOk(three, 'r', 7, Date.parse('2026-10-30T09:30:00Z')), true, 'a brief posted after the first two resets the count: only one since it');
 });
