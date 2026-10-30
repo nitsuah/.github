@@ -639,21 +639,24 @@ export function parseFixDecisions(text = '', items = []) {
     } catch {
         raw = [];
     }
+    if (!Array.isArray(raw)) raw = [];
     const actions = new Set(['fix', 'pushback', 'skip']);
     const byId = new Map();
     const dupIds = new Set();
     for (const d of raw) {
-        if (!d || typeof d.id === 'undefined') continue;
-        const id = String(d.id);
+        if (!d || typeof d.id === 'undefined' || typeof d.id !== 'string') continue;
+        const id = d.id;
         if (byId.has(id) && !dupIds.has(id)) {
             byId.set(id, null);
             dupIds.add(id);
-        } else byId.set(id, d);
+        } else if (!dupIds.has(id)) {
+            byId.set(id, d);
+        }
     }
     return items.map((it) => {
         const d = byId.get(it.id) ?? null;
         const action = actions.has(d?.action) ? d.action : null;
-        return { id: it.id, kind: it.kind, action, reply: String(d?.reply || (d ? '' : 'Not addressed in this round.')).slice(0, 1500), answered: !!d };
+        return { id: it.id, kind: it.kind, action, reply: String(d?.reply || (d ? '' : 'Not addressed in this round.')).slice(0, 1500), answered: action !== null };
     });
 }
 

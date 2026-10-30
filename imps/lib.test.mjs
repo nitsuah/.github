@@ -87,6 +87,32 @@ test('parseFixDecisions maps answers onto items and defaults the rest to null', 
     // Duplicate ID
     const text2 = '```json\n{"decisions":[{"id":"T1","action":"fix"},{"id":"T1","action":"skip"}]}\n```';
     assert.equal(parseFixDecisions(text2, [{ id: 'T1', kind: 'thread' }])[0].action, null);
+
+    // Non-array decisions
+    assert.deepEqual(parseFixDecisions('```json\n{"decisions":{}}\n```', items).map((x) => x.action), [null, null, null]);
+    assert.deepEqual(parseFixDecisions('```json\n{"decisions":"x"}\n```', items).map((x) => x.action), [null, null, null]);
+    assert.deepEqual(parseFixDecisions('```json\n{"decisions":123}\n```', items).map((x) => x.action), [null, null, null]);
+
+    // Non-string ID
+    const text3 = '```json\n{"decisions":[{"id":["T1"],"action":"fix"}]}\n```';
+    assert.deepEqual(parseFixDecisions(text3, [{ id: 'T1', kind: 'thread' }])[0].action, null);
+
+    // Invalid action
+    const text4 = '```json\n{"decisions":[{"id":"T1","action":"unknown"}]}\n```';
+    assert.deepEqual(parseFixDecisions(text4, [{ id: 'T1', kind: 'thread' }])[0].action, null);
+    assert.deepEqual(parseFixDecisions(text4, [{ id: 'T1', kind: 'thread' }])[0].answered, false);
+
+    // Unknown ID (id in decisions not in items)
+    const text5 = '```json\n{"decisions":[{"id":"unknown","action":"fix"}]}\n```';
+    const d5 = parseFixDecisions(text5, items);
+    assert.equal(d5.find((x) => x.id === 'T1').action, null);
+    assert.equal(d5.find((x) => x.id === 'T1').answered, false);
+    assert.equal(d5.find((x) => x.id === 'unknown'), undefined);
+
+    // Multiple decisions for same ID: first fix, second skip, third fix should remain unanswered
+    const text6 = '```json\n{"decisions":[{"id":"T1","action":"fix"},{"id":"T1","action":"skip"},{"id":"T1","action":"fix"}]}\n```';
+    assert.equal(parseFixDecisions(text6, [{ id: 'T1', kind: 'thread' }])[0].action, null);
+    assert.equal(parseFixDecisions(text6, [{ id: 'T1', kind: 'thread' }])[0].answered, false);
 });
 
 test('parseReview takes the last json block and recomputes the verdict from findings', () => {
