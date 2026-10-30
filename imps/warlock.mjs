@@ -151,12 +151,6 @@ if (process.platform !== 'win32') {
         } catch { /* systemctl not available */ }
     }
 
-    if (process.env.IMPS_WARLOCK_TEST_MODE === '1') {
-        const fixture = JSON.parse(process.env.IMPS_WARLOCK_TEST_FIXTURE || '{}');
-        cronLines = fixture.cronLines || [];
-        systemdExists = systemdCurrent = Boolean(fixture.systemdActive);
-        cronMismatch = false;
-    }
     const topology = countDispatchSchedulers(cronLines, hourly, systemdExists && systemdCurrent);
     const watchDetail = watchBody ? (watchCronExists && watchCronCurrent ? 'cron: label-watch.sh' : watchCronExists ? 'cron: ' + watch + ' (mismatch)' : '') + (watchSystemdExists && watchSystemdCurrent ? 'systemd: imps-label-watch.timer' : watchSystemdExists ? 'systemd: ' + watch + ' (mismatch)' : '') : '';
     const detail = [topology.names.join('; '), cronMismatch ? 'cron: hourly.sh (path mismatch)' : '', systemdExists && !systemdCurrent ? 'systemd: ' + hourly + ' (mismatch)' : '', watchDetail].filter(Boolean).join('; ') || 'no active dispatch scheduler';
@@ -200,9 +194,6 @@ if (ledgerBody === null) {
 
 // ── without 9router the warlock skips every cycle ─────────────────────────
 const router = resolveRouter();
-if (process.env.IMPS_WARLOCK_TEST_MODE === '1') {
-    check('9router answers a MAX probe', true, 'fixture');
-} else {
 const base = router.baseUrl;
 try {
     const r = await fetch(`${base}/messages`, {
@@ -214,7 +205,6 @@ try {
     check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
 } catch (e) {
     check('9router answers a MAX probe', false, `${base} → ${e.message} (${describeRouter(router)})`);
-}
 }
 
 // ── report ────────────────────────────────────────────────────────────────
