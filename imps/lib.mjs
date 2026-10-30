@@ -624,9 +624,13 @@ export function shouldAskCodeRabbitApprove({ reviewDecision, latestBy = {}, thre
     return checks.every((c) => /^(SUCCESS|NEUTRAL|SKIPPED|pass|skipping)$/i.test(c.state || '') || /coderabbit/i.test(c.name));
 }
 
+export function shouldResolveFixDecision(decision) {
+    return ['fix', 'skip'].includes(decision?.action);
+}
+
 // The fix imp ends with a json block: { "decisions": [{ id, action, reply }] }.
-// Unknown ids are dropped; items it didn't answer come back as `skip` with a
-// note, so every thread gets a reply.
+// Missing, malformed, duplicate and unknown ids stay unanswered (null), never a
+// synthesised skip, so incomplete threads do not close silently.
 export function parseFixDecisions(text = '', items = []) {
     const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
     let raw = [];
@@ -635,10 +639,20 @@ export function parseFixDecisions(text = '', items = []) {
     } catch {
         raw = [];
     }
-    const byId = new Map(raw.filter((d) => d && d.id).map((d) => [String(d.id), d]));
+    const actions = new Set(['fix', 'pushback', 'skip']);
+    const byId = new Map();
+    const dupIds = new Set();
+    for (const d of raw) {
+        if (!d || typeof d.id === 'undefined') continue;
+        const id = String(d.id);
+        if (byId.has(id) && !dupIds.has(id)) {
+            byId.set(id, null);
+            dupIds.add(id);
+        } else byId.set(id, d);
+    }
     return items.map((it) => {
-        const d = byId.get(it.id);
-        const action = ['fix', 'pushback', 'skip'].includes(d?.action) ? d.action : 'skip';
+        const d = byId.get(it.id) ?? null;
+        const action = actions.has(d?.action) ? d.action : null;
         return { id: it.id, kind: it.kind, action, reply: String(d?.reply || (d ? '' : 'Not addressed in this round.')).slice(0, 1500), answered: !!d };
     });
 }

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -69,13 +69,24 @@ test('shouldAskCodeRabbitApprove only when CodeRabbit alone blocks and everythin
     assert.equal(shouldAskCodeRabbitApprove({ ...ok, reviewDecision: 'APPROVED' }), false);
 });
 
-test('parseFixDecisions maps answers onto items and defaults the rest to skip', () => {
+test('shouldResolveFixDecision', () => {
+    assert.equal(shouldResolveFixDecision({ action: 'fix' }), true);
+    assert.equal(shouldResolveFixDecision({ action: 'skip' }), true);
+    assert.equal(shouldResolveFixDecision({ action: 'pushback' }), false);
+    assert.equal(shouldResolveFixDecision(null), false);
+});
+
+test('parseFixDecisions maps answers onto items and defaults the rest to null', () => {
     const items = [{ id: 'T1', kind: 'thread' }, { id: 'c5', kind: 'comment' }, { id: 'ci:test', kind: 'ci' }];
     const text = '```json\n{"decisions":[{"id":"T1","action":"fix","reply":"Fixed the bound."},{"id":"c5","action":"pushback","reply":"Out of scope: #12 tracks it."},{"id":"zzz","action":"fix"}]}\n```';
     const d = parseFixDecisions(text, items);
-    assert.deepEqual(d.map((x) => [x.id, x.action, x.answered]), [['T1', 'fix', true], ['c5', 'pushback', true], ['ci:test', 'skip', false]]);
+    assert.deepEqual(d.map((x) => [x.id, x.action, x.answered]), [['T1', 'fix', true], ['c5', 'pushback', true], ['ci:test', null, false]]);
     assert.equal(d[2].reply, 'Not addressed in this round.');
-    assert.deepEqual(parseFixDecisions('garbage', items).map((x) => x.action), ['skip', 'skip', 'skip']);
+    assert.deepEqual(parseFixDecisions('garbage', items).map((x) => x.action), [null, null, null]);
+
+    // Duplicate ID
+    const text2 = '```json\n{"decisions":[{"id":"T1","action":"fix"},{"id":"T1","action":"skip"}]}\n```';
+    assert.equal(parseFixDecisions(text2, [{ id: 'T1', kind: 'thread' }])[0].action, null);
 });
 
 test('parseReview takes the last json block and recomputes the verdict from findings', () => {
