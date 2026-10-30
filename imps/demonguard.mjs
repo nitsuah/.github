@@ -37,7 +37,7 @@ export const HUMAN_AFTER_MS = 24 * 3600_000;
  * @param {boolean} [p.botChangesRequested]  a bot's latest review is CHANGES_REQUESTED
  * @param {number} [p.openThreads]      unresolved review threads
  */
-export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeState = '', checks = [], verdict, trust = { ok: false, reason: 'trust unknown' }, botChangesRequested = false, openThreads = 0, minAgeMs = MIN_AGE_MS, humanAfterMs = HUMAN_AFTER_MS } = {}) {
+export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeState = '', checks = [], verdict, trust = { ok: false, reason: 'trust unknown' }, botChangesRequested = false, openThreads = 0, minAgeMs = MIN_AGE_MS, humanAfterMs = HUMAN_AFTER_MS, reviewedAt, lastCommitAt } = {}) {
     if (state !== 'OPEN') return { action: 'none', reason: `PR is ${state.toLowerCase()}` };
     const age = now - Date.parse(createdAt || '') || 0;
     const old = age >= humanAfterMs;
@@ -45,6 +45,8 @@ export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeSta
     if (mergeState === 'DIRTY') return old ? { action: 'needs-human', reason: 'merge conflicts for over a day' } : { action: 'wait-fix', reason: 'merge conflicts' };
     if (botChangesRequested && openThreads === 0) return { action: 'dismiss-stale-review', reason: 'a bot review still requests changes but none of its threads is open' };
     if (!verdict) return old ? { action: 'needs-human', reason: 'no imp review could be recorded for over a day' } : { action: 'rereview', reason: 'no imp review is recorded' };
+    // A fix round pushed after the recorded review: that verdict is stale. Re-run the reviewer instead of waiting a day for a human.
+    if (verdict !== 'approve' && Date.parse(lastCommitAt) > Date.parse(reviewedAt)) return { action: 'rereview', reason: 'the PR changed since the last imp review (a fix round pushed)' };
     if (verdict !== 'approve') return old ? { action: 'needs-human', reason: `review ${verdict} for over a day` } : { action: 'wait-fix', reason: `review was ${verdict}; the fix-sweep handles it` };
     const ev = evaluateChecks(checks);
     if (!ev.green) return old ? { action: 'needs-human', reason: `checks not green for over a day (${ev.reason})` } : { action: 'wait', reason: `checks: ${ev.reason}` };
@@ -96,7 +98,7 @@ async function main() {
         const m = r.pr.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (!m) continue;
         const [, slug, num] = m;
-        const pr = ghJson(['pr', 'view', r.pr, '--json', 'state,mergeStateStatus,headRefOid,createdAt,reviews,labels']);
+        const pr = ghJson(['pr', 'view', r.pr, '--json', 'state,mergeStateStatus,headRefOid,createdAt,reviews,labels,commits']);
         if (!pr) continue; // GitHub unreachable this tick: try again next one
         if ((pr.labels || []).some((l) => l.name === 'imp:needs-human')) continue; // a human owns it now (the fix-sweep skips these too)
         const checks = ghJson(['pr', 'checks', r.pr, '--json', 'name,state']) || [];
@@ -113,7 +115,7 @@ async function main() {
             githubSeedError = seed.error;
         }
         const trust = mayAutoMerge({ repo: r.repo, reviewVerdict: verdict, rows: ledger, trust: threshold, githubCount, githubSeedError, gate: r.gate });
-        const a = assessPr({ createdAt: pr.createdAt, state: pr.state, mergeState: pr.mergeStateStatus, checks, verdict, trust, botChangesRequested, openThreads, minAgeMs });
+        const a = assessPr({ createdAt: pr.createdAt, state: pr.state, mergeState: pr.mergeStateStatus, checks, verdict, trust, botChangesRequested, openThreads, minAgeMs, reviewedAt: r.review?.at, lastCommitAt: (pr.commits || []).at(-1)?.committedDate });
         summary.assessed++;
         summary.actions[a.action] = (summary.actions[a.action] || 0) + 1;
         const tag = `${r.repo}#${num}`;
