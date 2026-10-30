@@ -19,6 +19,14 @@ const KIT_POINTER = join(HOME, 'kit-path.txt');
 // dispatch.mjs skips a cycle while the lock is younger than this.
 const STALE_LOCK_MS = 3 * 3600_000;
 
+// Count only dispatch schedulers that target this machine's hourly.sh.
+export function countDispatchSchedulers(cronLines = [], hourlyPath, systemdActive = false) {
+    const lines = Array.isArray(cronLines) ? cronLines : String(cronLines || '').split(/\r?\n/);
+    const cron = lines.filter((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes(hourlyPath));
+    const names = cron.map((_, i) => 'cron: hourly.sh' + (cron.length > 1 ? ' #' + (i + 1) : ''));
+    if (systemdActive) names.push('systemd: imps-hourly.timer');
+    return { count: names.length, names };
+}
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok, detail });
 const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
@@ -82,38 +90,34 @@ if (!hourlyBody) {
 
 // ── exactly one warlock per machine ───────────────────────────────────────
 if (process.platform !== 'win32') {
-    // Check cron for hourly.sh
-    let cronExists = false;
-    let cronCurrent = false;
-    try {
-        const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
-        if (cron.status === 0) {
-            const lines = (cron.stdout || '').split('\n');
-            const hourlyLine = lines.find(l => l.includes('hourly.sh'));
-            cronExists = Boolean(hourlyLine);
-            // Check if the crontab line points to the correct hourly.sh path
-            cronCurrent = hourlyLine ? hourlyLine.includes(hourly) : false;
-        }
-    } catch { /* crontab not available */ }
-
-    // Check systemd timers
-    let systemdExists = false;
-    let systemdCurrent = false;
-    try {
-        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
-        if (timer.status === 0) {
-            const lines = (timer.stdout || '').split('\n');
-            const impsTimer = lines.find(l => l.includes('imps-hourly'));
-            systemdExists = Boolean(impsTimer);
-            // Check the service ExecStart
-            if (impsTimer) {
+    let cronLines = [];
+    let cronMismatches = [];
+    let systemdActive = false;
+    let systemdMismatch = false;
+    const fixture = process.env.IMPS_WARLOCK_TEST_MODE === '1'
+        ? JSON.parse(process.env.IMPS_WARLOCK_TEST_FIXTURE || '{}') : null;
+    if (fixture) {
+        cronLines = fixture.cronLines || [];
+        systemdActive = Boolean(fixture.systemdActive);
+    } else {
+        try {
+            const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
+            if (cron.status === 0) {
+                cronLines = (cron.stdout || '').split(/\r?\n/);
+                cronMismatches = cronLines.filter((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes('hourly.sh') && !line.includes(hourly));
+            }
+        } catch { /* crontab not available */ }
+        try {
+            const timer = spawnSync('systemctl', ['--user', 'is-active', 'imps-hourly.timer'], { encoding: 'utf8', windowsHide: true });
+            if (timer.status === 0) {
                 const svc = spawnSync('systemctl', ['--user', 'show', 'imps-hourly.service', '-p', 'ExecStart'], { encoding: 'utf8', windowsHide: true });
                 const execStart = (svc.stdout || '').trim().replace('ExecStart=', '');
-                systemdCurrent = execStart.includes(hourly);
+                systemdActive = execStart.includes(hourly);
+                systemdMismatch = !systemdActive;
             }
-        }
-    } catch { /* systemctl not available */ }
-
+        } catch { /* systemctl not available */ }
+    }
+    const topology = countDispatchSchedulers(cronLines, hourly, systemdActive);
     // Also check label-watch wrapper (optional but if present, should point to the right runner)
     const watch = join(HOME, 'label-watch.sh');
     const watchBody = read(watch);
@@ -148,15 +152,8 @@ if (process.platform !== 'win32') {
         } catch { /* systemctl not available */ }
     }
 
-    const ok = cronExists || systemdExists;
-    const detail = ok
-        ? (cronExists && cronCurrent ? 'cron: hourly.sh' : cronExists ? `cron: ${hourly} (mismatch)` : '') +
-          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '') +
-          (watchBody ? (
-            (watchCronExists && watchCronCurrent ? ' + cron: label-watch.sh' : watchCronExists ? ` + cron: ${watch} (mismatch)` : '') +
-            (watchSystemdExists && watchSystemdCurrent ? ' + systemd: imps-label-watch.timer' : watchSystemdExists ? ` + systemd: ${watch} (mismatch)` : '')
-          ) : '')
-        : 'no crontab entry for hourly.sh and no systemd imps-hourly.timer — nothing is reading the queue';
+    const ok = topology.count === 1;
+    const detail = [...topology.names, ...cronMismatches.map(() => 'cron: hourly.sh (path mismatch)'), ...(systemdMismatch ? ['systemd: ' + hourly + ' (service path mismatch)'] : [])].join('; ') || 'no active dispatch scheduler';
     check('exactly one dispatch task', ok, detail);
 } else {
     const ps = [
