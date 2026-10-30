@@ -11,10 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'warlock.mjs');
 
-function run(home) {
+function run(home, extraEnv = {}) {
     const r = spawnSync(process.execPath, [SCRIPT, '--json'], {
         encoding: 'utf8',
-        env: { ...process.env, IMPS_HOME: home, IMPS_KIT_PATH: '' },
+        env: { ...process.env, IMPS_HOME: home, IMPS_KIT_PATH: '', ...extraEnv },
     });
     return { code: r.status, json: JSON.parse(r.stdout), text: r.stdout + r.stderr };
 }
@@ -71,4 +71,24 @@ test('no kit-path and no env var is reported, not guessed', () => {
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
+});
+
+test('Unix dispatch scheduler topology counts exactly one active dispatch scheduler', () => {
+    if (process.platform === 'win32') return;
+    const home = mkdtempSync(join(tmpdir(), 'imps-warlock-'));
+    try {
+        const hourly = join(home, 'hourly.sh');
+        for (const fixture of [
+            { cronLines: ['0 * * * * ' + hourly], systemdActive: false, count: 1 },
+            { cronLines: [], systemdActive: true, count: 1 },
+            { cronLines: ['0 * * * * ' + hourly], systemdActive: true, count: 2 },
+            { cronLines: ['0 * * * * ' + hourly, '30 * * * * ' + hourly], systemdActive: false, count: 2 },
+            { cronLines: [], systemdActive: false, count: 0 },
+        ]) {
+            const { json } = run(home, { IMPS_WARLOCK_TEST_MODE: '1', IMPS_WARLOCK_TEST_FIXTURE: JSON.stringify(fixture) });
+            const result = byName(json, 'exactly one dispatch task');
+            assert.equal(result.ok, fixture.count === 1);
+            assert.equal((result.detail.match(/cron: hourly\\.sh/g) || []).length + Number(result.detail.includes('systemd: imps-hourly.timer')), fixture.count);
+        }
+    } finally { rmSync(home, { recursive: true, force: true }); }
 });
