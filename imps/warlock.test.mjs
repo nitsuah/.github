@@ -76,7 +76,7 @@ test('no kit-path and no env var is reported, not guessed', () => {
 
 const warlockSource = readFileSync(SCRIPT, 'utf8');
 const helperStart = warlockSource.indexOf('export function countDispatchSchedulers');
-const helperEnd = warlockSource.indexOf('\\n}', helperStart) + 2;
+const helperEnd = warlockSource.indexOf('\n}', helperStart) + 2;
 const helperSource = warlockSource.slice(helperStart, helperEnd);
 assert.ok(helperSource.startsWith('export function'), 'scheduler topology helper is exported');
 const countDispatchSchedulers = runInNewContext('(' + helperSource.replace(/^export /, '') + ')');
