@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -135,11 +135,11 @@ if (committed) {
 const sha = git(r.worktree, 'rev-parse', '--short', 'HEAD').out;
 const label = { fix: `Fixed in ${sha}`, pushback: 'Pushing back', skip: 'Not in this PR' };
 for (const d of decisions) {
-    const body = `<!-- imp-fix -->\n**${label[d.action]}:** ${d.reply}\n\n<sub>Fix round ${round} by an imp through 9router (run \`${id}\`).</sub>`;
+    const body = `<!-- imp-fix -->\n**${label[d.action] ?? 'Skipped'}:** ${d.reply}\n\n<sub>Fix round ${round} by an imp through 9router (run \`${id}\`).</sub>`;
     const it = items.find((x) => x.id === d.id);
     if (d.kind === 'thread') {
         sh('gh', ['api', `repos/${slug}/pulls/${number}/comments/${it.commentId}/replies`, '-f', `body=${body}`]);
-        if (d.action !== 'pushback')
+        if (shouldResolveFixDecision(d))
             sh('gh', ['api', 'graphql', '-f', `query=mutation{resolveReviewThread(input:{threadId:"${d.id}"}){thread{isResolved}}}`]);
     } else if (d.kind === 'comment' || d.kind === 'review') {
         sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', body.replace('**', `**${d.id}: `)]);
