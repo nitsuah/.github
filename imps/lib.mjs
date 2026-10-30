@@ -960,6 +960,7 @@ export function lastLines(text = '', n = 60) {
 }
 
 /** A do-nothing run gets a free automatic retry: true while this issue has had at most NOOP_FREE of them. */
-export function noopRetryOk(rows = [], repo, issue) {
-    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && isNoopRun(r)).length <= NOOP_FREE;
+export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
+    // Same cutoff as issueFailures: a newer brief comment starts a fresh allowance.
+    return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !(Date.parse(r.startedAt) < sinceMs) && isNoopRun(r)).length <= NOOP_FREE;
 }

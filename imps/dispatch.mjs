@@ -442,7 +442,7 @@ async function work(issue) {
         }
         // A run the model ended almost at once with nothing done (a failover model that answers and stops) is the router's fault:
         // put the issue straight back on imp:ready, at most NOOP_FREE times (see noopRetryOk), without spending an attempt.
-        if (isNoopRun(row) && noopRetryOk(readLedger(), repo, number)) {
+        if (isNoopRun(row) && noopRetryOk(readLedger(), repo, number, issue.briefAt || 0)) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             note(repo, number, `The model ended the run without doing anything (run ${id}: ${stats}). That is not counted against this issue; retrying automatically.`);
             return log({ event: 'retry-noop', repo, number, id });
@@ -649,6 +649,7 @@ This is labelled \`imp:ready\` but has no brief comment, so no imp will run on i
     // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
     // brief comment (a human re-brief) resets the count.
     const briefAt = briefCommentAt(comments);
+    i.briefAt = briefAt;
     const fails = issueFailures(readLedger(), i.repo, i.number, briefAt);
     if (fails >= DEFAULTS.maxIssueFailures) {
         log({ event: 'issue-cap', repo: i.repo, number: i.number, failures: fails });
@@ -684,8 +685,8 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
     // A second attempt gets the first one's recorded failing output (see retry-feedback above).
     let briefText = withKind(brief, i.labels);
     if (process.env.IMPS_RETRY_FEEDBACK !== '0' && fails === 1) {
-        const prev = readLedger().filter((r) => r.repo === i.repo && Number(r.issue) === i.number && r.gate && r.gate.pass === false).at(-1);
-        if (prev && feedbackEligible(prev.gate)) briefText += feedbackSection(prev.gate, prev.id);
+        const prev = readLedger().filter((r) => r.repo === i.repo && Number(r.issue) === i.number && r.gate && r.gate.pass === false && feedbackEligible(r.gate)).at(-1);
+        if (prev) briefText += feedbackSection(prev.gate, prev.id);
     }
     writeFileSync(i.briefPath, briefText);
     picked.push(i);

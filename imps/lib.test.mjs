@@ -983,3 +983,12 @@ test('noopRetryOk: two free automatic retries for do-nothing runs, then it stops
     assert.equal(noopRetryOk([real, noop(1)], 'r', 7), true, 'a real failure is not a do-nothing run');
     assert.equal(noopRetryOk([{ ...noop(1), issue: 8 }, { ...noop(2), issue: 8 }, { ...noop(3), issue: 8 }], 'r', 7), true, 'other issues do not count');
 });
+
+test('noopRetryOk: a real failure never uses up the allowance, and a newer brief resets it', () => {
+    const noop = (n, at) => ({ id: `imp_${n}`, repo: 'r', issue: 7, startedAt: at, metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } });
+    const real = { id: 'imp_9', repo: 'r', issue: 7, startedAt: '2026-10-30T09:00:00Z', metrics: { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: ['tests exit 1'] } };
+    assert.equal(noopRetryOk([noop(1, '2026-10-30T07:00:00Z'), noop(2, '2026-10-30T08:00:00Z'), real], 'r', 7), true, 'two no-ops plus a real failure: still within the allowance');
+    const three = [noop(1, '2026-10-30T07:00:00Z'), noop(2, '2026-10-30T08:00:00Z'), noop(3, '2026-10-30T10:00:00Z')];
+    assert.equal(noopRetryOk(three, 'r', 7), false, 'three since the start: stop');
+    assert.equal(noopRetryOk(three, 'r', 7, Date.parse('2026-10-30T09:30:00Z')), true, 'a brief posted after the first two resets the count: only one since it');
+});
