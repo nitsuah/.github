@@ -359,6 +359,7 @@ function openPr(id) {
         trust: trustThreshold,
         githubCount,
         githubSeedError,
+        gate: r.gate,
     });
     if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);

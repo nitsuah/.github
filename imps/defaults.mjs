@@ -7,7 +7,7 @@
 /** @type {const} */
 export const DEFAULTS = {
     // Gate: brief may override; this is the fallback when maxLines is omitted.
-    maxLines: 100,
+    maxLines: 150,
 
     // Hourly dispatcher pick/run limits
     max: 8,

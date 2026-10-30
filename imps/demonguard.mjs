@@ -112,7 +112,7 @@ async function main() {
             githubCount = seed.count;
             githubSeedError = seed.error;
         }
-        const trust = mayAutoMerge({ repo: r.repo, reviewVerdict: verdict, rows: ledger, trust: threshold, githubCount, githubSeedError });
+        const trust = mayAutoMerge({ repo: r.repo, reviewVerdict: verdict, rows: ledger, trust: threshold, githubCount, githubSeedError, gate: r.gate });
         const a = assessPr({ createdAt: pr.createdAt, state: pr.state, mergeState: pr.mergeStateStatus, checks, verdict, trust, botChangesRequested, openThreads, minAgeMs });
         summary.assessed++;
         summary.actions[a.action] = (summary.actions[a.action] || 0) + 1;

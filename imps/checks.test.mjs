@@ -7,6 +7,7 @@ import {
     mergeReady,
     cleanMergesForRepo,
     mayAutoMerge,
+    bigUntestedDiff,
     revertedImpNumbers,
     countGithubSeedTrust,
     earnedTrustCount,
@@ -228,7 +229,7 @@ test('labelWatchEnabled defaults on with kill switches', () => {
 });
 
 test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {
-    assert.equal(DEFAULTS.maxLines, 100);
+    assert.equal(DEFAULTS.maxLines, 150);
     assert.equal(DEFAULTS.perRepo, 6);
     assert.equal(DEFAULTS.concurrency, 6);
     assert.equal(DEFAULTS.wip, 12);
@@ -280,4 +281,16 @@ test('imps folder has no gh pr merge --auto calls (#55)', async () => {
         const match = content.match(forbidden);
         assert.equal(match, null, `${f} contains forbidden auto-merge call: ${match?.[0]}`);
     }
+});
+
+test('a diff over 100 lines with no test file is never auto-merged', () => {
+    const rows = [{ repo: 'stash', outcome: 'merged', gate: { pass: true }, review: { verdict: 'approve' } }];
+    const base = { repo: 'stash', reviewVerdict: 'approve', rows, trust: 1 };
+    assert.equal(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js'] } }).ok, false);
+    assert.match(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js'] } }).reason, /no test file/);
+    assert.equal(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js', 'tests/unit/a.test.mjs'] } }).ok, true);
+    assert.equal(mayAutoMerge({ ...base, gate: { lines: 100, files: ['app/a.js'] } }).ok, true, 'at the line, not over');
+    assert.equal(mayAutoMerge(base).ok, true, 'no gate info: unchanged behaviour');
+    assert.equal(bigUntestedDiff({ lines: 101, files: ['x.py', 'test_x.py'] }), false);
+    assert.equal(bigUntestedDiff({ lines: 101, files: [] }), true);
 });
