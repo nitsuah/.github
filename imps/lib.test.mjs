@@ -950,3 +950,26 @@ test('loopBudget: do-nothing runs never put a repo on cooldown', () => {
     assert.equal(loopBudget([f('imp_1', true), f('imp_2', true)], Date.now(), { kit: 'k' }).cooldown.r, undefined);
     assert.ok(loopBudget([f('imp_1', false), f('imp_2', false)], Date.now(), { kit: 'k' }).cooldown.r, 'two real failures still cool the repo');
 });
+
+test('isNoopRun: the tool-turn boundary is exactly two', () => {
+    const run = (toolTurns) => ({ metrics: { end: 'success', toolTurns, turns: toolTurns + 1 }, gate: { pass: false, reasons: ['no commits', 'tests not run'] } });
+    assert.equal(isNoopRun(run(0)), true);
+    assert.equal(isNoopRun(run(1)), true);
+    assert.equal(isNoopRun(run(2)), true, 'two tool turns still qualifies');
+    assert.equal(isNoopRun(run(3)), false, 'three tool turns is real work');
+});
+
+test('issueFailures: only the first NOOP_FREE do-nothing runs are free, however many there are', () => {
+    const noop = (n) => ({ id: `imp_${n}`, repo: 'r', issue: 7, startedAt: `2026-10-30T0${n}:00:00Z`, endedAt: `2026-10-30T0${n}:01:00Z`, metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } });
+    assert.equal(issueFailures([1, 2, 3, 4].map(noop), 'r', 7), 2, 'four no-ops: two free, two count');
+    assert.equal(issueFailures([1, 2, 3, 4, 5].map(noop), 'r', 7), 3);
+});
+
+test('loopBudget: two real failures cool the repo even when a do-nothing run sits between them', () => {
+    const t = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    const real = (id, min) => ({ id, repo: 'r', startedAt: t(min), kitSha: 'k', metrics: { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: ['tests exit 1'] } });
+    const noop = { id: 'imp_n', repo: 'r', startedAt: t(5), kitSha: 'k', metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } };
+    const b = loopBudget([real('imp_1', 20), noop, real('imp_2', 2)], Date.now(), { kit: 'k' });
+    assert.ok(b.cooldown.r, 'the repo cools down: the no-op neither hides nor replaces the real failures');
+    assert.equal(loopBudget([real('imp_1', 20), noop], Date.now(), { kit: 'k' }).cooldown.r, undefined, 'one real failure plus a no-op is not two failures');
+});
