@@ -1,0 +1,22 @@
+name: repo-health kit
+
+on:
+  pull_request:
+    paths: ['repo-health/**', '.github/workflows/repo-health*.yml']
+  push:
+    branches: [main]
+    paths: ['repo-health/**']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: pip install pytest
+      - run: python -m pytest repo-health -q

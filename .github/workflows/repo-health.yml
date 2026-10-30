@@ -1,0 +1,89 @@
+name: Repo health (reusable)
+
+# Deterministic replacement for the cloud week-vuln, week-eng-loc and week-eng-mini routines.
+# A repo calls this weekly (see repo-health/templates/repo-health.yml). It writes a job summary with
+# LOC hotspots, root-file hygiene and osv-scanner advisories, and keeps ONE open issue labeled
+# bot:repo-health while a HIGH/CRITICAL advisory exists (closed when the next run is clean).
+# monthly-tire-kick ingests those issues. No model is involved.
+on:
+  workflow_call:
+    inputs:
+      max-lines:
+        description: Flag source files longer than this many lines
+        type: number
+        default: 500
+      min-severity:
+        description: CVSS score at or above which an advisory opens the issue
+        type: number
+        default: 7.0
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    name: Repo health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nitsuah/.github
+          path: .repo-health-kit
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: LOC hotspots and root hygiene
+        run: |
+          K=.repo-health-kit/repo-health
+          {
+            echo "# Repo health: ${GITHUB_REPOSITORY#*/}"
+            echo
+            python3 "$K/loc.py" . --max-lines "${{ inputs.max-lines }}"
+            echo
+            python3 "$K/root_hygiene.py" .
+            echo
+          } > health.md
+
+      - name: Dependency advisories (osv-scanner)
+        id: osv
+        run: |
+          set +e
+          # Exit 1 = vulnerabilities found, 128 = nothing to scan; both are fine here.
+          docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:v2.7.0 \
+            scan source -r --format json /src > osv.json 2> osv.err
+          python3 .repo-health-kit/repo-health/osv_summary.py osv.json "${GITHUB_REPOSITORY#*/}" \
+            --min-severity "${{ inputs.min-severity }}" >> health.md
+          if [ $? -ne 0 ]; then echo "red=true" >> "$GITHUB_OUTPUT"; else echo "red=false" >> "$GITHUB_OUTPUT"; fi
+          cat health.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the advisory issue
+        if: steps.osv.outputs.red == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="repo-health: HIGH/CRITICAL dependency advisories"
+          gh label create bot:repo-health --color BFD4F2 --description "Opened by the repo-health workflow" 2>/dev/null || true
+          num=$(gh issue list --state open --label bot:repo-health --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file health.md
+          else
+            gh issue create --title "$title" --label bot:repo-health --body-file health.md
+          fi
+
+      - name: Close the advisory issue when clean
+        if: steps.osv.outputs.red == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          num=$(gh issue list --state open --label bot:repo-health --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue close "$num" --comment "No HIGH/CRITICAL advisories on $(date -u +%F). Closing."
+          fi
