@@ -33,6 +33,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nitsuah/.github
+          # The kit scripts come from the same commit as this workflow file, so a caller pinned to
+          # a SHA runs exactly the code that SHA contains.
+          ref: ${{ job.workflow_sha }}
           path: .repo-health-kit
           persist-credentials: false
 

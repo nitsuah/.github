@@ -12,7 +12,7 @@ Deterministic weekly checks that replace three cloud routines (`week-vuln`, `wee
 
 Copy `templates/repo-health.yml` to `.github/workflows/repo-health.yml`. The reusable workflow is `.github/workflows/repo-health.yml` here. Inputs: `max-lines` (default 500) and `min-severity` (default 7.0).
 
-The caller needs `issues: write` and `contents: read`. The workflow checks this repo out as `.repo-health-kit`, so a change merged to `main` here applies to every caller on its next run (review kit PRs accordingly).
+The caller needs `issues: write` and `contents: read`. Callers pin the workflow to a commit SHA (`@<sha> # main`); the workflow checks the kit out at that same SHA (`job.workflow_sha`) as `.repo-health-kit`, so a caller only runs what its SHA contains. Bump callers after a kit change; the kit has no tags yet, so Dependabot will not do it for you.
 
 ## Where findings go
 

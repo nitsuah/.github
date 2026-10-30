@@ -1,6 +1,7 @@
 name: Repo health
 
-# Copy to .github/workflows/repo-health.yml. Weekly, no model. See nitsuah/.github repo-health/README.md.
+# Copy to .github/workflows/repo-health.yml and replace REPLACE_WITH_KIT_SHA with the current
+# nitsuah/.github main commit Weekly, no model. See nitsuah/.github repo-health/README.md.
 on:
   schedule:
     - cron: "0 15 * * 4" # Thu 15:00 UTC (old week-vuln slot)
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   health:
-    uses: nitsuah/.github/.github/workflows/repo-health.yml@main
+    uses: nitsuah/.github/.github/workflows/repo-health.yml@REPLACE_WITH_KIT_SHA # main
     permissions:
       contents: read
       issues: write
