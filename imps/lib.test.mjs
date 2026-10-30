@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
@@ -923,4 +923,30 @@ test('lastLines keeps the tail and says how much was cut', () => {
     const def = lastLines(Array.from({ length: 200 }, (_, k) => 'l' + k).join('\n')).split('\n');
     assert.equal(def[0], '... 140 earlier lines omitted', 'default marker');
     assert.deepEqual(def.slice(1), Array.from({ length: 60 }, (_, k) => 'l' + (140 + k)), 'default keeps exactly the final 60 lines');
+});
+
+test('isNoopRun: a model that stops after 0-2 tool turns with nothing committed is not the issue\'s failure', () => {
+    const run = (m, g) => ({ id: 'imp_1', repo: 'r', issue: 7, startedAt: '2026-10-30T10:00:00Z', endedAt: '2026-10-30T10:01:00Z', metrics: { end: 'success', toolTurns: 1, turns: 2, ...m }, gate: { pass: false, reasons: ['no commits', 'tests not run'], ...g } });
+    assert.equal(isNoopRun(run()), true);
+    assert.equal(isNoopRun(run({ toolTurns: 0, turns: 1 })), true);
+    assert.equal(isNoopRun(run({ toolTurns: 9 })), false, 'a run that worked for a while is a real failure');
+    assert.equal(isNoopRun(run({ end: 'no-edit-timeout' })), false, 'the runner killed it: also real');
+    assert.equal(isNoopRun(run({}, { pass: true, reasons: [] })), false);
+    assert.equal(isNoopRun(run({}, { reasons: ['tests exit 1'] })), false, 'it committed something');
+    assert.equal(isNoopRun(undefined), false);
+});
+
+test('issueFailures: the first do-nothing runs are free, later ones count', () => {
+    const noop = (n) => ({ id: `imp_${n}`, repo: 'r', issue: 7, startedAt: `2026-10-30T1${n}:00:00Z`, endedAt: `2026-10-30T1${n}:01:00Z`, metrics: { end: 'success', toolTurns: 0, turns: 1 }, gate: { pass: false, reasons: ['no commits'] } });
+    const real = { id: 'imp_9', repo: 'r', issue: 7, startedAt: '2026-10-30T19:00:00Z', endedAt: '2026-10-30T19:05:00Z', metrics: { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: ['tests exit 1'] } };
+    assert.equal(NOOP_FREE, 2);
+    assert.equal(issueFailures([noop(1), noop(2)], 'r', 7), 0);
+    assert.equal(issueFailures([noop(1), noop(2), noop(3)], 'r', 7), 1, 'the third counts');
+    assert.equal(issueFailures([noop(1), real], 'r', 7), 1, 'only the real failure counts');
+});
+
+test('loopBudget: do-nothing runs never put a repo on cooldown', () => {
+    const f = (id, noopRun) => ({ id, repo: 'r', startedAt: new Date(Date.now() - 60_000).toISOString(), kitSha: 'k', metrics: noopRun ? { end: 'success', toolTurns: 0, turns: 1 } : { end: 'success', toolTurns: 20, turns: 21 }, gate: { pass: false, reasons: noopRun ? ['no commits'] : ['tests exit 1'] } });
+    assert.equal(loopBudget([f('imp_1', true), f('imp_2', true)], Date.now(), { kit: 'k' }).cooldown.r, undefined);
+    assert.ok(loopBudget([f('imp_1', false), f('imp_2', false)], Date.now(), { kit: 'k' }).cooldown.r, 'two real failures still cool the repo');
 });
