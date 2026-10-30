@@ -860,6 +860,16 @@ export function isReadOnlyGh(args = []) {
     return (cmd === 'pr' && ['view', 'list', 'checks'].includes(sub)) || (cmd === 'issue' && ['view', 'list'].includes(sub));
 }
 
+// Run a gh command once, retrying only idempotent reads after a transient network failure.
+export function runGhWithReadRetry(args, run, pause = () => {}) {
+    let result = run(args);
+    if (result.status && isReadOnlyGh(args) && isTransientNetworkError(result.stderr)) {
+        pause();
+        result = run(args);
+    }
+    return result;
+}
+
 // Test output can echo credentials (a failed assertion that prints a request, a .env dump). Blank the common
 // shapes before anything is stored or posted; this is a safety net, not a guarantee.
 export function redactSecrets(text = '') {
