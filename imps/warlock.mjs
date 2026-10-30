@@ -153,7 +153,11 @@ if (process.platform !== 'win32') {
     }
 
     const ok = topology.count === 1;
-    const detail = [...topology.names, ...cronMismatches.map(() => 'cron: hourly.sh (path mismatch)'), ...(systemdMismatch ? ['systemd: ' + hourly + ' (service path mismatch)'] : [])].join('; ') || 'no active dispatch scheduler';
+    const watchDetails = watchBody ? [
+        watchCronExists && watchCronCurrent ? 'cron: label-watch.sh' : watchCronExists ? 'cron: label-watch.sh (path mismatch)' : '',
+        watchSystemdExists && watchSystemdCurrent ? 'systemd: imps-label-watch.timer' : watchSystemdExists ? 'systemd: label-watch.sh (path mismatch)' : '',
+    ].filter(Boolean) : [];
+    const detail = [...topology.names, ...cronMismatches.map(() => 'cron: hourly.sh (path mismatch)'), ...(systemdMismatch ? ['systemd: ' + hourly + ' (service path mismatch)'] : []), ...watchDetails].join('; ') || 'no active dispatch scheduler';
     check('exactly one dispatch task', ok, detail);
 } else {
     const ps = [
@@ -195,16 +199,20 @@ if (ledgerBody === null) {
 // ── without 9router the warlock skips every cycle ─────────────────────────
 const router = resolveRouter();
 const base = router.baseUrl;
-try {
-    const r = await fetch(`${base}/messages`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'content-type': 'application/json', 'x-api-key': router.key || '', 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
-    });
-    check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
-} catch (e) {
-    check('9router answers a MAX probe', false, `${base} → ${e.message} (${describeRouter(router)})`);
+if (process.env.IMPS_WARLOCK_TEST_MODE === '1') {
+    check('9router answers a MAX probe', true, 'fixture');
+} else {
+    try {
+        const r = await fetch(`${base}/messages`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(15_000),
+            headers: { 'content-type': 'application/json', 'x-api-key': router.key || '', 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
+        });
+        check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
+    } catch (e) {
+        check('9router answers a MAX probe', false, `${base} → ${e.message} (${describeRouter(router)})`);
+    }
 }
 
 // ── report ────────────────────────────────────────────────────────────────
