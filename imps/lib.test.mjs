@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
@@ -747,6 +747,9 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 503"), true);
     assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 403"), false);
     assert.equal(isTransientNetworkError('HTTP 404: Not Found'), false);
+    assert.equal(isTransientNetworkError('dial tcp: connectex: A connection attempt failed'), true);
+    assert.equal(isTransientNetworkError('read tcp 10.0.0.2:52000->140.82.113.6:443: i/o timeout'), true);
+    assert.equal(isTransientNetworkError('error connecting to api.github.com'), true);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
 });
@@ -991,4 +994,39 @@ test('noopRetryOk: a real failure never uses up the allowance, and a newer brief
     const three = [noop(1, '2026-10-30T07:00:00Z'), noop(2, '2026-10-30T08:00:00Z'), noop(3, '2026-10-30T10:00:00Z')];
     assert.equal(noopRetryOk(three, 'r', 7), false, 'three since the start: stop');
     assert.equal(noopRetryOk(three, 'r', 7, Date.parse('2026-10-30T09:30:00Z')), true, 'a brief posted after the first two resets the count: only one since it');
+});
+
+
+test('isReadOnlyGh allows idempotent reads and excludes writes', () => {
+    assert.equal(isReadOnlyGh(['pr', 'view', '12', '--json', 'state']), true);
+    assert.equal(isReadOnlyGh(['search', 'issues', '--owner', 'nitsuah']), true);
+    assert.equal(isReadOnlyGh(['issue', 'list', '-R', 'nitsuah/.github']), true);
+    assert.equal(isReadOnlyGh(['api', 'repos/a/b']), true);
+    assert.equal(isReadOnlyGh(['api', '-X', 'GET', 'repos/a/b']), true);
+    assert.equal(isReadOnlyGh(['api', 'repos/a/b', '-f', 'body=x']), false);
+    assert.equal(isReadOnlyGh(['api', '-X', 'PATCH', 'repos/a/b']), false);
+    assert.equal(isReadOnlyGh(['issue', 'comment', '12', '--body', 'x']), false);
+    assert.equal(isReadOnlyGh(['pr', 'merge', '12']), false);
+});
+
+
+test('runGhWithReadRetry retries a transient read once but never retries a write', () => {
+    let readCalls = 0;
+    let pauses = 0;
+    const read = runGhWithReadRetry(['pr', 'view', '12'], () => {
+        readCalls++;
+        return readCalls === 1 ? { status: 1, stderr: 'connectex' } : { status: 0, stdout: 'ok' };
+    }, () => pauses++);
+    assert.equal(read.status, 0);
+    assert.equal(readCalls, 2);
+    assert.equal(pauses, 1);
+
+    let writeCalls = 0;
+    const write = runGhWithReadRetry(['issue', 'comment', '12', '--body', 'x'], () => {
+        writeCalls++;
+        return { status: 1, stderr: 'connectex' };
+    }, () => pauses++);
+    assert.equal(write.status, 1);
+    assert.equal(writeCalls, 1);
+    assert.equal(pauses, 1);
 });

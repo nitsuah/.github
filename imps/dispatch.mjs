@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -50,7 +50,9 @@ const log = (ev) => {
     if (!dry) appendFileSync(LOG, JSON.stringify(line) + '\n');
 };
 const gh = (args) => {
-    const r = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
+    const r = runGhWithReadRetry(args,
+        (command) => spawnSync('gh', command, { encoding: 'utf8', windowsHide: true }),
+        () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000));
     if (r.status) throw new Error(`gh ${args.slice(0, 3).join(' ')}: ${(r.stderr || '').trim()}`);
     return r.stdout.trim();
 };
