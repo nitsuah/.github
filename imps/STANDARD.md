@@ -283,3 +283,7 @@ What 9router offers that we are not using yet (from its source, v0.5.104):
 | `wait` / `wait-fix` | too young (< 30 min), checks pending, or the fix-sweep is on it | nothing |
 
 Each tick logs one `demonguard` event with the counts. It never uses `--admin`. Kill switch: `IMPS_DEMONGUARD=0`; manual: `node imps/demonguard.mjs --dry-run`.
+
+## One retry with the failing output
+
+A first gate failure used to end the attempt and wait for a human re-brief, even though the gate now records the exact test or lint output. When a run fails only on `tests exit N`, `lint exit N` and/or `edits left uncommitted` and that output was recorded, the dispatcher puts the issue back on `imp:ready` once (`retry-feedback` event) and the second attempt's brief gets a "Previous attempt failed" block with that output, framed as data, fenced, redacted and capped. Scope, trailer, size and "did nothing" failures are not retried. The per-issue attempt cap (2) and the daily cap still bound it. Kill switch: `IMPS_RETRY_FEEDBACK=0`.
