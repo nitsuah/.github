@@ -845,7 +845,7 @@ export function sweepIsRepeat(events, pr, result) {
 
 // The machine could not reach GitHub or the router (not a verdict on the issue or the imp).
 export function isTransientNetworkError(text = '') {
-    return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|connectex|i/o timeout|error connecting to api\.github\.com|TLS handshake timeout|Connection timed out|Operation timed out|Network is unreachable|githubstatus\.com|HTTP 50[0-4]\b|requested URL returned error: 50[0-4]|\b50[0-4] (?:Bad Gateway|Service Unavailable|Gateway Time-?out)|ssh: connect to host \S+ port \d+: (Connection (refused|timed out)|Network is unreachable)/i.test(String(text));
+    return /Could not resolve host|Failed to connect|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|dial tcp|connectex|i\/o timeout|error connecting to api\.github\.com|TLS handshake timeout|Connection timed out|Operation timed out|Network is unreachable|githubstatus\.com|HTTP 50[0-4]\b|requested URL returned error: 50[0-4]|\b50[0-4] (?:Bad Gateway|Service Unavailable|Gateway Time-?out)|ssh: connect to host \S+ port \d+: (Connection (refused|timed out)|Network is unreachable)/i.test(String(text));
 }
 
 // Test output can echo credentials (a failed assertion that prints a request, a .env dump). Blank the common
