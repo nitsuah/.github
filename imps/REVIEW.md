@@ -14,6 +14,15 @@ The runner's gate has already checked that the tests and lint pass, the diff is 
 4. **Does it fit the file?** Module style (browser script vs. module, CommonJS vs. ESM), naming, and patterns used elsewhere in the same file. Flag a mismatch only if it would confuse the next reader or break the build.
 5. **Changelog and docs:** the CHANGELOG line is accurate and under the right heading. If the repo's TASKS.md tracks this issue, it should be ticked in the same PR. If the brief's `allow:` scope left TASKS.md out, say so, because that's a brief problem rather than an imp mistake.
 
+## Be adversarial, especially on big diffs
+
+The size cap is generous, so assume the imp took shortcuts and try to prove it. Before you approve:
+- **Break the tests.** For each new test, say what wrong implementation would still pass it (a no-op, a hard-coded value, the old behaviour). If one would, that is a major finding. A big diff with no test that fails without the fix is a major finding.
+- **Check every "Done when" line** in the brief against the diff, one by one. A line with no matching code or test is a finding.
+- **Try the edge cases the diff does not mention:** empty or null input, offline or failed network, a second call, Windows paths and CRLF, a caller that passes the old shape.
+- **Scope creep and leftovers:** changes the issue did not ask for, debug output, commented-out code, a weakened or deleted existing assertion.
+- A diff over ~100 changed lines gets the full treatment above; a small one only needs the parts that apply.
+
 **Do these steps before you answer.** A review that skips them isn't a review:
 - Read each changed file around every hunk, not just the diff.
 - Grep the repo for every changed identifier (function, selector, class, prop, export), and read at least one other use of each.

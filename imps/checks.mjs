@@ -142,13 +142,23 @@ export function earnedTrustCount({ ledgerCount = 0, githubCount = 0 } = {}) {
     return Math.max(a, b);
 }
 
+export const BIG_DIFF_LINES = 100;
+const TEST_PATH = /(^|\/)(tests?|__tests__|e2e)\/.*\.(?:[cm]?[jt]sx?|py|go)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go)$/i;
+
+/** True when a gate result shows a big diff with no test file in it. */
+export function bigUntestedDiff(gate) {
+    if (!gate || !(Number(gate.lines) > BIG_DIFF_LINES)) return false;
+    return !(gate.files || []).some((p) => TEST_PATH.test(String(p)));
+}
+
 /**
  * Should this run's PR be auto-merged?
  * Requires: review approve, all checks green, and earned trust for the repo.
  * Kill switch: IMPS_AUTO_MERGE=0.
  * Fail closed when githubSeedError is set (trust seed query failed).
+ * A diff over BIG_DIFF_LINES that touches no test file is never auto-merged (a larger cap needs a tighter reviewer).
  *
- * @param {{ repo: string, reviewVerdict?: string, rows?: object[], trust?: number, githubCount?: number, githubSeedError?: string|null, autoMergeEnv?: string }} opts
+ * @param {{ repo: string, reviewVerdict?: string, rows?: object[], trust?: number, githubCount?: number, githubSeedError?: string|null, autoMergeEnv?: string, gate?: { lines?: number, files?: string[] } }} opts
  */
 export function mayAutoMerge({
     repo,
@@ -158,12 +168,16 @@ export function mayAutoMerge({
     githubCount = 0,
     githubSeedError = null,
     autoMergeEnv = process.env.IMPS_AUTO_MERGE,
+    gate = null,
 } = {}) {
     if (autoMergeEnv === '0' || autoMergeEnv === 'false') {
         return { ok: false, reason: 'auto-merge disabled (IMPS_AUTO_MERGE=0)' };
     }
     if (reviewVerdict !== 'approve') {
         return { ok: false, reason: `review was ${reviewVerdict || 'missing'}, not approve` };
+    }
+    if (bigUntestedDiff(gate)) {
+        return { ok: false, reason: `diff of ${gate.lines} lines (> ${BIG_DIFF_LINES}) touches no test file; leaving PR open for a human` };
     }
     if (githubSeedError) {
         return { ok: false, reason: `trust seed failed (${githubSeedError}); leaving PR open for a human` };
