@@ -19,6 +19,12 @@ const KIT_POINTER = join(HOME, 'kit-path.txt');
 // dispatch.mjs skips a cycle while the lock is younger than this.
 const STALE_LOCK_MS = 3 * 3600_000;
 
+export function countDispatchSchedulers(cronLines, hourlyPath, systemdActive) {
+    const cron = cronLines.filter((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes(hourlyPath));
+    const names = cron.map((_, i) => 'cron: hourly.sh' + (cron.length > 1 ? ' #' + (i + 1) : ''));
+    if (systemdActive) names.push('systemd: imps-hourly.timer');
+    return { count: names.length, names };
+}
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok, detail });
 const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
@@ -83,16 +89,13 @@ if (!hourlyBody) {
 // ── exactly one warlock per machine ───────────────────────────────────────
 if (process.platform !== 'win32') {
     // Check cron for hourly.sh
-    let cronExists = false;
-    let cronCurrent = false;
+    let cronLines = [];
+    let cronMismatch = false;
     try {
         const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
         if (cron.status === 0) {
-            const lines = (cron.stdout || '').split('\n');
-            const hourlyLine = lines.find(l => l.includes('hourly.sh'));
-            cronExists = Boolean(hourlyLine);
-            // Check if the crontab line points to the correct hourly.sh path
-            cronCurrent = hourlyLine ? hourlyLine.includes(hourly) : false;
+            cronLines = (cron.stdout || '').split(/\r?\n/);
+            cronMismatch = cronLines.some((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes('hourly.sh') && !line.includes(hourly));
         }
     } catch { /* crontab not available */ }
 
@@ -100,7 +103,7 @@ if (process.platform !== 'win32') {
     let systemdExists = false;
     let systemdCurrent = false;
     try {
-        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--no-legend'], { encoding: 'utf8', windowsHide: true });
         if (timer.status === 0) {
             const lines = (timer.stdout || '').split('\n');
             const impsTimer = lines.find(l => l.includes('imps-hourly'));
@@ -148,16 +151,10 @@ if (process.platform !== 'win32') {
         } catch { /* systemctl not available */ }
     }
 
-    const ok = cronExists || systemdExists;
-    const detail = ok
-        ? (cronExists && cronCurrent ? 'cron: hourly.sh' : cronExists ? `cron: ${hourly} (mismatch)` : '') +
-          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '') +
-          (watchBody ? (
-            (watchCronExists && watchCronCurrent ? ' + cron: label-watch.sh' : watchCronExists ? ` + cron: ${watch} (mismatch)` : '') +
-            (watchSystemdExists && watchSystemdCurrent ? ' + systemd: imps-label-watch.timer' : watchSystemdExists ? ` + systemd: ${watch} (mismatch)` : '')
-          ) : '')
-        : 'no crontab entry for hourly.sh and no systemd imps-hourly.timer — nothing is reading the queue';
-    check('exactly one dispatch task', ok, detail);
+    const topology = countDispatchSchedulers(cronLines, hourly, systemdExists && systemdCurrent);
+    const watchDetail = watchBody ? (watchCronExists && watchCronCurrent ? 'cron: label-watch.sh' : watchCronExists ? 'cron: ' + watch + ' (mismatch)' : '') + (watchSystemdExists && watchSystemdCurrent ? 'systemd: imps-label-watch.timer' : watchSystemdExists ? 'systemd: ' + watch + ' (mismatch)' : '') : '';
+    const detail = [topology.names.join('; '), cronMismatch ? 'cron: hourly.sh (path mismatch)' : '', systemdExists && !systemdCurrent ? 'systemd: ' + hourly + ' (mismatch)' : '', watchDetail].filter(Boolean).join('; ') || 'no active dispatch scheduler';
+    check('exactly one dispatch task', topology.count === 1, detail);
 } else {
     const ps = [
         'Get-ScheduledTask | Where-Object { $_.Actions | Where-Object { "$($_.Execute) $($_.Arguments)" -match "hourly\\.cmd|dispatch\\.mjs" } }',
