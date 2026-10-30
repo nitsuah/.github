@@ -747,6 +747,9 @@ test('isTransientNetworkError separates network blips from real run failures', (
     assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 503"), true);
     assert.equal(isTransientNetworkError("fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 403"), false);
     assert.equal(isTransientNetworkError('HTTP 404: Not Found'), false);
+    assert.equal(isTransientNetworkError('dial tcp: connectex: A connection attempt failed'), true);
+    assert.equal(isTransientNetworkError('read tcp 10.0.0.2:52000->140.82.113.6:443: i/o timeout'), true);
+    assert.equal(isTransientNetworkError('error connecting to api.github.com'), true);
     assert.equal(isTransientNetworkError(''), false);
     assert.equal(isTransientNetworkError(undefined), false);
 });
