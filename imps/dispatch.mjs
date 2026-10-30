@@ -50,12 +50,9 @@ const log = (ev) => {
     if (!dry) appendFileSync(LOG, JSON.stringify(line) + '\n');
 };
 const gh = (args) => {
-    let r = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
-    // Retry a transient failure once only when repeating the command cannot mutate GitHub.
-    if (r.status && isReadOnlyGh(args) && isTransientNetworkError(r.stderr)) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
-        r = spawnSync('gh', args, { encoding: 'utf8', windowsHide: true });
-    }
+    const r = runGhWithReadRetry(args,
+        (command) => spawnSync('gh', command, { encoding: 'utf8', windowsHide: true }),
+        () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000));
     if (r.status) throw new Error(`gh ${args.slice(0, 3).join(' ')}: ${(r.stderr || '').trim()}`);
     return r.stdout.trim();
 };
