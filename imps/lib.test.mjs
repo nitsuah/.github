@@ -920,5 +920,7 @@ test('lastLines keeps the tail and says how much was cut', () => {
     assert.equal(lastLines('1\n2\n3\n4\n5', 2), '... 3 earlier lines omitted\n4\n5');
     assert.equal(lastLines('x\r\ny\r\nz\r\n', 2), '... 1 earlier lines omitted\ny\nz', 'CRLF and a trailing newline');
     assert.equal(lastLines('', 3), '');
-    assert.equal(lastLines(Array.from({ length: 200 }, (_, i) => i).join('\n')).split('\n').length, 61, 'default is 60 lines plus the marker');
+    const def = lastLines(Array.from({ length: 200 }, (_, k) => 'l' + k).join('\n')).split('\n');
+    assert.equal(def[0], '... 140 earlier lines omitted', 'default marker');
+    assert.deepEqual(def.slice(1), Array.from({ length: 60 }, (_, k) => 'l' + (140 + k)), 'default keeps exactly the final 60 lines');
 });
