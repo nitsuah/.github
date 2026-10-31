@@ -229,6 +229,17 @@ test('gate passes a small in-scope tested diff', () => {
     assert.equal(g.lines, 27);
 });
 
+test('gate uses full base..HEAD numstat for size, ignoring legacy sizeNumstat', () => {
+    // Small 41-line Imp diff + large formatter rewrite = 1,672 total
+    const impNumstat = '20\t21\tapp/lib/feature.js';
+    const formatterNumstat = '800\t831\tapp/lib/legacy.js';
+    const fullNumstat = `${impNumstat}\n${formatterNumstat}`;
+    const g = gate({ numstat: fullNumstat, sizeNumstat: impNumstat, commits: [ok], testExit: 0, maxLines: 150, allow: ['app/lib/'] });
+    assert.equal(g.pass, false);
+    assert.ok(g.reasons.includes('diff 1672 lines > 150'));
+    assert.equal(g.lines, 1672);
+});
+
 test('gate fails on size, scope, deny paths, trailer and tests', () => {
     const g = gate({
         numstat: '70\t59\tapp/lib/privacy.js\n1\t0\t.github/workflows/x.yml\n3\t1\tapp/app.js',
@@ -245,7 +256,7 @@ test('gate fails on size, scope, deny paths, trailer and tests', () => {
     assert.ok(gate({ numstat: '1\t0\tsub/pnpm-lock.yaml', commits: [ok], testExit: 0 }).reasons.includes('denied path sub/pnpm-lock.yaml'));
     assert.ok(gate({ numstat: '1\t0\ta.js', commits: [ok], testExit: 0, maxLines: NaN }).reasons.includes('diff 1 lines > NaN'));
     // A runner formatter commit counts for scope, not for the size budget.
-    const f = gate({ numstat: '30\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', sizeNumstat: '26\t0\tapp/lib/a.js\n14\t0\tapp/lib/b.js', commits: [ok], testExit: 0, maxLines: 40, allow: ['app/lib/'] });
+    const f = gate({ numstat: '20\t0\tapp/lib/a.js\n20\t0\tapp/lib/b.js', commits: [ok], testExit: 0, maxLines: 40, allow: ['app/lib/'] });
     assert.equal(f.pass, true, f.reasons.join());
     assert.equal(f.lines, 40);
 });

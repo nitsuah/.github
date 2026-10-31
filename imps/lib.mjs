@@ -265,7 +265,7 @@ export function effectiveMaxLines(metaMax, slack = 0) {
     return (Number.isNaN(n) ? n : Math.max(n, DEFAULTS.maxLines)) + Number(slack);
 }
 
-export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
+export function gate({ numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -274,7 +274,7 @@ export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty 
             return { path, lines: (Number(a) || 0) + (Number(d) || 0) };
         });
     const files = parse(numstat);
-    const lines = parse(sizeNumstat).reduce((n, f) => n + f.lines, 0);
+    const lines = parse(numstat).reduce((n, f) => n + f.lines, 0);
     const reasons = [];
     if (!commits.length) reasons.push(dirty ? 'edits left uncommitted' : 'no commits');
     for (const f of files) {
