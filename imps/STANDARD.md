@@ -98,7 +98,7 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
 | Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
-| Imp runs per 24 h / `--daily-cap` | 60 | `loopBudget` |
+| Imp runs per 24 h / `--daily-cap` | 100 | `loopBudget` |
 | Repo cooldown | 12 h (`defaults.cooldownMs`) after two straight gate failures in a repo | `loopBudget` |
 | Attempts per issue | 2 failed/killed runs without a PR (since the latest brief), then `imp:needs-human` + one comment | `defaults.maxIssueFailures`, `issueFailures` |
 | No-edit fail-fast | 12 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
