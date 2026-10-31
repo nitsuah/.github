@@ -156,6 +156,34 @@ export function errorKind(text = '') {
     return 'other';
 }
 
+// Allowed error kinds the repeat-failure guard tracks.
+export const REPEAT_GUARD_KINDS = ['edit-miss', 'edit-unread', 'bad-tool-call', 'missing-path', 'command-failed', 'timeout'];
+
+/**
+ * Pure per-run guard for repeated tool failures.
+ * Counts occurrences of allowlisted error kinds; on the 3rd occurrence of the same kind,
+ * returns a nudge message containing only the normalized kind. State is local to one run.
+ * - Saturates each counter at 5.
+ * - Tracks at most REPEAT_GUARD_KINDS.length signatures.
+ * - Emits at most one nudge per kind.
+ * - Unknown/other kinds are ignored.
+ * @param {string} kind - The errorKind value (must be in REPEAT_GUARD_KINDS).
+ * @param {Object} state - Mutable state object { counts: Map<kind, number>, nudged: Set<kind> }.
+ * @returns {string|null} Nudge message or null.
+ */
+export function repeatFailureGuard(kind, state = { counts: new Map(), nudged: new Set() }) {
+    if (!REPEAT_GUARD_KINDS.includes(kind)) return null;
+    const counts = state.counts;
+    const nudged = state.nudged;
+    const current = (counts.get(kind) || 0) + 1;
+    counts.set(kind, Math.min(current, 5)); // saturate at 5
+    if (current === 3 && !nudged.has(kind)) {
+        nudged.add(kind);
+        return `Repeated ${kind}: stop repeating the same failed operation, inspect current state, and change approach.`;
+    }
+    return null;
+}
+
 // The kit's own defaults and each repo's guardrail config are off limits: an
 // imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,

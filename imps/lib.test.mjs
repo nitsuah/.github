@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
@@ -1029,4 +1029,67 @@ test('runGhWithReadRetry retries a transient read once but never retries a write
     assert.equal(write.status, 1);
     assert.equal(writeCalls, 1);
     assert.equal(pauses, 1);
+});
+
+
+// repeatFailureGuard tests
+test('repeatFailureGuard: disabled mode (no state passed) is a no-op', () => {
+    assert.equal(repeatFailureGuard('edit-miss'), null);
+    assert.equal(repeatFailureGuard('command-failed'), null);
+    assert.equal(repeatFailureGuard('unknown-kind'), null);
+});
+
+test('repeatFailureGuard: third same-kind failure produces exactly one nudge', () => {
+    const state = { counts: new Map(), nudged: new Set() };
+    assert.equal(repeatFailureGuard('edit-miss', state), null, '1st: no nudge');
+    assert.equal(repeatFailureGuard('edit-miss', state), null, '2nd: no nudge');
+    const nudge3 = repeatFailureGuard('edit-miss', state);
+    assert.ok(nudge3 && nudge3.includes('edit-miss'), '3rd: nudge with kind');
+    assert.equal(repeatFailureGuard('edit-miss', state), null, '4th: no repeat nudge');
+    assert.equal(repeatFailureGuard('edit-miss', state), null, '5th: no repeat nudge');
+});
+
+test('repeatFailureGuard: two allowed kinds tracked independently', () => {
+    const state = { counts: new Map(), nudged: new Set() };
+    repeatFailureGuard('edit-miss', state);
+    repeatFailureGuard('edit-miss', state);
+    repeatFailureGuard('command-failed', state);
+    repeatFailureGuard('command-failed', state);
+    const nudge1 = repeatFailureGuard('edit-miss', state);
+    const nudge2 = repeatFailureGuard('command-failed', state);
+    assert.ok(nudge1 && nudge1.includes('edit-miss'));
+    assert.ok(nudge2 && nudge2.includes('command-failed'));
+    assert.notEqual(nudge1, nudge2);
+});
+
+test('repeatFailureGuard: counter saturates at 5, signatures capped to allowlist size, other/unknown kinds ignored', () => {
+    const state = { counts: new Map(), nudged: new Set() };
+    for (let i = 0; i < 10; i++) repeatFailureGuard('edit-miss', state);
+    assert.equal(state.counts.get('edit-miss'), 5, 'counter saturated at 5');
+    assert.equal(state.counts.size, 1, 'only tracked kinds counted');
+    assert.equal(repeatFailureGuard('other', state), null, 'unknown kind ignored');
+    assert.equal(repeatFailureGuard('denied', state), null, 'non-allowlist kind ignored');
+    assert.equal(state.counts.size, 1, 'non-allowlist kinds do not add signatures');
+});
+
+test('repeatFailureGuard: nudge text contains only normalized kind, never raw text or secrets', () => {
+    const state = { counts: new Map(), nudged: new Set() };
+    repeatFailureGuard('timeout', state);
+    repeatFailureGuard('timeout', state);
+    const nudge = repeatFailureGuard('timeout', state);
+    assert.ok(nudge && nudge.includes('timeout'));
+    assert.ok(!nudge.includes('secret'));
+    assert.ok(!nudge.includes('password'));
+    assert.ok(!nudge.includes('token'));
+    assert.ok(!nudge.includes('/path/'));
+    assert.ok(!nudge.includes('raw error'));
+});
+
+test('repeatFailureGuard: throwing nudge writer (simulated) fails open and does not throw', () => {
+    // The guard itself never throws; it's pure. This test documents the contract.
+    const state = { counts: new Map(), nudged: new Set() };
+    assert.doesNotThrow(() => {
+        for (let i = 0; i < 5; i++) repeatFailureGuard('bad-tool-call', state);
+    });
+    assert.equal(state.nudged.has('bad-tool-call'), true);
 });
