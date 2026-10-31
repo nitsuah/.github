@@ -1147,6 +1147,6 @@ test('validateBriefMaxLines rejects malformed and non-finite caps', () => {
     for (const value of ['abc', 'NaN', 'Infinity', '-Infinity', '1e309']) {
         assert.throws(() => validateBriefMaxLines(value), /finite number/);
     }
-    const { meta } = parseBrief('---\\nrepo: fire\\nissue: 1\\nmaxLines: 60 # note\\n---\\n');
+    const { meta } = parseBrief('---\nrepo: fire\nissue: 1\nmaxLines: 60 # note\n---\n');
     assert.throws(() => validateBriefMaxLines(meta.maxLines), /finite number/);
 });
