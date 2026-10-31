@@ -359,7 +359,7 @@ async function work(issue) {
     }
     try {
         const cfg = loadHomeConfig();
-        const modelStrategy = normalizeModelStrategy(cfg?.modelStrategy);
+        const modelStrategy = normalizeModelStrategy(cfg);
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX', '--modelStrategy', modelStrategy]);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
         if (!id && /claude binary not found/.test(run.out)) {
