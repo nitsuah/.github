@@ -184,6 +184,31 @@ export function repeatFailureGuard(kind, state = { counts: new Map(), nudged: ne
     return null;
 }
 
+/**
+ * Write one JSONL message to a streaming worker's stdin.
+ * A false write result means Node accepted the chunk but needs backpressure relief;
+ * disable subsequent guard messages and let the worker continue.
+ * @param {import('node:stream').Writable} stream
+ * @param {Object} message
+ * @param {{disabled:boolean, closed:boolean}} state
+ * @returns {boolean} true only when the stream accepted the write without backpressure
+ */
+export function writeStreamJsonMessage(stream, message, state) {
+    if (!state || state.disabled || state.closed) return false;
+    if (!stream?.writable) {
+        state.disabled = true;
+        return false;
+    }
+    try {
+        const accepted = stream.write(JSON.stringify(message) + '\n');
+        if (!accepted) state.disabled = true;
+        return accepted;
+    } catch {
+        state.disabled = true;
+        return false;
+    }
+}
+
 // The kit's own defaults and each repo's guardrail config are off limits: an
 // imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
