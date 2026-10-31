@@ -1,0 +1,30 @@
+name: Imp kit
+
+on:
+  pull_request:
+    paths:
+      - 'imps/**'
+      - '.github/workflows/imps-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'imps/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Run Imp kit unit tests
+        run: node --test imps/*.test.mjs
+      - name: Syntax-check all Imp kit modules
+        run: |
+          for f in imps/*.mjs; do
+            node --check "$f" || exit 1
+          done

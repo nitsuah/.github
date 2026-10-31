@@ -42,18 +42,24 @@ test('a stub runner that is not a git checkout fails the topology check', () => 
     }
 });
 
-test('hourly.cmd that launches a different path fails', () => {
+test('hourly wrapper that launches a different path fails', () => {
     const home = mkdtempSync(join(tmpdir(), 'imps-warlock-'));
     try {
         const runner = join(home, 'runner');
         mkdirSync(join(runner, 'imps'), { recursive: true });
         writeFileSync(join(runner, 'imps', 'dispatch.mjs'), 'export {};\n');
         writeFileSync(join(home, 'kit-path.txt'), runner);
-        writeFileSync(join(home, 'hourly.cmd'), 'set IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps\\dispatch.mjs\n');
+
+        const isWindows = process.platform === 'win32';
+        const wrapperName = isWindows ? 'hourly.cmd' : 'hourly.sh';
+        const wrapperBody = isWindows
+            ? 'set IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps\\dispatch.mjs\n'
+            : 'export IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps/dispatch.mjs\n';
+        writeFileSync(join(home, wrapperName), wrapperBody);
 
         const { json } = run(home);
 
-        const pointed = byName(json, 'hourly.cmd points at the runner');
+        const pointed = byName(json, `${wrapperName} points at the runner`);
         assert.equal(pointed.ok, false);
         assert.match(pointed.detail, /somewhere-else/);
     } finally {
