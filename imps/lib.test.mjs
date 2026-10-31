@@ -892,6 +892,13 @@ test('parseDepends reads #N, repo#N and owner/repo#N, defaulting to the same rep
     assert.deepEqual(parseDepends(undefined, 'fire'), []);
 });
 
+test('parseDepends ignores prose after the reference list (a note naming a later issue is not a blocker)', () => {
+    assert.deepEqual(parseDepends('motor-pool#124 merged as 0bb67e3; #126 follows this child', 'motor-pool'), [{ repo: 'motor-pool', number: 124 }]);
+    assert.deepEqual(parseDepends('#124 closed; #126 docs follows this child', 'motor-pool'), [{ repo: 'motor-pool', number: 124 }]);
+    assert.deepEqual(parseDepends('#124 (done), #125', 'motor-pool'), [{ repo: 'motor-pool', number: 124 }, { repo: 'motor-pool', number: 125 }]);
+    assert.deepEqual(parseDepends('part 2 of #117', 'motor-pool'), [], 'a sentence that merely mentions an issue names no dependency');
+});
+
 test('unmetDepends: a foreign-owner reference is never satisfied by a same-named merged row in the ledger', () => {
     const rows = [{ repo: 'fire', issue: 7, outcome: 'merged' }];
     assert.equal(unmetDepends([{ owner: 'other', repo: 'fire', number: 7 }], { rows, isOpen: () => true }).length, 1);
