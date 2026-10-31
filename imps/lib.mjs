@@ -5,6 +5,20 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+export function resolveImpsCodeRoot({ env = process.env, home = homedir() } = {}) {
+    const explicit = typeof env.IMPS_CODE === 'string' && env.IMPS_CODE !== '' ? env.IMPS_CODE : '';
+    return explicit || join(home, 'code');
+}
+
+export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists = () => false } = {}) {
+    if (typeof repo !== 'string' || !/^[A-Za-z0-9._-]+$/.test(repo) || repo === '.' || repo === '..') {
+        throw new Error('Invalid repository name for checkout preflight');
+    }
+    const path = join(codeRoot, repo);
+    const gitMarker = join(path, '.git');
+    return { repo, path, gitMarker, checkedOut: Boolean(exists(gitMarker)) };
+}
+
 // ── 9router URL/key resolution ────────────────────────────────────────────
 // Secrets belong in OS user-level env vars; ~/.claude/settings.json `env` is
 // the backwards-compatible fallback. Never throws: a fresh machine may have no

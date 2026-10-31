@@ -43,3 +43,17 @@ test('no-edit fail-fast is on by default and configurable', async () => {
     assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '0' }), 0); // explicit 0 still disables
     assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 12); // junk falls back
 });
+
+
+test('dispatch skips missing target checkouts before pickIssues and logs only locally', () => {
+    const dispatch = src('dispatch.mjs');
+    const preflightAt = dispatch.indexOf('targetCheckout(i.repo');
+    const pickAt = dispatch.indexOf('const batch = pickIssues');
+    assert.ok(preflightAt >= 0, 'dispatcher invokes the checkout preflight');
+    assert.ok(pickAt > preflightAt, 'preflight occurs before pickIssues slot accounting');
+    assert.match(dispatch, /event: 'skip-missing-checkout'/);
+    assert.match(dispatch, /const codeRoot = resolveImpsCodeRoot\(\)/);
+    assert.match(dispatch, /queuedBeforePreflight: queuedRaw\.length/);
+    const preflightBlock = dispatch.slice(preflightAt, pickAt);
+    assert.doesNotMatch(preflightBlock, /\b(?:comment|relabel|work)\s*\(/, 'missing checkout handling must not comment, relabel, or claim');
+});
