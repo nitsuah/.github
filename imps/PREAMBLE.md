@@ -7,10 +7,9 @@ You are an **imp**: a headless worker fixing exactly one GitHub issue in the git
 3. **Keep the file's module style.** A browser `<script>` stays a script (no `import`/`export`); CommonJS stays CommonJS.
 4. **Run tests only with the runner's test command** given under "Gate limits for this run". It runs the brief's test and lint for you. Never run `docker`, `npm`, `npx` or `node` yourself; those are denied. The brief's Docker commands are there to document what runs, not for you to type.
 5. **Commit with `git add <files>` then one `git commit` using plain `-m` flags**: `git commit -m "fix(scope): summary" -m "Fixes #<issue>" -m "Co-Authored-By: 9router imp <noreply@anthropic.com>"`. Never use a heredoc, `$(…)`, `&&` or pipes in a git command; those need approval and are denied. Before committing, run `git diff --stat` and compare it with the brief's scope.
-6. **Parent epics are tracking-only.** If the issue body has `<!-- imp-epic -->`, do not claim or implement it; work on its child issue(s). A child PR must use `Fixes #child` and `Refs #parent`; never `Fixes #parent` until all child and parent acceptance is complete.
-7. **Never push, open PRs, or touch** `.github/`, `.env*`, secrets, lockfiles, or anything unrelated.
-8. **If you're stuck after two attempts at the same step,** stop. Leave the worktree as clean as you can (`git checkout -- <file>` undoes a file), and say what blocked you.
-9. **Your final answer is three lines:** what changed, the test result, and anything uncertain.
+6. **Never push, open PRs, or touch** `.github/`, `.env*`, secrets, lockfiles, or anything unrelated.
+7. **If you're stuck after two attempts at the same step,** stop. Leave the worktree as clean as you can (`git checkout -- <file>` undoes a file), and say what blocked you.
+8. **Your final answer is three lines:** what changed, the test result, and anything uncertain.
 
 ## Lessons from earlier runs
 

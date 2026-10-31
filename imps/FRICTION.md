@@ -66,14 +66,7 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 
 ### Failure-evidence follow-up (2026-10-31)
 
-- Fire #318: the prior Imp attempt still lacks its exact assertion/diagnostic, but maintenance recovered the bounded shared normalizer in [PR #392](https://github.com/nitsuah/fire/pull/392). Its first CI head failed only on Prettier import formatting; corrected in head `91a010fa3aba72e722e508fb7dfd8ac632a5671b`, exact-head checks pending. `imp:failed` was removed, `imp:pr` set; #319 remains blocked until merge.
+- Fire #318: the latest replacement-brief attempt ended with `tests exit 1` and `edits left uncommitted`, no PR. The issue comment did not include the failing assertion/diagnostic, so the issue remains `imp:failed`; #319 stays blocked. Do not requeue unchanged until the exact failure output or a reproducible cause is recovered.
 - Skyview #215: after the prior out-of-scope attempt, the replacement brief ended at `lint exit 2`, no PR. The safe direct implementation landed in PR #217 (merge `d3b6b810729ac741499fbccdd0da0cdae3aa51a6`); exact-head Unit Tests, Playwright Tests, and Docker Smoke all passed, and #215 is closed.
 - Dispatch evidence note: for test/lint failures, the issue comment should preserve the exact command, exit code, first failing assertion/diagnostic, and file/line when available. An exit-code-only summary is not enough to safely correct a brief.
 - Size-only recoveries: Darkmoon #494 (88 lines against 80) and VHS #124 (87 against 45) were rebriefed to 100-line caps after confirming the same bounded allowlists. This supports the existing #122 proposal but does not change retry policy; #122 remains owner-gated.
-
-
-### Parent epic and recovery follow-up (2026-10-31)
-
-- Vigil #361 was a decomposition parent with children #400/#401/#402. [PR #408](https://github.com/nitsuah/vigil/pull/408) merged with `Fixes #361` in the merge message and auto-closed the parent even though #400's no-`repoUrl` fallback and the full E2E journey were incomplete. The parent was reopened; #401/#402 are closed as covered, #400's residual is in [PR #411](https://github.com/nitsuah/vigil/pull/411), and [#410](https://github.com/nitsuah/vigil/issues/410) is `imp:ready` for the missing journey assertions. Shared guard tracked in [#145](https://github.com/nitsuah/.github/issues/145).
-- Vigil #356 recovered from the formatter-expanded PR: [PR #407](https://github.com/nitsuah/vigil/pull/407) was reduced to 46 changed lines, the indexed-read/malformed-list findings were fixed, exact-head CI/Docker Smoke/E2E passed, and it merged as `cf011a110774c7628f419dfa068b6c33a2a90009`. The immediate PR is complete; the owner-gated #143 policy remains unchanged.
-- VHS #123 exact-head CI/CodeQL/Showcase Lock are green; Journeys failed only three screenshot comparisons. The CI artifact shows the intended stats-chip changes and owner approval is recorded for those three baselines. The snapshot refresh/commit and 3-run soak still require the Docker Playwright path; do not weaken thresholds or merge while Journeys is red.
