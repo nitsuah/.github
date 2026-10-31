@@ -43,7 +43,7 @@ function fakeCli() {
         '      finish(JSON.stringify(received));',
         '    }',
         '  });',
-        "  setTimeout(() => { if (received.length === 0) finish('NO_INITIAL_PROMPT'); }, 250);",
+        "  setTimeout(() => { if (received.length === 0) finish('NO_INITIAL_PROMPT'); }, 1000);",
         '}',
     ].join('\n');
     writeFileSync(script, source);
