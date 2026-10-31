@@ -21,6 +21,7 @@ proposal, not behavior. Keep the **cause** column specific so a human can.
 | 11 | 2026-10-28 | imp PR quality (vhs#103) | with the broken gate shell the imp could not run tests, finished anyway, and its PR body is its last message ("the test command failed due to a syntax error...") under the generic title `imp: work for #102 (committed by runner)`; the diff itself had two blockers | the imp is told to verify with `runtest.mjs` but nothing stops it from ending with a red or unrun test; PR title/summary come from the final text, not the work | open: refuse to open a PR when the imp's last test run failed; title from the issue; summary from the diff. Worked as designed: the imp reviewer caught both blockers and nothing auto-merged |
 | 12 | 2026-10-28 | gate size accounting | `Gate: 0 lines in src/modules/auth.js` for a +12/-5 diff | `runGate` read `impHead` before the runner's auto-commit existed, then measured the size as `baseSha..impHead`, which is empty when the imp left its edits uncommitted. So `maxLines` never saw an auto-committed change: an oversized diff would have passed the size gate | fixed: `impHead` is re-read after the auto-commit |
 | 13 | 2026-10-28 | live visibility | the only way to see what an imp was doing was tailing raw `dispatch.jsonl` / `runs/<id>.jsonl` | no live view existed | fixed: `watch.mjs --statusline` (Claude Code status line) and full-screen `watch.mjs`; see README "Watching a run" |
+| 14 | 2026-10-31 | cross-repo readiness recovery | Safe, unowned `imp:failed` work in Fire #318/#330/#339/#381 and Vigil #373 was not dispatchable; prior runs exceeded diff caps, left edits uncommitted, or exited with tests failing, while dependency/index notes were stale | briefs combined distinct behaviors or omitted exact call-site/test-fixture changes; the attempt cap only resets from a replacement formal `<!-- imp-brief -->`, so unchanged requeues repeat the failure | observed: manual groomer rebriefed 5 issues; Vigil #373 was split into pure mapping and merge helper #406; #319/#383/#370/#371/#394 remain blocked by dependencies; automation gap tracked in #116 |
 
 ## Who writes the briefs? (gap, not yet built)
 
@@ -32,6 +33,8 @@ hypervisor/human pass, and `rsi.mjs` only files capped issues from ledger and jo
 What that cost on this machine: 8 `imp:ready` issues at first look, one without a brief that
 starved the cycle (#4), and no way to tell which of the rest are safe first runs (several are
 "security review" audits, which are not PR-shaped).
+
+Readiness recovery evidence (2026-10-31): a manual pass rebriefed five safe, unowned failures across Fire/Vigil. The recurring fixes were not blind retries: re-read default-branch code and claims/PRs, verify dependencies, make the allowlist/test/lint/maxLines explicit, state data/security invariants and the commit trailer, and post a replacement formal brief before restoring `imp:ready`. Split mapping, merge, and integration when the combined brief repeatedly exceeds its budget. Keep the groomer draft-first; only promote after the same eligibility checks.
 
 ### Proposal: a groomer stage
 
