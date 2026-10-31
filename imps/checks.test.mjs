@@ -233,7 +233,7 @@ test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {
     assert.equal(DEFAULTS.perRepo, 6);
     assert.equal(DEFAULTS.concurrency, 6);
     assert.equal(DEFAULTS.wip, 12);
-    assert.equal(DEFAULTS.dailyCap, 60);
+    assert.equal(DEFAULTS.dailyCap, 100);
     assert.equal(DEFAULTS.autoMergeTrust, 3);
     assert.equal(DEFAULTS.kitFolder, '.github');
     assert.equal(DEFAULTS.kitRepo, 'nitsuah/.github');
