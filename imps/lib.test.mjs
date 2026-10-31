@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -1121,4 +1121,12 @@ test('writeStreamJsonMessage ignores a closed stream', () => {
     const stream = { writable: true, write: () => { writes++; return true; } };
     assert.equal(writeStreamJsonMessage(stream, {}, state), false);
     assert.equal(writes, 0);
+});
+
+test('isEpicIssueBody recognizes only the explicit tracking-only marker and leaves child issues eligible', () => {
+    assert.equal(isEpicIssueBody(`${EPIC_MARK}\nParent acceptance checklist`), true);
+    assert.equal(isEpicIssueBody('Ordinary child issue with implementation steps'), false);
+    assert.equal(isEpicIssueBody('The phrase imp-epic appears without the HTML marker'), false);
+    assert.equal(isEpicIssueBody(''), false);
+    assert.equal(isEpicIssueBody(null), false);
 });

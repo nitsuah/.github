@@ -359,6 +359,10 @@ export function briefCommentAt(comments = []) {
 
 export const CAP_MARK = '<!-- imp-cap -->';
 export const NO_BRIEF_MARK = '<!-- imp-no-brief -->';
+export const EPIC_MARK = '<!-- imp-epic -->';
+
+// Tracking-only parents stay open until every child and manual acceptance is complete.
+export const isEpicIssueBody = (body) => typeof body === 'string' && body.includes(EPIC_MARK);
 // Has the dispatcher already left this one-time note on the issue?
 export const hasMark = (comments = [], mark) => comments.some((c) => (c.body || '').includes(mark));
 
