@@ -94,3 +94,7 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 ### Brief cap floor (2026-10-31)
 
 - `.github` PR #156 merged as `ecae8867f5b0f20a3b0b7f201bb1727d712c38c4` after seven size-only gate failures across motor-pool #125, VHS #124, Darkmoon #494/#495, Vigil #406, and Fire #321/#326. `effectiveMaxLines()` now floors brief caps at `DEFAULTS.maxLines` (150), preserves higher caps, adds fix-round slack after the floor, and leaves malformed caps fail-closed. Exact-head Imp kit run `41171398024` succeeded (213 pass, 2 skipped, 0 fail). This corrects brief sizing only; size-only retry policy #122 and post-format budget policy #143 remain owner-gated.
+
+### Child acceptance after PR closure (2026-10-31)
+
+- Fire #338 exposed a lifecycle gap: PR #368 merged as `ccf41a3` and auto-closed the child after adding state/markup, but the current default branch still had no visible profile-panel toggle or `saveChaosProfile` / `clearChaosProfile` handlers. The PR's exact-head CI run `40992503422` succeeded, while review findings for both missing behaviors were explicitly marked "Not in this PR." The child was reopened for tracking, focused follow-up #399 is `imp:ready`, and #340 remains blocked on #399. Lesson: verify every child's acceptance against the merged code; a green PR and auto-closed issue do not prove the user journey is complete.
