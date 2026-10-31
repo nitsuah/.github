@@ -1188,10 +1188,11 @@ test('targetCheckout rejects path traversal and non-slug repository names', () =
 });
 
 
-test('normalizeModelStrategy accepts non-empty strings and falls back for invalid values', () => {
-    for (const value of [undefined, null, '', '   ', 0, false, {}, []]) {
-        assert.equal(normalizeModelStrategy(value), 'fallback');
+test('normalizeModelStrategy safely reads config and preserves non-empty strings', () => {
+    for (const config of [undefined, null, [], {}, { modelStrategy: null }, { modelStrategy: [] }, { modelStrategy: {} }, { modelStrategy: '' }, { modelStrategy: false }, { modelStrategy: 0 }]) {
+        assert.equal(normalizeModelStrategy(config), 'fallback');
     }
-    assert.equal(normalizeModelStrategy('custom'), 'custom');
-    assert.equal(normalizeModelStrategy(' custom '), ' custom ', 'preserve valid configured strings unchanged');
+    for (const value of ['fallback', 'custom', ' ', ' custom ']) {
+        assert.equal(normalizeModelStrategy({ modelStrategy: value }), value, 'preserve non-empty configured strings unchanged');
+    }
 });
