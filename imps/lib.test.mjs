@@ -1,10 +1,11 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -1156,4 +1157,32 @@ test('validateBriefMaxLines rejects malformed and non-finite caps', () => {
     }
     const { meta } = parseBrief('---\nrepo: fire\nissue: 1\nmaxLines: 60 # note\n---\n');
     assert.throws(() => validateBriefMaxLines(meta.maxLines), /finite number/);
+});
+
+
+test('resolveImpsCodeRoot honors IMPS_CODE and otherwise uses the home code directory', () => {
+    assert.equal(resolveImpsCodeRoot({ env: { IMPS_CODE: '/custom/repos' }, home: '/home/test' }), '/custom/repos');
+    assert.equal(resolveImpsCodeRoot({ env: { IMPS_CODE: '' }, home: '/home/test' }), join('/home/test', 'code'));
+    assert.equal(resolveImpsCodeRoot({ env: {}, home: '/home/test' }), join('/home/test', 'code'));
+});
+
+test('targetCheckout accepts a .git directory or worktree file marker and skips missing checkouts', () => {
+    const marker = join('/repos', 'fire', '.git');
+    const checked = targetCheckout('fire', { codeRoot: '/repos', exists: (path) => path === marker });
+    assert.equal(checked.checkedOut, true);
+    assert.equal(checked.path, join('/repos', 'fire'));
+    assert.equal(checked.gitMarker, marker);
+
+    const worktree = targetCheckout('fire-worktree', { codeRoot: '/repos', exists: (path) => path === join('/repos', 'fire-worktree', '.git') });
+    assert.equal(worktree.checkedOut, true, 'the injected existence check accepts a worktree .git file');
+
+    const missing = targetCheckout('security-program', { codeRoot: '/repos', exists: () => false });
+    assert.equal(missing.checkedOut, false);
+    assert.equal(missing.path, join('/repos', 'security-program'));
+});
+
+test('targetCheckout rejects path traversal and non-slug repository names', () => {
+    for (const repo of ['../outside', 'a/b', '.', '..', '']) {
+        assert.throws(() => targetCheckout(repo, { codeRoot: '/repos', exists: () => true }), /Invalid repository name/);
+    }
 });

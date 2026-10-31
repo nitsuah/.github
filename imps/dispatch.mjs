@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -590,11 +590,28 @@ for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open
     log({ event: 'claim-released', repo: w.repository.name, number: w.number, machine: c.machine });
 }
 
-const queued = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
+const queuedRaw = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
     .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)))
     .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`));
+
+// Preflight target checkouts before pickIssues so a missing repo neither consumes
+// a --max slot nor gets claimed/relabeled. `.git` may be a directory or worktree file.
+const codeRoot = resolveImpsCodeRoot();
+const queued = [];
+const missingCheckoutRepos = new Set();
+for (const i of queuedRaw) {
+    const target = targetCheckout(i.repo, { codeRoot, exists: existsSync });
+    if (target.checkedOut) {
+        queued.push(i);
+        continue;
+    }
+    if (!missingCheckoutRepos.has(i.repo)) {
+        log({ event: 'skip-missing-checkout', repo: i.repo, path: target.path });
+        missingCheckoutRepos.add(i.repo);
+    }
+}
 const impPRs = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'repository'])
     .map((p) => p.repository.name);
 
@@ -698,7 +715,7 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
     writeFileSync(i.briefPath, briefText);
     picked.push(i);
 }
-log({ event: 'cycle', queued: queued.length, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
+log({ event: 'cycle', queued: queued.length, queuedBeforePreflight: queuedRaw.length, skippedMissingCheckout: missingCheckoutRepos.size, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
 if (dry || !picked.length) process.exit(0);
 
 // Run up to `concurrency` repos at once. Imps for the same repo run one after another:
