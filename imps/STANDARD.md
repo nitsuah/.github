@@ -288,3 +288,15 @@ Each tick logs one `demonguard` event with the counts. It never uses `--admin`. 
 ## One retry with the failing output
 
 A first gate failure used to end the attempt and wait for a human re-brief, even though the gate now records the exact test or lint output. When a run fails only on `tests exit N`, `lint exit N` and/or `edits left uncommitted` and that output was recorded, the dispatcher puts the issue back on `imp:ready` once (`retry-feedback` event) and the second attempt's brief gets a "Previous attempt failed" block with that output, framed as data, fenced, redacted and capped. Scope, trailer, size and "did nothing" failures are not retried. The per-issue attempt cap (2) and the daily cap still bound it. Kill switch: `IMPS_RETRY_FEEDBACK=0`.
+
+## Repeat-failure guard (opt-in)
+
+An advisory, per-run guard can nudge the worker when the same coarse tool error repeats. It is **off by default**.
+
+- **Enable:** set `IMPS_REPEAT_FAILURE_GUARD=1` in the environment (not in `defaults.mjs`, not in `config.json`).
+- **Launch mode when enabled:** the initial prompt is sent as a JSONL user message over stdin with `--input-format stream-json`; the default argv-prompt / stdin-ignored launch is unchanged when off.
+- **What it tracks:** only the explicit allowlist of coarse `errorKind` values: `edit-miss`, `edit-unread`, `bad-tool-call`, `missing-path`, `command-failed`, `timeout`. `denied`, `other`, and any unknown strings are ignored.
+- **Threshold:** on the **third** occurrence of the same kind in this run, a single advisory user message is injected containing only the normalized kind (e.g. `Repeated edit-miss: stop repeating the same failed operation, inspect current state, and change approach.`). No raw error text, tool arguments, file paths, prompt fragments, or secrets are ever included.
+- **Bounds:** each counter saturates at 5; at most `allowlist.length` signatures are tracked; at most one nudge per kind per run. State is local to the `runClaude` invocation — no ledger, no file, no cross-run persistence.
+- **Fail-open:** if the stdin write errors or backpressures, the guard disables itself for the rest of the run and the worker continues unchanged. The child process is never killed, the handler never throws, and no tool allowances, budgets, turn caps, gate, review, or merge behavior is altered.
+- **Advisory only:** the guard cannot terminate a run, authorize a tool, widen scope, alter the diff/test gate, or influence PR/review/merge decisions.

@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief, closesIssue, resolveRouter } from './lib.mjs';
+import { summarizeRun, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -240,10 +240,18 @@ function spawnFailed(t0) {
     return metrics;
 }
 export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
-    const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
+    const guardEnabled = process.env.IMPS_REPEAT_FAILURE_GUARD === '1';
+    const args = ['-p', '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
         '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
         '--output-format', 'stream-json', '--verbose'];
+    if (!guardEnabled) {
+        // Default launch: argv prompt, stdin ignored
+        args.unshift(prompt);
+    } else {
+        // Streaming mode: prompt via stdin with --input-format stream-json
+        args.push('--input-format', 'stream-json');
+    }
     if (!process.env.IMPS_NO_TRIM) {
         const builtin = [...new Set(tools.map((t) => t.replace(/\(.*$/, '')))];
         args.push('--disable-slash-commands', '--no-session-persistence', '--tools', builtin.join(','));
@@ -257,12 +265,35 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     }
     const out = createWriteStream(transcript);
     const events = [];
-    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const stdio = guardEnabled ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'];
+    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio, windowsHide: true });
     let buf = '';
     let toolTurns = 0;
     let capped = false;
     let edited = false;
     let noEdit = false;
+    // Guard state (local to this run)
+    const guardState = { counts: new Map(), nudged: new Set() };
+    let guardDisabled = false;
+    let stdinClosed = false;
+    let promptSent = false;
+
+    const writeStdin = (msg) => {
+        if (guardDisabled || stdinClosed || !child.stdin?.writable) return;
+        try {
+            child.stdin.write(JSON.stringify(msg) + '\n');
+        } catch {
+            // Fail-open: disable further nudges, continue the worker
+            guardDisabled = true;
+        }
+    };
+
+    const closeStdin = () => {
+        if (stdinClosed || !child.stdin?.writable) return;
+        try { child.stdin.end(); } catch { /* ignore */ }
+        stdinClosed = true;
+    };
+
     child.stdout.on('data', (d) => {
         buf += d;
         let i;
@@ -290,6 +321,19 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
                     console.log(`  turn cap ${maxTurns} reached; stopping`);
                     child.kill('SIGTERM');
                 }
+            } else if (guardEnabled && ev.type === 'user') {
+                for (const c of ev.message?.content || []) {
+                    if (c.type !== 'tool_result' || !c.is_error) continue;
+                    const kind = errorKind(typeof c.content === 'string' ? c.content : JSON.stringify(c.content));
+                    const nudge = repeatFailureGuard(kind, guardState);
+                    if (nudge) {
+                        // Advisory nudge: send as a user message with only the normalized kind
+                        writeStdin({ type: 'user', message: { role: 'user', content: nudge } });
+                    }
+                }
+            } else if (ev.type === 'result') {
+                // Final result event: close stdin in streaming mode
+                if (guardEnabled) closeStdin();
             }
         }
     });
@@ -309,6 +353,11 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
         child.once('close', done);
     });
     clearTimeout(timer);
+    // In streaming mode, send the initial prompt after spawn, then close on result
+    if (guardEnabled && !promptSent && started && !spawnError) {
+        writeStdin({ type: 'user', message: { role: 'user', content: prompt } });
+        promptSent = true;
+    }
     await new Promise((done) => out.end(done));
     if (spawnError) return spawnFailed(t0);
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
