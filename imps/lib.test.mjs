@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { effectiveMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, validateBriefMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody } from './lib.mjs';
@@ -1137,4 +1137,16 @@ test('effectiveMaxLines: a brief cap never goes below the default, and slack is 
     assert.equal(effectiveMaxLines('250'), 250, 'a higher cap is kept');
     assert.equal(effectiveMaxLines('45', '20'), 170, 'slack applies after the floor');
     assert.ok(Number.isNaN(effectiveMaxLines('abc')), 'a non-numeric cap still fails the gate instead of passing');
+});
+
+
+test('validateBriefMaxLines rejects malformed and non-finite caps', () => {
+    assert.doesNotThrow(() => validateBriefMaxLines(undefined));
+    assert.doesNotThrow(() => validateBriefMaxLines('150'));
+    assert.doesNotThrow(() => validateBriefMaxLines('0'));
+    for (const value of ['abc', 'NaN', 'Infinity', '-Infinity', '1e309']) {
+        assert.throws(() => validateBriefMaxLines(value), /finite number/);
+    }
+    const { meta } = parseBrief('---\\nrepo: fire\\nissue: 1\\nmaxLines: 60 # note\\n---\\n');
+    assert.throws(() => validateBriefMaxLines(meta.maxLines), /finite number/);
 });
