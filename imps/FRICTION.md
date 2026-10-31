@@ -67,6 +67,6 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 ### Failure-evidence follow-up (2026-10-31)
 
 - Fire #318: the latest replacement-brief attempt ended with `tests exit 1` and `edits left uncommitted`, no PR. The issue comment did not include the failing assertion/diagnostic, so the issue remains `imp:failed`; #319 stays blocked. Do not requeue unchanged until the exact failure output or a reproducible cause is recovered.
-- Skyview #215: after the prior out-of-scope attempt, the replacement brief ended at `lint exit 2`, no PR. A safe direct implementation is now in PR #217; its current exact-head checks are still missing, so it is not considered validated or mergeable.
+- Skyview #215: after the prior out-of-scope attempt, the replacement brief ended at `lint exit 2`, no PR. The safe direct implementation landed in PR #217 (merge `d3b6b810729ac741499fbccdd0da0cdae3aa51a6`); exact-head Unit Tests, Playwright Tests, and Docker Smoke all passed, and #215 is closed.
 - Dispatch evidence note: for test/lint failures, the issue comment should preserve the exact command, exit code, first failing assertion/diagnostic, and file/line when available. An exit-code-only summary is not enough to safely correct a brief.
 - Size-only recoveries: Darkmoon #494 (88 lines against 80) and VHS #124 (87 against 45) were rebriefed to 100-line caps after confirming the same bounded allowlists. This supports the existing #122 proposal but does not change retry policy; #122 remains owner-gated.
