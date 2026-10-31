@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -70,13 +70,13 @@ const { values: o, positionals: pos } = parseArgs({
 // ── commands ──────────────────────────────────────────────────────────────
 /**
  * Validate brief front‑matter.
- * Ensures required `repo` and `issue` fields exist and that `maxLines` is numeric.
+ * Ensures required `repo` and `issue` fields exist and that optional `maxLines` is finite.
  * Throws on validation errors.
  */
 function validateBrief(meta) {
     if (!meta.repo) throw new Error('Brief must specify repo');
     if (!meta.issue) throw new Error('Brief must specify issue');
-    if (meta.maxLines && isNaN(Number(meta.maxLines))) throw new Error('Brief maxLines must be numeric');
+    validateBriefMaxLines(meta.maxLines);
     // add more checks as needed
 }
 
