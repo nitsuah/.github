@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage } from './lib.mjs';
+import { summarizeRun, effectiveMaxLines, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -401,7 +401,7 @@ export function loadBrief(path, wt) {
     // The gate's scope and size limits go in the prompt too, so the imp knows them.
     const limits = [
         meta.allow && `- You may only change files under: ${meta.allow}. Anything else fails the gate.`,
-        `- The whole diff must stay under ${meta.maxLines || DEFAULTS.maxLines} changed lines.`,
+        `- The whole diff must stay under ${effectiveMaxLines(meta.maxLines)} changed lines.`,
         (meta.test || meta.lint) && `- Run the tests and lint with exactly \`${RUNTEST}\` (no arguments, one command on its own). It runs this brief's test and lint commands for you. Never run the brief's docker/npm/npx commands yourself; they're denied.`,
     ].filter(Boolean).join('\n');
     // Vault playbook (IMPS_VAULT_PROMPT) is for humans / RSI logging — never

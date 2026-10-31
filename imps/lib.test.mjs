@@ -1,7 +1,7 @@
 // node --test imps/*.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody } from './lib.mjs';
@@ -1129,4 +1129,12 @@ test('isEpicIssueBody recognizes only the explicit tracking-only marker and leav
     assert.equal(isEpicIssueBody('The phrase imp-epic appears without the HTML marker'), false);
     assert.equal(isEpicIssueBody(''), false);
     assert.equal(isEpicIssueBody(null), false);
+});
+
+test('effectiveMaxLines: a brief cap never goes below the default, and slack is added on top', () => {
+    assert.equal(effectiveMaxLines('45'), 150, 'a too-tight cap is lifted to the default');
+    assert.equal(effectiveMaxLines(undefined), 150);
+    assert.equal(effectiveMaxLines('250'), 250, 'a higher cap is kept');
+    assert.equal(effectiveMaxLines('45', '20'), 170, 'slack applies after the floor');
+    assert.ok(Number.isNaN(effectiveMaxLines('abc')), 'a non-numeric cap still fails the gate instead of passing');
 });

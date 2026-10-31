@@ -238,6 +238,12 @@ export function shouldAutoCommit({ impCommits, dirty, testExit } = {}) {
 // formatter commit counts toward scope but not toward the size budget.
 // dirty (optional) collapses "no commits" and the uncommitted edits behind it
 // into one reason, so RSI files one issue instead of three (#53).
+/** A brief's size cap, never below the kit default: models draft caps too tight and the gate then rejects work that review would accept. `slack` is a fix round's allowance. */
+export function effectiveMaxLines(metaMax, slack = 0) {
+    const n = Number(metaMax || DEFAULTS.maxLines);
+    return (Number.isNaN(n) ? n : Math.max(n, DEFAULTS.maxLines)) + Number(slack);
+}
+
 export function gate({ numstat, sizeNumstat = numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
