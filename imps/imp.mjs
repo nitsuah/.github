@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
+import { parseBrief, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -252,7 +252,7 @@ function runGate(id) {
         numstat, commits, testExit, dirty: Boolean(dirty),
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
-        maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
+        maxLines: effectiveMaxLines(meta.maxLines, o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
     });
