@@ -1,6 +1,6 @@
 # TokenEconomizer integration for Imps / Warlock
 
-Status: proposal for staged implementation
+Status: approved staged implementation; runtime work is tracked in [.github#135](https://github.com/nitsuah/.github/issues/135) (Imp/Warlock phase 1) and [.github#136](https://github.com/nitsuah/.github/issues/136) (Security Pipeline phase 1). Runtime code is not yet implemented; all flags remain off by default.
 Upstream: https://github.com/microsoft/TokenEconomizer
 Upstream license: Apache-2.0
 Target: `nitsuah/.github/imps`
