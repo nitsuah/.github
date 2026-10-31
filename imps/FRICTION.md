@@ -120,3 +120,10 @@ Vigil #368's acceptance crossed GitHub probe → sync persistence → Repo type 
 ### Motor-pool #125 fixture allowlist recovery (2026-10-31)
 
 The latest failure was a brief/scope mismatch, not a test or runtime defect: the Imp generated `test/fixtures/...` files outside the two-file allowlist. The replacement brief explicitly forbids fixture files and uses inline JSON fixtures in the test harness. Do not broaden to a recursive fixture-directory allowlist by default; keep the test seam in the allowlisted harness unless a separate test-data artifact is justified. A new formal `<!-- imp-brief -->` resets the attempt cap; unchanged requeues do not. #126 stays blocked on #125.
+
+
+### Responsive duplicate DOM in Playwright journeys (2026-10-31)
+
+Vigil #410's first Journeys run [41180536657](https://github.com/nitsuah/vigil/actions/runs/41180536657) failed because the unfiltered `[data-tour="issues"]` locator matched both desktop and mobile DOM instances. The fixture data and card were present; this was a Playwright strict-mode ambiguity, not a missing component. The test was corrected in [PR #414](https://github.com/nitsuah/vigil/pull/414) with `[data-tour="issues"]:visible`; exact-head Journeys [41180659506](https://github.com/nitsuah/vigil/actions/runs/41180659506) passed, and no screenshot baselines changed.
+
+For future journey briefs, scope responsive duplicate components to the visible/active viewport or intended container. Do not weaken assertions or use arbitrary `nth()` solely to silence strict mode.
