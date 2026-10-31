@@ -106,6 +106,7 @@ Pilot: **nitsuah/fire** (`tests/journeys/`, `.github/workflows/journeys.yml`). C
 - Use real numbers from the demo seed (`$45.50`, not `/\$\d/`). They catch calculation regressions the screenshot might not.
 - Phone layouts get their own journey with `test.use({ viewport: { width: 390, height: 844 }, isMobile: true })`.
 - Prefer ids and roles over CSS paths. A `has:` locator is evaluated *inside* the outer element, so use `hasText` when you mean "the card containing this text".
+- **Responsive duplicate DOM:** when desktop/mobile variants render the same card with shared selectors, use a visible locator (`:visible`) or scope to the active container. An unfiltered locator can match hidden duplicates and trigger strict-mode failures; avoid arbitrary `nth()` unless DOM order is the contract.
 - Baselines are **Linux, Docker only.** Generate them with the Playwright image, never on Windows/macOS.
 - **Tolerance: an absolute `maxDiffPixels` set from measured noise, never a ratio.** `maxDiffPixelRatio: 0.01` allows ~13k px at 1440×900, so fire's renamed demo wallet (6,029 px) passed unnoticed. Measure before choosing: soak at `maxDiffPixels: 0` (`--repeat-each 3`) and look at the largest diff.
   - **Canvas apps** (fire: Chart.js, emoji drawn on canvas): ~650 px of rendering noise, so **1000**.
