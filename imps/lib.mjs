@@ -19,6 +19,11 @@ export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists 
     return { repo, path, gitMarker, checkedOut: Boolean(exists(gitMarker)) };
 }
 
+/** Return a configured model strategy only when it is a non-empty string; otherwise use the safe default. */
+export function normalizeModelStrategy(value) {
+    return typeof value === 'string' && value.trim() !== '' ? value : 'fallback';
+}
+
 // ── 9router URL/key resolution ────────────────────────────────────────────
 // Secrets belong in OS user-level env vars; ~/.claude/settings.json `env` is
 // the backwards-compatible fallback. Never throws: a fresh machine may have no
