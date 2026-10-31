@@ -27,6 +27,7 @@ import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outc
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function loadHomeConfig() {
@@ -144,6 +145,7 @@ async function run() {
     console.log(`using model ${chosenModel}`);
     const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
+    writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
     console.log(metrics.finalText);
     console.log(`next: node imp.mjs gate ${id}`);
@@ -259,6 +261,7 @@ function runGate(id) {
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
+    writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
@@ -416,9 +419,14 @@ switch (cmd) {
     case 'pr': openPr(pos[0]); break;
     case 'outcome': outcome(pos[0]); break;
     case 'note': update(pos[0], (r) => ({ notes: [...(r.notes || []), { at: new Date().toISOString(), text: pos[1] }] })); break;
-    case 'verdict': // a gate decided by hand (backfilled runs): verdict <id> pass|fail "<reason>"
-        update(pos[0], (r) => ({ gate: { ...r.gate, pass: pos[1] === 'pass', reasons: pos[2] ? [pos[2]] : [], manual: true, at: new Date().toISOString() } }));
+    case 'verdict': { // a gate decided by hand (backfilled runs): verdict <id> pass|fail "<reason>"
+        const id = pos[0];
+        const pass = pos[1] === 'pass';
+        const current = rows().find((r) => r.id === id);
+        update(id, (r) => ({ gate: { ...r.gate, pass, reasons: pos[2] ? [pos[2]] : [], manual: true, at: new Date().toISOString() } }));
+        writeTelemetry({ home: HOME, runId: id, repo: current?.repo, event: 'gate-end', outcome: pass ? 'gate-pass' : 'gate-fail', failureSignatures: pass ? [] : [{ kind: 'gate-manual-fail', count: 1 }] });
         break;
+    }
     case 'report': {
         const vault = resolveVaultPrompt(loadHomeConfig());
         if (vault) console.log(`vault: ${vault}`);
