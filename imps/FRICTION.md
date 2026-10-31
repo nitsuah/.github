@@ -98,3 +98,7 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 ### Child acceptance after PR closure (2026-10-31)
 
 - Fire #338 exposed a lifecycle gap: PR #368 merged as `ccf41a3` and auto-closed the child after adding state/markup, but the current default branch still had no visible profile-panel toggle or `saveChaosProfile` / `clearChaosProfile` handlers. The PR's exact-head CI run `40992503422` succeeded, while review findings for both missing behaviors were explicitly marked "Not in this PR." The child was reopened for tracking, focused follow-up #399 is `imp:ready`, and #340 remains blocked on #399. Lesson: verify every child's acceptance against the merged code; a green PR and auto-closed issue do not prove the user journey is complete.
+
+### Cross-repo brief issue ID (2026-10-31)
+
+- `.github#136` had `repo: security-program`, `issue: 136`, but the issue itself lived in `.github`; `security-program#136` returned 404. The Imp runner's `lookupIssueGuard` and generated `Fixes #<issue>` operate inside the target repo, so the brief was not dispatchable. Removed `imp:ready` from the stub, created [security-program#50](https://github.com/nitsuah/security-program/issues/50) with the corrected same-repo issue ID and complete brief, applied `imp:ready` there, and closed `.github#136` as superseded. Rule: cross-repo control-plane tasks need a target-repo implementation issue linked from the control-plane stub.
