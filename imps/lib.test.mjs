@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -1185,4 +1185,13 @@ test('targetCheckout rejects path traversal and non-slug repository names', () =
     for (const repo of ['../outside', 'a/b', '.', '..', '']) {
         assert.throws(() => targetCheckout(repo, { codeRoot: '/repos', exists: () => true }), /Invalid repository name/);
     }
+});
+
+
+test('normalizeModelStrategy accepts non-empty strings and falls back for invalid values', () => {
+    for (const value of [undefined, null, '', '   ', 0, false, {}, []]) {
+        assert.equal(normalizeModelStrategy(value), 'fallback');
+    }
+    assert.equal(normalizeModelStrategy('custom'), 'custom');
+    assert.equal(normalizeModelStrategy(' custom '), ' custom ', 'preserve valid configured strings unchanged');
 });
