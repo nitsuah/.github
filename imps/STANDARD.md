@@ -51,6 +51,8 @@ GitHub issues are the queue; labels are the state.
 
 **The brief** is an issue comment whose first line is `<!-- imp-brief -->`, followed by the brief (front matter + body, optionally in a ```` ```markdown ```` fence). The newest such comment wins. Writing it on the issue keeps every brief reviewable, and the dispatcher needs no local state.
 
+**Issue/repo pairing:** the `issue` field must name an issue that exists in the same repository named by `repo`; the runner uses that repository for issue lookup and `Fixes #n`. Cross-repo issue IDs are not supported. If a `.github` control-plane issue tracks work in another repository, create the implementation issue in the target repository and link it from the control-plane issue; keep the target issue's brief and `imp:ready` label there.
+
 **`dispatch.mjs`** runs hourly with no LLM of its own:
 1. It skips the cycle if the previous one is still running (`dispatch.lock` &lt; 3h), or if 9router doesn't answer a `MAX` probe.
 2. It sweeps open `imp` PRs with `fix.mjs` first (skip `imp:needs-human`).
