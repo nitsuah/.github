@@ -129,3 +129,8 @@ Process lesson: a green CI run does not validate a standalone test harness unles
 Vigil #410's first Journeys run [41180536657](https://github.com/nitsuah/vigil/actions/runs/41180536657) failed because the unfiltered `[data-tour="issues"]` locator matched both desktop and mobile DOM instances. The fixture data and card were present; this was a Playwright strict-mode ambiguity, not a missing component. The test was corrected in [PR #414](https://github.com/nitsuah/vigil/pull/414) with `[data-tour="issues"]:visible`; exact-head Journeys [41180659506](https://github.com/nitsuah/vigil/actions/runs/41180659506) passed, and no screenshot baselines changed.
 
 For future journey briefs, scope responsive duplicate components to the visible/active viewport or intended container. Do not weaken assertions or use arbitrary `nth()` solely to silence strict mode.
+
+
+### Keep Imp allowlists inside gate-denied paths (2026-10-31)
+
+Darkmoon #496's refreshed brief included `.github/workflows/ci.yml` in its allowlist even though the Imp gate denies workflow paths. That made the issue's apparent `imp:ready` brief non-dispatchable. The brief was corrected to allow only `e2e/movement.spec.ts`; workflow wiring remains a separate parent-level manual acceptance gate. Before promoting an issue to `imp:ready`, check every allowlisted path against the runner's deny paths. If a required workflow/secret/owner-only edit is denied, keep it out of the Imp brief and explicitly track the hand edit at the parent rather than widening the allowlist.
