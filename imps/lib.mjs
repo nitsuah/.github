@@ -79,6 +79,13 @@ export function parseBrief(text) {
     return { meta, body: text.slice(m[0].length) };
 }
 
+// Validate the optional brief cap before it reaches effectiveMaxLines/gate.
+// Number.isFinite rejects Infinity and overflow strings (for example 1e309).
+export function validateBriefMaxLines(value) {
+    if (value && !Number.isFinite(Number(value)))
+        throw new Error('Brief maxLines must be a finite number');
+}
+
 // One pass over a `claude -p --output-format stream-json` transcript.
 // Everything the RSI loop wants per run: turns and their timing, tool use and
 // tool errors by kind, permission denials, tokens, served models (and how
