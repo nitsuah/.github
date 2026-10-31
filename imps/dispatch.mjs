@@ -14,9 +14,16 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
+
+function loadHomeConfig() {
+    try {
+        const p = join(HOME, 'config.json');
+        return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
+    } catch { return {}; }
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
@@ -351,7 +358,9 @@ async function work(issue) {
         throw e;
     }
     try {
-        const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX']);
+        const cfg = loadHomeConfig();
+        const modelStrategy = normalizeModelStrategy(cfg);
+        const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX', '--modelStrategy', modelStrategy]);
         const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
         if (!id && /claude binary not found/.test(run.out)) {
             relabel(repo, number, 'imp:ready', ['imp:working']);

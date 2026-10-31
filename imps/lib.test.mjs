@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -1195,5 +1195,15 @@ test('targetCheckout accepts a .git directory or worktree file marker and skips 
 test('targetCheckout rejects path traversal and non-slug repository names', () => {
     for (const repo of ['../outside', 'a/b', '.', '..', '']) {
         assert.throws(() => targetCheckout(repo, { codeRoot: '/repos', exists: () => true }), /Invalid repository name/);
+    }
+});
+
+
+test('normalizeModelStrategy safely reads config and preserves non-empty strings', () => {
+    for (const config of [undefined, null, [], {}, { modelStrategy: null }, { modelStrategy: [] }, { modelStrategy: {} }, { modelStrategy: '' }, { modelStrategy: false }, { modelStrategy: 0 }]) {
+        assert.equal(normalizeModelStrategy(config), 'fallback');
+    }
+    for (const value of ['fallback', 'custom', ' ', ' custom ']) {
+        assert.equal(normalizeModelStrategy({ modelStrategy: value }), value, 'preserve non-empty configured strings unchanged');
     }
 });
