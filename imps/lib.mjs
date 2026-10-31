@@ -20,8 +20,9 @@ export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists 
 }
 
 /** Return a configured model strategy only when it is a non-empty string; otherwise use the safe default. */
-export function normalizeModelStrategy(value) {
-    return typeof value === 'string' && value.trim() !== '' ? value : 'fallback';
+export function normalizeModelStrategy(config) {
+    const value = config?.modelStrategy;
+    return typeof value === 'string' && value.length > 0 ? value : 'fallback';
 }
 
 // ── 9router URL/key resolution ────────────────────────────────────────────
