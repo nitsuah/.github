@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage } from './lib.mjs';
 
 test('loopBudget counts the last 24 h and cools down a repo after two straight gate failures', () => {
     const now = Date.parse('2026-10-23T12:00:00Z');
@@ -1085,11 +1085,40 @@ test('repeatFailureGuard: nudge text contains only normalized kind, never raw te
     assert.ok(!nudge.includes('raw error'));
 });
 
-test('repeatFailureGuard: throwing nudge writer (simulated) fails open and does not throw', () => {
-    // The guard itself never throws; it's pure. This test documents the contract.
-    const state = { counts: new Map(), nudged: new Set() };
-    assert.doesNotThrow(() => {
-        for (let i = 0; i < 5; i++) repeatFailureGuard('bad-tool-call', state);
-    });
-    assert.equal(state.nudged.has('bad-tool-call'), true);
+test('writeStreamJsonMessage writes one JSONL message when the stream accepts it', () => {
+    const state = { disabled: false, closed: false };
+    const writes = [];
+    const message = { type: 'user', message: { role: 'user', content: 'hello' } };
+    const stream = { writable: true, write: (line) => { writes.push(line); return true; } };
+    assert.equal(writeStreamJsonMessage(stream, message, state), true);
+    assert.deepEqual(writes, [JSON.stringify(message) + '\n']);
+    assert.equal(state.disabled, false);
+});
+
+test('writeStreamJsonMessage disables further writes on backpressure without throwing', () => {
+    const state = { disabled: false, closed: false };
+    let writes = 0;
+    const stream = { writable: true, write: () => { writes++; return false; } };
+    const message = { type: 'user', message: { role: 'user', content: 'nudge' } };
+    assert.equal(writeStreamJsonMessage(stream, message, state), false);
+    assert.equal(state.disabled, true);
+    assert.equal(writeStreamJsonMessage(stream, message, state), false);
+    assert.equal(writes, 1);
+});
+
+test('writeStreamJsonMessage disables further writes when the writer throws', () => {
+    const state = { disabled: false, closed: false };
+    const stream = { writable: true, write: () => { throw new Error('pipe broken'); } };
+    const message = { type: 'user', message: { role: 'user', content: 'nudge' } };
+    assert.equal(writeStreamJsonMessage(stream, message, state), false);
+    assert.equal(state.disabled, true);
+    assert.doesNotThrow(() => writeStreamJsonMessage(stream, message, state));
+});
+
+test('writeStreamJsonMessage ignores a closed stream', () => {
+    const state = { disabled: false, closed: true };
+    let writes = 0;
+    const stream = { writable: true, write: () => { writes++; return true; } };
+    assert.equal(writeStreamJsonMessage(stream, {}, state), false);
+    assert.equal(writes, 0);
 });

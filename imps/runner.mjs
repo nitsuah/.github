@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS } from './lib.mjs';
+import { summarizeRun, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -246,8 +246,8 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
         '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
         '--output-format', 'stream-json', '--verbose'];
     if (!guardEnabled) {
-        // Default launch: argv prompt, stdin ignored
-        args.unshift(prompt);
+        // Preserve the original CLI argument order: -p, prompt, then options.
+        args.splice(1, 0, prompt);
     } else {
         // Streaming mode: prompt via stdin with --input-format stream-json
         args.push('--input-format', 'stream-json');
@@ -272,27 +272,20 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     let capped = false;
     let edited = false;
     let noEdit = false;
-    // Guard state (local to this run)
+    // Guard state (local to this run). A failed/backpressured stdin write disables
+    // only future guard messages; it never terminates or gates the worker.
     const guardState = { counts: new Map(), nudged: new Set() };
-    let guardDisabled = false;
-    let stdinClosed = false;
+    const stdinState = { disabled: false, closed: false };
     let promptSent = false;
 
-    const writeStdin = (msg) => {
-        if (guardDisabled || stdinClosed || !child.stdin?.writable) return;
-        try {
-            child.stdin.write(JSON.stringify(msg) + '\n');
-        } catch {
-            // Fail-open: disable further nudges, continue the worker
-            guardDisabled = true;
-        }
-    };
+    const writeStdin = (msg) => writeStreamJsonMessage(child.stdin, msg, stdinState);
 
     const closeStdin = () => {
-        if (stdinClosed || !child.stdin?.writable) return;
+        if (stdinState.closed || !child.stdin?.writable) return;
+        stdinState.closed = true;
         try { child.stdin.end(); } catch { /* ignore */ }
-        stdinClosed = true;
     };
+    child.stdin?.on('error', () => { stdinState.disabled = true; });
 
     child.stdout.on('data', (d) => {
         buf += d;
@@ -344,7 +337,13 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     // kill) must not discard the collected events: `close` still follows and ends the run.
     let spawnError = false;
     let started = false;
-    child.once('spawn', () => { started = true; });
+    child.once('spawn', () => {
+        started = true;
+        if (guardEnabled && !promptSent) {
+            writeStdin({ type: 'user', message: { role: 'user', content: prompt } });
+            promptSent = true;
+        }
+    });
     const code = await new Promise((done) => {
         child.once('error', (e) => {
             console.error(`${started ? 'child error' : 'spawn failed'}: ${e.message}`);
@@ -353,11 +352,6 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
         child.once('close', done);
     });
     clearTimeout(timer);
-    // In streaming mode, send the initial prompt after spawn, then close on result
-    if (guardEnabled && !promptSent && started && !spawnError) {
-        writeStdin({ type: 'user', message: { role: 'user', content: prompt } });
-        promptSent = true;
-    }
     await new Promise((done) => out.end(done));
     if (spawnError) return spawnFailed(t0);
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
