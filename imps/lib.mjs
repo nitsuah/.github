@@ -1032,7 +1032,12 @@ export function feedbackSection(gate, id) {
 // dependency is closed or merged.
 export function parseDepends(value, defaultRepo) {
     const out = [];
-    for (const m of String(value || '').matchAll(/(?:(?:([\w.-]+)\/)?([\w.-]+))?#(\d+)/g)) out.push({ ...(m[1] ? { owner: m[1] } : {}), repo: m[2] || defaultRepo, number: Number(m[3]) });
+    // Only the reference list counts: stop at `;` and read one reference at the start of each comma item, so a note like
+    // `motor-pool#124 merged as abc; #126 follows this child` does not make #126 a blocker (it deadlocked motor-pool#125).
+    for (const item of String(value || '').split(';')[0].split(',')) {
+        const m = item.trim().match(/^(?:(?:([\w.-]+)\/)?([\w.-]+))?#(\d+)/);
+        if (m) out.push({ ...(m[1] ? { owner: m[1] } : {}), repo: m[2] || defaultRepo, number: Number(m[3]) });
+    }
     return out;
 }
 
