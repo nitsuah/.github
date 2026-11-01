@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments } from './lib.mjs';
 
@@ -223,7 +223,18 @@ export function lintBrief(briefText, maxLines, expected = {}) {
             /(^|\/)(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
         ];
         const broadRoots = new Set(['src', 'lib', 'app', 'tests', 'pkg', 'docs', 'config']);
-        for (const a of String(meta.allow).split(',').map((s) => s.trim().replace(/\\/g, '/').replace(/\/$/, ''))) {
+        for (const raw of String(meta.allow).split(',').map((s) => s.trim().replace(/\\/g, '/').replace(/\/$/, ''))) {
+            if (!raw) continue;
+            const segments = raw.split('/');
+            if (posix.isAbsolute(raw) || /^[A-Za-z]:\//.test(raw) || segments.includes('..')) {
+                errors.push(`allow path must be repo-relative without traversal: ${raw}`);
+                continue;
+            }
+            const a = posix.normalize(raw);
+            if (a === '.' || a === '..' || a.startsWith('../')) {
+                errors.push(`allow path must be repo-relative without traversal: ${raw}`);
+                continue;
+            }
             if (deny.some((re) => re.test(a))) errors.push(`denied path in allow: ${a}`);
             if (a.includes('*') || broadRoots.has(a)) errors.push(`allow must name specific files or narrow paths: ${a}`);
         }
