@@ -1298,6 +1298,18 @@ test('extractFailureDiagnostic strips ANSI and does not guess assertion causes',
     assert.equal(formatFailureDiagnostic(unknown), 'diagnostic summary unavailable');
 });
 
+test('formatFailureDiagnostic keeps raw HTML and mentions inert', () => {
+    const output = formatFailureDiagnostic({
+        kind: 'test',
+        test: '<img src="https://example.invalid/x" onerror="alert(1)"> @nitsuah',
+        error: 'test failure',
+    });
+    assert.doesNotMatch(output, /<img/i);
+    assert.doesNotMatch(output, /@nitsuah/);
+    assert.match(output, /&lt;img/i);
+    assert.match(output, /&#64;nitsuah/);
+});
+
 test('failureDiagnosticSummary includes only recognized diagnostics from failed steps', () => {
     const unknown = failureDiagnosticSummary({
         testExit: 1,
