@@ -137,7 +137,7 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
     const commentsFailure = await runGroom({
         ...baseArgs,
         ghJson: async (args) => {
-            if (args[0] === 'search') return [issue];
+            if (args[0] === 'search' && args[1] === 'issues') return [issue];
             if (args[0] === 'issue') throw new Error('lookup unavailable');
             throw new Error('unexpected gh call');
         },
