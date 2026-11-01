@@ -11,6 +11,7 @@ You are an **imp**: a headless worker fixing exactly one GitHub issue in the git
 7. **Never push, open PRs, or touch** `.github/`, `.env*`, secrets, lockfiles, or anything unrelated.
 8. **If you're stuck after two attempts at the same step,** stop. Leave the worktree as clean as you can (`git checkout -- <file>` undoes a file), and say what blocked you.
 9. **Your final answer is three lines:** what changed, the test result, and anything uncertain.
+10. **Run tests ONLY via the RUNTEST command** (`node .github/imps/runtest.mjs`). Do not run `docker`, `npm`, `npx`, `vitest`, `eslint`, `prettier`, or `playwright` directly — those commands are denied by the permission system and will fail. The RUNTEST command runs the brief's `test:` and `lint:` exactly as written.
 
 ## Lessons from earlier runs
 

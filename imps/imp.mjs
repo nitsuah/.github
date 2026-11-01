@@ -143,7 +143,7 @@ async function run() {
 
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
-    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: DEFAULTS.maxTurns || 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
