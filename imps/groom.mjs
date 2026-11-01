@@ -30,8 +30,8 @@ const { values: o } = parseArgs({
 
 const config = loadGroomConfig(join(HOME, 'config.json'));
 if (!groomEnabled(config, process.env)) {
-    const msg = { event: 'groom-disabled', reason: 'IMPS_GROOM=0 or config.groom=false' };
-    console.log(o.json ? JSON.stringify(msg) : 'groom disabled (kill switch)');
+    const msg = { event: 'groom-disabled', reason: 'default off or IMPS_GROOM=0/false hard disable' };
+    console.log(o.json ? JSON.stringify(msg) : 'groom disabled (default off or IMPS_GROOM=0/false hard disable)');
     process.exit(0);
 }
 
