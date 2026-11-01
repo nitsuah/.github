@@ -32,16 +32,27 @@ test('imp.mjs imports isGitDirty, which the ledger row provenance calls', () => 
 });
 
 test('no-edit fail-fast is on by default and configurable', async () => {
-    assert.equal(DEFAULTS.noEditTurns, 12);
+    assert.equal(DEFAULTS.noEditTurns, 20);
     const { resolveNoEditTurns } = await import('./runner.mjs');
-    assert.equal(resolveNoEditTurns({}, {}), 12);
+    assert.equal(resolveNoEditTurns({}, {}), 20);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, {}), 12);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, { IMPS_NO_EDIT_TURNS: '5' }), 5);
     assert.equal(resolveNoEditTurns({ noEditTurns: 0 }, {}), 0); // 0 turns it off
-    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '' }), 12); // empty is unset, not 0
+    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '' }), 20); // empty is unset, not 0
     assert.equal(resolveNoEditTurns({ noEditTurns: 7 }, { IMPS_NO_EDIT_TURNS: '  ' }), 7);
     assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '0' }), 0); // explicit 0 still disables
-    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 12); // junk falls back
+    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 20); // junk falls back
+});
+
+test('max-turn cap is configurable and zero disables it', async () => {
+    assert.equal(DEFAULTS.maxTurns, 60);
+    const { resolveMaxTurns } = await import('./runner.mjs');
+    assert.equal(resolveMaxTurns({}, {}), 60);
+    assert.equal(resolveMaxTurns({ maxTurns: 25 }), 25);
+    assert.equal(resolveMaxTurns({ maxTurns: 0 }), 0);
+    assert.equal(resolveMaxTurns({ maxTurns: '0' }), 0);
+    assert.equal(resolveMaxTurns({ maxTurns: '' }), 60);
+    assert.equal(resolveMaxTurns({ maxTurns: 'invalid' }), 60);
 });
 
 

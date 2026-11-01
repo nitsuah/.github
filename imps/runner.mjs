@@ -69,6 +69,12 @@ export function resolveNoEditTurns(config = {}, env = process.env) {
     const n = Number(set(env.IMPS_NO_EDIT_TURNS) ?? set(config.noEditTurns) ?? DEFAULTS.noEditTurns);
     return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.noEditTurns;
 }
+// How many tool-call turns an imp may use: config, then defaults; 0 disables.
+export function resolveMaxTurns(config = {}) {
+    const set = (v) => (v == null || String(v).trim() === '' ? undefined : v);
+    const n = Number(set(config.maxTurns) ?? DEFAULTS.maxTurns);
+    return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.maxTurns;
+}
 // Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
 export function isGitDirty(path) {
     try {
@@ -309,10 +315,13 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
                     console.log(`  ${noEditByTurn} tool calls with no edit; stopping`);
                     child.kill('SIGTERM');
                 }
-                if (uses.length && ++toolTurns > maxTurns && !capped) {
-                    capped = true;
-                    console.log(`  turn cap ${maxTurns} reached; stopping`);
-                    child.kill('SIGTERM');
+                if (uses.length) {
+                    toolTurns++;
+                    if (maxTurns > 0 && toolTurns > maxTurns && !capped) {
+                        capped = true;
+                        console.log(`  turn cap ${maxTurns} reached; stopping`);
+                        child.kill('SIGTERM');
+                    }
                 }
             } else if (guardEnabled && ev.type === 'user') {
                 for (const c of ev.message?.content || []) {

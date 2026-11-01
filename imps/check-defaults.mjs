@@ -18,6 +18,8 @@ const need = [
     [`daily-cap ${DEFAULTS.dailyCap}`, new RegExp(`${DEFAULTS.dailyCap}[^\\n]*--daily-cap|--daily-cap[^\\n]*${DEFAULTS.dailyCap}`, 'i')],
     [`maxLines default ${DEFAULTS.maxLines}`, new RegExp(`maxLines[^\\n]*default[^\\n]*${DEFAULTS.maxLines}|default[^\\n]*${DEFAULTS.maxLines}[^\\n]*maxLines`, 'i')],
     [`autoMergeTrust ${DEFAULTS.autoMergeTrust}`, new RegExp(`(earned.?trust|autoMergeTrust)[^\\n]*${DEFAULTS.autoMergeTrust}|${DEFAULTS.autoMergeTrust}[^\\n]*(clean merged|autoMergeTrust|earned)`, 'i')],
+    ['maxTurns ' + DEFAULTS.maxTurns, new RegExp('Turn cap per model run[^\\n]*imp ' + DEFAULTS.maxTurns)],
+    ['noEditTurns ' + DEFAULTS.noEditTurns, new RegExp('No-edit fail-fast[^\\n]*' + DEFAULTS.noEditTurns + ' tool calls')],
 ];
 
 for (const [label, re] of need) {

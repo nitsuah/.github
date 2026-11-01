@@ -22,12 +22,16 @@ function fakeCli() {
         '#!/usr/bin/env node',
         "import { createInterface } from 'node:readline';",
         'const args = process.argv.slice(2);',
+        'const toolTurns = Number(process.env.FAKE_CLAUDE_TOOL_TURNS || 0);',
         "const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n');",
         "const finish = (result) => {",
         "  const event = { type: 'result', subtype: 'success', result, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } };",
         "  process.stdout.write(JSON.stringify(event) + '\\n', () => process.exit(0));",
         '};',
-        "if (!args.includes('--input-format')) {",
+        'if (toolTurns > 0) {',
+        "  for (let i = 0; i < toolTurns; i++) emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: {} }] } });",
+        "  finish('TOOL_TURNS_COMPLETE');",
+        "} else if (!args.includes('--input-format')) {",
         "  const promptIndex = args.indexOf('-p') + 1;",
         "  finish(JSON.stringify({ args, prompt: args[promptIndex] }));",
         '} else {',
@@ -51,9 +55,11 @@ function fakeCli() {
     return script;
 }
 
-async function runWithFake({ guard, prompt, name }) {
+async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0 }) {
     const previousGuard = process.env.IMPS_REPEAT_FAILURE_GUARD;
     const previousBin = process.env.IMPS_CLAUDE_BIN;
+    const previousTurns = process.env.FAKE_CLAUDE_TOOL_TURNS;
+    process.env.FAKE_CLAUDE_TOOL_TURNS = String(toolTurns);
     process.env.IMPS_REPEAT_FAILURE_GUARD = guard ? '1' : '0';
     process.env.IMPS_CLAUDE_BIN = fakeCli();
     try {
@@ -65,7 +71,7 @@ async function runWithFake({ guard, prompt, name }) {
             deny: [],
             minutes: 0.2,
             budget: 0.1,
-            maxTurns: 4,
+            maxTurns,
             noEditByTurn: 0,
             transcript: join(tempHome, name + '.jsonl'),
         });
@@ -74,6 +80,8 @@ async function runWithFake({ guard, prompt, name }) {
         else process.env.IMPS_REPEAT_FAILURE_GUARD = previousGuard;
         if (previousBin === undefined) delete process.env.IMPS_CLAUDE_BIN;
         else process.env.IMPS_CLAUDE_BIN = previousBin;
+        if (previousTurns === undefined) delete process.env.FAKE_CLAUDE_TOOL_TURNS;
+        else process.env.FAKE_CLAUDE_TOOL_TURNS = previousTurns;
     }
 }
 
@@ -85,6 +93,19 @@ test('default-off launch preserves -p then prompt argv order', { skip: process.p
     assert.equal(launch.args[0], '-p');
     assert.equal(launch.args[1], prompt);
     assert.equal(launch.prompt, prompt);
+});
+
+test('maxTurns 0 disables the cap and still records tool turns', { skip: process.platform === 'win32' }, async () => {
+    const metrics = await runWithFake({
+        guard: false,
+        prompt: 'ZERO_MAX_TURNS',
+        name: 'zero-max-turns',
+        maxTurns: 0,
+        toolTurns: 6,
+    });
+    assert.equal(metrics.end, 'success');
+    assert.equal(metrics.toolTurns, 6);
+    assert.equal(metrics.finalText, 'TOOL_TURNS_COMPLETE');
 });
 
 test('opt-in stream-json delivers initial prompt and the third-repeat nudge to the live child', { skip: process.platform === 'win32' }, async () => {

@@ -26,7 +26,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, resolveMaxTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -143,7 +143,18 @@ async function run() {
 
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
-    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: DEFAULTS.maxTurns || 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
+    const homeConfig = loadHomeConfig();
+    const metrics = await runClaude({
+        cwd: wt,
+        prompt,
+        model: chosenModel,
+        tools,
+        minutes: o.minutes,
+        budget: o.budget,
+        maxTurns: resolveMaxTurns(homeConfig),
+        noEditByTurn: resolveNoEditTurns(homeConfig),
+        transcript: row.transcript,
+    });
     update(id, { endedAt: new Date().toISOString(), metrics });
     writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
