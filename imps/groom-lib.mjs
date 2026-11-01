@@ -237,6 +237,7 @@ export async function runGroom({
     quietHours = DEFAULTS.quietHours,
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
+    filedPath: filedPathOverride,
 } = {}) {
     const results = { candidates: 0, drafted: 0, skipped: 0, skipReasons: [], repoSkips: [], errors: [] };
     const skip = (issue, reason) => {
@@ -246,7 +247,7 @@ export async function runGroom({
 
     // Track daily count and persistent issue/brief hashes.
     const filedDir = process.env.IMPS_HOME || join(homedir(), '.imps');
-    const filedPath = join(filedDir, 'groom-filed.json');
+    const filedPath = filedPathOverride || join(filedDir, 'groom-filed.json');
     const day = new Date().toISOString().slice(0, 10);
     const filedState = (() => {
         try {
