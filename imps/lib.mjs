@@ -99,6 +99,32 @@ export function parseBrief(text) {
     return { meta, body: text.slice(m[0].length) };
 }
 
+/**
+ * Validates that a brief's front matter has required `repo` and `issue`
+ * fields matching the expected repository and issue number.
+ * Returns an error string or null if valid.
+ * @param {string} brief - The brief text
+ * @param {string} expectedRepo - Expected repository slug (e.g., "fire")
+ * @param {number|string} expectedIssue - Expected issue number
+ * @returns {string|null} Error message or null if valid
+ */
+export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
+    const { meta } = parseBrief(brief);
+    if (!meta.repo || String(meta.repo).trim() === '') {
+        return 'Brief front matter is missing required `repo` field (e.g., `repo: fire`)';
+    }
+    if (!meta.issue || String(meta.issue).trim() === '') {
+        return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
+    }
+    if (String(meta.repo).trim() !== String(expectedRepo).trim()) {
+        return `Brief \`repo\` (${meta.repo}) does not match the target repository (${expectedRepo})`;
+    }
+    if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
+        return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
+    }
+    return null;
+}
+
 // Validate the optional brief cap before it reaches effectiveMaxLines/gate.
 // Number.isFinite rejects Infinity and overflow strings (for example 1e309).
 export function validateBriefMaxLines(value) {

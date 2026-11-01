@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, validateBriefMaxLines, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy } from './lib.mjs';
@@ -185,6 +185,53 @@ test('parseBrief reads front matter and leaves the body', () => {
     assert.deepEqual(meta, { repo: 'fire', issue: '166', allow: 'app/lib/, docs/CHANGELOG.md' });
     assert.equal(body, '## Issue\nfix it');
     assert.deepEqual(parseBrief('no front matter').meta, {});
+});
+
+test('validateBriefMeta: valid brief with matching repo/issue', () => {
+    const brief = '---\nrepo: fire\nissue: 166\n---\nbody';
+    assert.equal(validateBriefMeta(brief, 'fire', 166), null);
+    assert.equal(validateBriefMeta(brief, 'fire', '166'), null);
+    assert.equal(validateBriefMeta(brief, '  fire  ', '  166  '), null); // trimming works
+});
+
+test('validateBriefMeta: missing repo field', () => {
+    const brief = '---\nissue: 166\n---\nbody';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('missing required \`repo\`'));
+});
+
+test('validateBriefMeta: missing issue field', () => {
+    const brief = '---\nrepo: fire\n---\nbody';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('missing required \`issue\`'));
+});
+
+test('validateBriefMeta: repo mismatch', () => {
+    const brief = '---\nrepo: vhs\nissue: 166\n---\nbody';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('does not match the target repository'));
+});
+
+test('validateBriefMeta: issue mismatch', () => {
+    const brief = '---\nrepo: fire\nissue: 999\n---\nbody';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('does not match the target issue number'));
+});
+
+test('validateBriefMeta: empty repo/issue values', () => {
+    const brief = '---\nrepo: \nissue: 166\n---\nbody';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('missing required \`repo\`'));
+
+    const brief2 = '---\nrepo: fire\nissue: \n---\nbody';
+    const err2 = validateBriefMeta(brief2, 'fire', 166);
+    assert.ok(err2 && err2.includes('missing required \`issue\`'));
+});
+
+test('validateBriefMeta: no front matter', () => {
+    const brief = 'just body text';
+    const err = validateBriefMeta(brief, 'fire', 166);
+    assert.ok(err && err.includes('missing required \`repo\`'));
 });
 
 test('summarizeRun counts turns, tool errors, denials, tokens and model switches', () => {
