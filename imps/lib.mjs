@@ -502,8 +502,14 @@ export function pickIssues({
 // A brief lives on the issue as a comment that starts with this marker, so
 // it's reviewable on GitHub and the dispatcher needs no local state.
 export const BRIEF_MARK = '<!-- imp-brief -->';
-export function briefFromComments(comments = []) {
-    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
+export function briefFromComments(comments = [], { allowedAuthors = ['nitsuah'] } = {}) {
+    // A marker is not authorization. Only an explicitly trusted author may supply
+    // task instructions; public issue commenters are untrusted.
+    const trusted = new Set(allowedAuthors.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
+    const c = [...comments].reverse().find((x) => {
+        const login = String(x.author?.login || x.user?.login || '').toLowerCase();
+        return trusted.has(login) && (x.body || '').trimStart().startsWith(BRIEF_MARK);
+    });
     if (!c) return null;
     // Prose may sit around the brief: take the fenced block if there is one.
     const body = c.body.trimStart().slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
