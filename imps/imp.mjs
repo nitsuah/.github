@@ -178,7 +178,7 @@ function runGate(id) {
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
             // Extract structured diagnostic from full output before tail truncation
             const rawDiag = extractFailureDiagnostic(combinedOutput, id);
-            const diag = sanitizeDiagnostic(rawDiag);
+            const diag = sanitizeDiagnostic(rawDiag, r.worktree);
             if (!ends[key]) ends[key] = {};
             ends[key].diagnostic = diag;
             // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
@@ -277,7 +277,7 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
+    update(id, { gate: { ...g, formatted, autoCommitted, testExit, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
