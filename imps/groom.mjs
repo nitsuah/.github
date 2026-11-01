@@ -51,9 +51,9 @@ if (!router.key) {
 // Repos with open issues (search across owner's repos)
 let repos = {};
 try {
-    const orgRepos = ghJson(['repo', 'list', o.owner, '--limit', '100', '--json', 'name,isPrivate']);
+    const orgRepos = ghJson(['repo', 'list', o.owner, '--limit', '100', '--json', 'name,isPrivate,isFork']);
     for (const r of orgRepos) {
-        if (r.isPrivate) continue; // skip private for now
+        if (r.isPrivate || r.isFork) continue; // public, non-fork repositories only
         repos[r.name] = { humanPRs: 0, lastCommitHours: 99 };
     }
 } catch (e) {
