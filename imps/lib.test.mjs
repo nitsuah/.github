@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
     assert.deepEqual(parseBriefAuthors(undefined), ['nitsuah']);
@@ -1274,3 +1274,92 @@ test('normalizeModelStrategy safely reads config and preserves non-empty strings
         assert.equal(normalizeModelStrategy({ modelStrategy: value }), value, 'preserve non-empty configured strings unchanged');
     }
 });
+
+
+test('extractFailureDiagnostic strips ANSI and does not guess assertion causes', () => {
+    const timeout = extractFailureDiagnostic('\u001b[31mnot ok 1 - request timed out\u001b[0m\r\n  error: TimeoutError', 'run-timeout');
+    assert.deepEqual(timeout, { kind: 'test', runId: 'run-timeout', test: 'request timed out', error: 'test failure' });
+
+    const assertion = extractFailureDiagnostic('not ok 2 - rejects invalid input\n  error: AssertionError: expected false to be true', 'run-assert');
+    assert.equal(assertion.error, 'assertion failure');
+
+    const lint = extractFailureDiagnostic('\u001b[31m  4:2  error  unused  no-unused-vars\u001b[0m', 'run-lint');
+    assert.equal(lint.kind, 'lint');
+    assert.equal(lint.rule, 'no-unused-vars');
+
+    assert.equal(lint.message, undefined, 'raw ESLint message text is not retained in the public diagnostic');
+    const longToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJlMTIzNDU2Nzg5MA';
+    const long = extractFailureDiagnostic('not ok 3 - ' + 'x'.repeat(110) + longToken, 'run-long');
+    assert.doesNotMatch(long.test, /eyJ|alice/, 'redaction occurs before the test-name cap');
+
+    const unknown = extractFailureDiagnostic('exit code 1', 'run-unknown');
+    assert.equal(unknown.kind, 'unknown');
+    assert.equal(unknown.note, 'diagnostic summary unavailable');
+    assert.equal(formatFailureDiagnostic(unknown), 'diagnostic summary unavailable');
+});
+
+test('formatFailureDiagnostic keeps raw HTML and mentions inert', () => {
+    const output = formatFailureDiagnostic({
+        kind: 'test',
+        test: '<img src="https://example.invalid/x" onerror="alert(1)"> @nitsuah',
+        error: 'test failure',
+    });
+    assert.doesNotMatch(output, /<img/i);
+    assert.doesNotMatch(output, /@nitsuah/);
+    assert.match(output, /&lt;img/i);
+    assert.match(output, /&#64;nitsuah/);
+});
+
+test('failureDiagnosticSummary includes only recognized diagnostics from failed steps', () => {
+    const unknown = failureDiagnosticSummary({
+        testExit: 1,
+        testEnd: { diagnostic: { kind: 'unknown', exitCode: 1, note: 'non-zero exit' } },
+        lintExit: 0,
+        lintEnd: { diagnostic: { kind: 'lint', rule: 'no-unused-vars' } },
+    });
+    assert.match(unknown, /Diagnostic summary unavailable/);
+    assert.doesNotMatch(unknown, /no-unused-vars|exit 1/);
+
+    const testOnly = failureDiagnosticSummary({
+        testExit: 1,
+        testEnd: { diagnostic: { kind: 'test', test: 'fails safely', error: 'test failure' } },
+        lintExit: 0,
+        lintEnd: { diagnostic: { kind: 'lint', rule: 'no-unused-vars' } },
+    });
+    assert.match(testOnly, /test:/);
+    assert.doesNotMatch(testOnly, /lint:|no-unused-vars/);
+
+    const lintOnly = failureDiagnosticSummary({
+        testExit: 0,
+        testEnd: { diagnostic: { kind: 'test', test: 'passing test', error: 'test failure' } },
+        lintExit: 1,
+        lintEnd: { diagnostic: { kind: 'lint', rule: 'no-unused-vars', severity: 'error' } },
+    });
+    assert.match(lintOnly, /lint:.*no-unused-vars/);
+    assert.doesNotMatch(lintOnly, /test:/);
+});
+
+test('sanitizeDiagnostic redacts JWTs and normalizes private absolute paths', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJlMTIzNDU2Nzg5MA';
+    const unix = sanitizeDiagnostic({
+        test: 'not ok 1 - ' + jwt,
+        file: '/home/alice/code/repo/src/foo.js',
+        message: 'failed at /tmp/private/bar.test.js',
+    }, '/home/alice/code/repo');
+    assert.equal(unix.file, 'src/foo.js');
+    assert.match(unix.message, /<path>/);
+    assert.doesNotMatch(JSON.stringify(unix), /alice|eyJ/);
+
+    const outside = sanitizeDiagnostic({ file: '/home/alice/private/file.js' }, '/home/alice/code/repo');
+    assert.equal(outside.file, '<path>');
+    assert.doesNotMatch(outside.file, /alice|private|file\.js/);
+
+    const relative = sanitizeDiagnostic({ file: 'src/foo.test.ts' }, '/home/alice/code/repo');
+    assert.equal(relative.file, 'src/foo.test.ts', 'repository-relative paths must not be treated as absolute');
+
+    const windows = sanitizeDiagnostic({
+        file: 'C:\\Users\\alice\\code\\repo\\src\\foo.js',
+    }, 'C:\\Users\\alice\\code\\repo');
+    assert.equal(windows.file, 'src/foo.js');
+});
+
