@@ -7,7 +7,7 @@
 //
 // Hard disable: IMPS_GROOM=0/false. Enable: config.groom=true or IMPS_GROOM=1; the explicit env opt-in overrides config.groom=false.
 // Safety: daily issue cap (like rsiDailyIssueCap), never touches .github/workflows or secrets,
-// dedupes by issue number and existing draft/brief marker (one draft per issue).
+// dedupes by issue and candidate/brief hashes, and reports per-candidate skip reasons.
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, resolveRouter } from './lib.mjs';
-import { runGroom, loadGroomConfig, groomEnabled } from './groom-lib.mjs';
+import { runGroom, loadGroomConfig, groomEnabled, isBotAuthor } from './groom-lib.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 mkdirSync(HOME, { recursive: true });
@@ -65,7 +65,7 @@ try {
 for (const name of Object.keys(repos)) {
     try {
         const prs = ghJson(['pr', 'list', '-R', `${o.owner}/${name}`, '--state', 'open', '--json', 'author']);
-        repos[name].humanPRs = prs.filter((p) => String(p.author?.type || '').toLowerCase() !== 'bot').length;
+        repos[name].humanPRs = prs.filter((p) => !isBotAuthor(p.author)).length;
     } catch { /* ignore */ }
     try {
         const commits = gh(['api', `repos/${o.owner}/${name}/commits?per_page=1`, '--jq', '.[0].commit.author.date']);
@@ -96,6 +96,14 @@ const results = await runGroom({
 if (o.json) console.log(JSON.stringify(results, null, 2));
 else {
     console.log(`groom: ${results.drafted} drafted, ${results.skipped} skipped, ${results.candidates} candidates`);
+    if (results.skipReasons?.length) {
+        console.log('skip reasons:');
+        for (const item of results.skipReasons) console.log(`  - ${item.repo}#${item.issue}: ${item.reason}`);
+    }
+    if (results.repoSkips?.length) {
+        console.log('repo skips:');
+        for (const item of results.repoSkips) console.log(`  - ${item.repo}: ${item.reason}`);
+    }
     if (results.errors.length) {
         console.log('errors:');
         for (const e of results.errors) console.log(`  - ${e}`);
