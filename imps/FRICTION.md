@@ -156,6 +156,8 @@ Verified control-plane behavior: `imps/imp.mjs` stores redacted `testTail` / `li
 
 Follow-up [#189](https://github.com/nitsuah/.github/issues/189) is implemented in [PR #191](https://github.com/nitsuah/.github/pull/191), exact head `755aa830fb8d84fdf4371c0229094354e6c4b3df`; Imp kit CI passed 239/239, CodeQL and Analyze passed, and no review threads remain. It is still awaiting the required fresh maintainer review with write access, so it is not merged. Full tails remain opt-in. Until merge, classify exit-only failures as diagnostic/runner failures unless a first source/test diagnostic is available; do not requeue unchanged.
 
+Latest recovery pass (2026-11-01 18:55Z): Vigil #415 attempt `imp_2611011849_415` ended after 21 turns / 6 tool errors with no commit and tests not run, despite the refreshed RUNTEST-only brief. The first concrete tool error is still missing, so this is an agent/tool failure classification—not evidence of a source defect. Direct maintenance recovery is draft [PR #421](https://github.com/nitsuah/vigil/pull/421), exact head `4ab4433ce4b1f6f7d3f4c9a5da27620d3ddce403`, validation pending. Vigil #416 has a new GHASTLY claim from 18:55:31Z; leave it untouched. Do not retry #415 unchanged.
+
 
 ### Readiness and security-gate recovery (2026-11-01)
 
