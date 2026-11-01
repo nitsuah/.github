@@ -35,6 +35,8 @@ allow: app/lib/, docs/CHANGELOG.md
 <the problem, where it is, what done looks like, and repo facts the imp would otherwise burn turns discovering>
 ```
 
+**Required front matter:** `repo` and `issue` **must** be present in the YAML front matter and must exactly match the target repository slug and issue number. The dispatcher validates this before any imp run starts; on mismatch it logs `invalid-brief`, relabels the issue `imp:failed`, and posts a correction comment. It does not create a ledger run/claim or increment the issue attempt count.
+
 Front matter values are parsed from the brief. The effective gate cap is `max(brief.maxLines, DEFAULTS.maxLines)` (150) plus any explicit fix-round slack: a brief cap below 150 is floored to 150, a higher cap is honored, and a non-numeric cap fails closed. `maxLines` counts the imp-authored added+deleted lines (runner formatting excluded). `allow` is the path prefixes the diff may touch. `{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted. Front-matter values are taken verbatim; inline `#` comments are unsupported.
 
 ## The queue and the hourly dispatcher

@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -673,6 +673,20 @@ for (const i of pickable()) {
             try {
                 comment(i.repo, i.number, `${NO_BRIEF_MARK}
 This is labelled \`imp:ready\` but has no brief comment, so no imp will run on it. A brief is a comment starting with \`<!-- imp-brief -->\` (see imps/STANDARD.md). Not repeating this note.`);
+            } catch (e) {
+                log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
+            }
+        }
+        continue;
+    }
+    // Preflight: validate brief front matter has matching repo/issue before any run starts
+    const metaErr = validateBriefMeta(brief, i.repo, i.number);
+    if (metaErr) {
+        log({ event: 'invalid-brief', repo: i.repo, number: i.number, reason: metaErr });
+        if (!dry) {
+            try {
+                relabel(i.repo, i.number, 'imp:failed', ['imp:ready']);
+                comment(i.repo, i.number, `Invalid brief metadata:\n\n${metaErr}\n\nA brief must have YAML front matter with \`repo:\` and \`issue:\` matching this issue (e.g., \`repo: fire\`, \`issue: 166\`).`);
             } catch (e) {
                 log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
             }
