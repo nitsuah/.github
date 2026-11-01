@@ -55,13 +55,13 @@ export function isPrShaped(labels = []) {
 }
 
 const SENSITIVE_CANDIDATE_PATTERNS = [
-    /(?:^|[\\s`"'(])\\.github\\/workflows(?:\\/|[\\s`"'():]|$)/i,
-    /\\bworkflows?\\b/i,
-    /(?:^|[\\s`"'(])\\.env(?:\\.[\\w-]+)?(?:[\\/\\s`"'():]|$)/i,
-    /\\b(?:secrets?|credentials?)\\b/i,
-    /\\b(?:api\\s+keys?|access\\s+tokens?|refresh\\s+tokens?|private\\s+keys?|signing\\s+keys?|encryption\\s+keys?)\\b/i,
-    /\\b(?:authentication|authorization|permissions?)\\b/i,
-    /(?:^|[\\s`"'(])config\\/(?:auth|security|secrets?|credentials?|permissions?|tokens?)(?:\\/|\\.|[\\s`"'():]|$)/i,
+    /(?:^|[\s"'(])\.github\/workflows(?:\/|[\s"'():]|$)/i,
+    /\bworkflows?\b/i,
+    /(?:^|[\s"'(])\.env(?:\.[\w-]+)?(?:[\/\s"'():]|$)/i,
+    /\b(?:secrets?|credentials?)\b/i,
+    /\b(?:api\s+keys?|access\s+tokens?|refresh\s+tokens?|private\s+keys?|signing\s+keys?|encryption\s+keys?)\b/i,
+    /\b(?:authentication|authorization|permissions?)\b/i,
+    /(?:^|[\s"'(])config\/(?:auth|security|secrets?|credentials?|permissions?|tokens?)(?:\/|\.|[\s"'():]|$)/i,
 ];
 
 /** Conservative pre-draft screen: these candidates require human/security review. */
@@ -76,7 +76,7 @@ export function isSensitiveCandidate(issue = {}) {
     ) {
         return true;
     }
-    const source = String(issue.title || '') + '\\n' + String(issue.body || '');
+    const source = String(issue.title || '') + '\n' + String(issue.body || '');
     return SENSITIVE_CANDIDATE_PATTERNS.some((pattern) => pattern.test(source));
 }
 

@@ -358,7 +358,7 @@ test('runGroom deduplicates an already-filed issue and brief hash across runs', 
         const brief = makeBrief({ repo: 'nitsuah/demo', issue: '9' });
         return {
             ok: true,
-            json: async () => ({ content: [{ text: ' ```markdown\\n' + brief + '\\n``` ' }] }),
+            json: async () => ({ content: [{ text: ' ```markdown\n' + brief + '\n``` ' }] }),
         };
     };
     const gh = (args) => {
