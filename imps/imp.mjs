@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, extractFailureDiagnostic, sanitizeDiagnostic } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, resolveMaxTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -174,9 +174,15 @@ function runGate(id) {
         process.stderr.write(p.stderr || '');
         // Each stream keeps its own bounded tail so a noisy stderr cannot push the failure out of stdout.
         if (key) {
+            const combinedOutput = [p.stdout || '', p.stderr || ''].join('\n');
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
+            // Extract structured diagnostic from full output before tail truncation
+            const rawDiag = extractFailureDiagnostic(combinedOutput, id);
+            const diag = sanitizeDiagnostic(rawDiag);
+            if (!ends[key]) ends[key] = {};
+            ends[key].diagnostic = diag;
             // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
-            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}) };
+            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}), ...ends[key] };
         }
         return p.status;
     };

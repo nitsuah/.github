@@ -1023,7 +1023,8 @@ export function redactSecrets(text = '') {
 }
 
 // The gate only kept `tests exit 1`, never why, so a repeating failure could not be diagnosed afterwards.
-// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the ledger and on the issue.
+// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the local ledger.
+// Full tail posting is opt-in via IMPS_COMMENT_OUTPUT=1; passing steps remain silent.
 export function tailOutput(text = '', max = 2000) {
     const plain = redactSecrets(String(text)).replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '').replace(/\r/g, '').trim();
     if (plain.length <= max) return plain;
@@ -1130,4 +1131,71 @@ export function lastLines(text = '', n = 60) {
 export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
     // Same cutoff as issueFailures: a newer brief comment starts a fresh allowance.
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !(Date.parse(r.startedAt) < sinceMs) && isNoopRun(r)).length <= NOOP_FREE;
+}
+
+// ── failure diagnostic extractor ────────────────────────────────────────────
+// Recognizes known test/lint output shapes and returns a bounded summary.
+// Never invents a cause; unknown output returns { kind: 'unknown', runId }.
+export function extractFailureDiagnostic(output = '', runId = '') {
+    const plain = String(output || '');
+    if (!plain.trim()) return { kind: 'unknown', runId, note: 'no output captured' };
+
+    // Node TAP / Vitest: "not ok N - test name" or "FAIL file > test name"
+    const tapFail = plain.match(/^(?:not ok \d+ - |FAIL .+ > )(.+)$/m);
+    if (tapFail) {
+        const testName = tapFail[1].slice(0, 120);
+        return { kind: 'test', runId, test: testName, error: 'assertion failure' };
+    }
+
+    // Vitest suite/error summary: "FAIL file.test.ts" or similar
+    const vitestFail = plain.match(/^FAIL\s+(\S+)/m);
+    if (vitestFail) {
+        return { kind: 'test', runId, test: vitestFail[1].slice(0, 120), error: 'test failed' };
+    }
+
+    // ESLint: "error  'x' is defined but never used  no-unused-vars" (rule at end)
+    const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
+    if (eslintMatch) {
+        const [, severity, message, rule] = eslintMatch;
+        return { kind: 'lint', runId, rule: rule.slice(0, 60), severity: severity.slice(0, 10), message: message.slice(0, 120) };
+    }
+
+    // ESLint compact: "path/file.js:1:1 error 'x' is defined but never used no-unused-vars"
+    const eslintCompact = plain.match(/^(.+?):\d+:\d+\s+(error|warning)\s+(.+?)\s+(\S+)$/m);
+    if (eslintCompact) {
+        const [, file, severity, message, rule] = eslintCompact;
+        return { kind: 'lint', runId, file: file.slice(0, 80), rule: rule.slice(0, 60), severity: severity.slice(0, 10), message: message.slice(0, 120) };
+    }
+
+    // Prettier: "Insert ·→" or "Code style issues found"
+    const prettierMatch = plain.match(/(Insert|Delete|Replace)\s+[•·→]/);
+    if (prettierMatch) {
+        return { kind: 'lint', runId, tool: 'prettier', issue: prettierMatch[1].toLowerCase() };
+    }
+    if (/Code style issues found/i.test(plain)) {
+        return { kind: 'lint', runId, tool: 'prettier', issue: 'style' };
+    }
+
+    // Generic test runner exit code mention
+    const exitCode = plain.match(/exit code (\d+)/i);
+    if (exitCode) {
+        return { kind: 'unknown', runId, exitCode: Number(exitCode[1]), note: 'non-zero exit' };
+    }
+
+    return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+}
+
+// Sanitize the diagnostic for safe posting: redact secrets, reduce absolute paths to repo-relative.
+export function sanitizeDiagnostic(diag) {
+    if (!diag || typeof diag !== 'object') return diag;
+    const out = { ...diag };
+    // Redact secrets in any string fields
+    for (const k of Object.keys(out)) {
+        if (typeof out[k] === 'string') {
+            out[k] = redactSecrets(out[k]);
+            // Reduce absolute Windows/Unix paths to repo-relative suffix
+            out[k] = out[k].replace(/[A-Za-z]:[\\/][^\\/\s:]+(?:[\\/][^\\/\s:]+)*/g, '<abs>').replace(/\/[^/\s:]+(?:\/[^/\s:]+)*/g, (m) => m.startsWith('/') ? m.split('/').slice(-3).join('/') : m);
+        }
+    }
+    return out;
 }

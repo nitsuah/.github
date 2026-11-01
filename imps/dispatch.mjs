@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, extractFailureDiagnostic, sanitizeDiagnostic } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -167,6 +167,29 @@ const note = (repo, number, body) => {
         log({ event: 'comment-error', repo, number, error: String(e.message).slice(0, 200) });
     }
 };
+
+// Format diagnostic summary for posting (already sanitized by imp.mjs)
+function formatDiagnostic(d) {
+    if (!d || typeof d !== 'object') return 'unknown';
+    if (d.kind === 'test') {
+        const parts = [];
+        if (d.test) parts.push(`test="${d.test}"`);
+        if (d.error) parts.push(`error="${d.error}"`);
+        return parts.join(' ') || 'test failure';
+    }
+    if (d.kind === 'lint') {
+        const parts = [];
+        if (d.rule) parts.push(`rule="${d.rule}"`);
+        if (d.severity) parts.push(`${d.severity}`);
+        if (d.tool) parts.push(`tool=${d.tool}`);
+        if (d.file) parts.push(`file="${d.file}"`);
+        if (d.message) parts.push(`msg="${d.message}"`);
+        if (d.issue) parts.push(`issue=${d.issue}`);
+        return parts.join(' ') || 'lint failure';
+    }
+    if (d.exitCode) return `exit ${d.exitCode}`;
+    return d.note || 'diagnostic summary unavailable';
+}
 
 // ── claim heartbeat ───────────────────────────────────────────────────────
 // A run can take 25 minutes plus gate, PR and review, and while it runs the
@@ -474,7 +497,21 @@ async function work(issue) {
             return log({ event: 'retry-feedback', repo, number, id, reasons: row.gate.reasons });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
+        // Build diagnostic summary from ledger (test/lint diagnostic extracted before tail truncation)
+        let diagSummary = '';
+        if (row.gate) {
+            const testDiag = row.gate.testEnd?.diagnostic;
+            const lintDiag = row.gate.lintEnd?.diagnostic;
+            if (testDiag || lintDiag) {
+                const parts = [];
+                if (testDiag) parts.push(`test: ${formatDiagnostic(testDiag)}`);
+                if (lintDiag) parts.push(`lint: ${formatDiagnostic(lintDiag)}`);
+                diagSummary = `\n\n**Diagnostic summary (untrusted command output):**\n${parts.map(p => `- ${p}`).join('\n')}`;
+            } else {
+                diagSummary = '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';
+            }
+        }
+        note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${diagSummary}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
         clearInterval(hb);
