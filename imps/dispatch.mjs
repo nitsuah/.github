@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -40,6 +40,13 @@ const { values: o } = parseArgs({
         rsi: { type: 'boolean', default: false },
     },
 });
+let briefAuthors;
+try {
+    briefAuthors = parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS);
+} catch (e) {
+    console.error(e.message);
+    process.exit(2);
+}
 const perRepo = Number(o['per-repo']);
 if (!Number.isInteger(perRepo) || perRepo < 1) {
     console.error('--per-repo must be a positive integer');
@@ -458,16 +465,17 @@ async function work(issue) {
             note(repo, number, `The model ended the run without doing anything (run ${id}: ${stats}). That is not counted against this issue; retrying automatically.`);
             return log({ event: 'retry-noop', repo, number, id });
         }
-        // One automatic second attempt, with the failing output in the brief, when a second try can plausibly fix it
-        // (test / lint / uncommitted edits, output recorded). The per-issue cap and the daily cap still bound it.
+        const diagSummary = failureDiagnosticSummary(row.gate);
+        // One automatic second attempt, with the failing output in the brief, when a second try can plausibly fix it.
+        // The same safe summary is included on retry and terminal failure comments.
         // Kill switch: IMPS_RETRY_FEEDBACK=0.
         if (process.env.IMPS_RETRY_FEEDBACK !== '0' && feedbackEligible(row.gate) && issueFailures(readLedger(), repo, number) <= 1) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
-            note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}): ${row.gate.reasons.join('; ')}. Retrying once with the failing output.`);
+            note(repo, number, "The imp didn't pass the gate (run " + id + ": " + stats + "): " + row.gate.reasons.join('; ') + "." + diagSummary + "\n\nRetrying once with the failing output.");
             return log({ event: 'retry-feedback', repo, number, id, reasons: row.gate.reasons });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
+        note(repo, number, "The imp didn't pass the gate (run " + id + ": " + stats + ").\n\n" + (row.gate?.reasons || ['no gate result']).map((x) => "- " + x).join('\n') + diagSummary + (process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : '') + "\n\nNeeds a new brief or a human.");
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
         clearInterval(hb);
@@ -666,7 +674,7 @@ for (const i of pickable()) {
         log({ event: 'skip-epic', repo: i.repo, number: i.number });
         continue;
     }
-    const brief = briefFromComments(comments);
+    const brief = briefFromComments(comments, { allowedAuthors: briefAuthors });
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
         if (!hasMark(comments, NO_BRIEF_MARK)) {
@@ -679,9 +687,23 @@ This is labelled \`imp:ready\` but has no brief comment, so no imp will run on i
         }
         continue;
     }
+    // Preflight: validate brief front matter has matching repo/issue before any run starts
+    const metaErr = validateBriefMeta(brief, i.repo, i.number);
+    if (metaErr) {
+        log({ event: 'invalid-brief', repo: i.repo, number: i.number, reason: metaErr });
+        if (!dry) {
+            try {
+                relabel(i.repo, i.number, 'imp:failed', ['imp:ready']);
+                comment(i.repo, i.number, `Invalid brief metadata:\n\n${metaErr}\n\nA brief must have YAML front matter with \`repo:\` and \`issue:\` matching this issue (e.g., \`repo: fire\`, \`issue: 166\`).`);
+            } catch (e) {
+                log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
+            }
+        }
+        continue;
+    }
     // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
     // brief comment (a human re-brief) resets the count.
-    const briefAt = briefCommentAt(comments);
+    const briefAt = briefCommentAt(comments, { allowedAuthors: briefAuthors });
     i.briefAt = briefAt;
     const fails = issueFailures(readLedger(), i.repo, i.number, briefAt);
     if (fails >= DEFAULTS.maxIssueFailures) {

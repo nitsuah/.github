@@ -8,7 +8,7 @@ import { join } from 'node:path';
 const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
 const previousHome = process.env.IMPS_HOME;
 process.env.IMPS_HOME = tempHome;
-const { runClaude } = await import('./runner.mjs');
+const { runClaude, resolveMaxTurns } = await import('./runner.mjs');
 
 after(() => {
     if (previousHome === undefined) delete process.env.IMPS_HOME;
@@ -16,18 +16,22 @@ after(() => {
     rmSync(tempHome, { recursive: true, force: true });
 });
 
-function fakeCli() {
+function fakeCli(toolTurns = 0) {
     const script = join(tempHome, 'fake-claude-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.mjs');
     const source = [
         '#!/usr/bin/env node',
         "import { createInterface } from 'node:readline';",
         'const args = process.argv.slice(2);',
+        'const toolTurns = ' + toolTurns + ';',
         "const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n');",
         "const finish = (result) => {",
         "  const event = { type: 'result', subtype: 'success', result, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } };",
         "  process.stdout.write(JSON.stringify(event) + '\\n', () => process.exit(0));",
         '};',
-        "if (!args.includes('--input-format')) {",
+        'if (toolTurns > 0) {',
+        "  for (let i = 0; i < toolTurns; i++) emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: {} }] } });",
+        "  finish('TOOL_TURNS_COMPLETE');",
+        "} else if (!args.includes('--input-format')) {",
         "  const promptIndex = args.indexOf('-p') + 1;",
         "  finish(JSON.stringify({ args, prompt: args[promptIndex] }));",
         '} else {',
@@ -51,11 +55,11 @@ function fakeCli() {
     return script;
 }
 
-async function runWithFake({ guard, prompt, name }) {
+async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0 }) {
     const previousGuard = process.env.IMPS_REPEAT_FAILURE_GUARD;
     const previousBin = process.env.IMPS_CLAUDE_BIN;
     process.env.IMPS_REPEAT_FAILURE_GUARD = guard ? '1' : '0';
-    process.env.IMPS_CLAUDE_BIN = fakeCli();
+    process.env.IMPS_CLAUDE_BIN = fakeCli(toolTurns);
     try {
         return await runClaude({
             cwd: tempHome,
@@ -65,7 +69,7 @@ async function runWithFake({ guard, prompt, name }) {
             deny: [],
             minutes: 0.2,
             budget: 0.1,
-            maxTurns: 4,
+            maxTurns,
             noEditByTurn: 0,
             transcript: join(tempHome, name + '.jsonl'),
         });
@@ -85,6 +89,26 @@ test('default-off launch preserves -p then prompt argv order', { skip: process.p
     assert.equal(launch.args[0], '-p');
     assert.equal(launch.args[1], prompt);
     assert.equal(launch.prompt, prompt);
+});
+
+test('maxTurns config rejects booleans and preserves numeric strings', () => {
+    const fallback = resolveMaxTurns({});
+    assert.equal(resolveMaxTurns({ maxTurns: true }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: false }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: '12' }), 12);
+});
+
+test('maxTurns 0 disables the cap and still records tool turns', { skip: process.platform === 'win32' }, async () => {
+    const metrics = await runWithFake({
+        guard: false,
+        prompt: 'ZERO_MAX_TURNS',
+        name: 'zero-max-turns',
+        maxTurns: 0,
+        toolTurns: 6,
+    });
+    assert.equal(metrics.end, 'success');
+    assert.equal(metrics.toolTurns, 6);
+    assert.equal(metrics.finalText, 'TOOL_TURNS_COMPLETE');
 });
 
 test('opt-in stream-json delivers initial prompt and the third-repeat nudge to the live child', { skip: process.platform === 'win32' }, async () => {

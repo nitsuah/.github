@@ -3,7 +3,7 @@
 import { DEFAULTS } from './defaults.mjs';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 export function resolveImpsCodeRoot({ env = process.env, home = homedir() } = {}) {
     const explicit = typeof env.IMPS_CODE === 'string' && env.IMPS_CODE !== '' ? env.IMPS_CODE : '';
@@ -97,6 +97,32 @@ export function parseBrief(text) {
         if (kv) meta[kv[1]] = kv[2].trim();
     }
     return { meta, body: text.slice(m[0].length) };
+}
+
+/**
+ * Validates that a brief's front matter has required `repo` and `issue`
+ * fields matching the expected repository and issue number.
+ * Returns an error string or null if valid.
+ * @param {string} brief - The brief text
+ * @param {string} expectedRepo - Expected repository slug (e.g., "fire")
+ * @param {number|string} expectedIssue - Expected issue number
+ * @returns {string|null} Error message or null if valid
+ */
+export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
+    const { meta } = parseBrief(brief);
+    if (!meta.repo || String(meta.repo).trim() === '') {
+        return 'Brief front matter is missing required `repo` field (e.g., `repo: fire`)';
+    }
+    if (!meta.issue || String(meta.issue).trim() === '') {
+        return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
+    }
+    if (String(meta.repo).trim() !== String(expectedRepo).trim()) {
+        return `Brief \`repo\` (${meta.repo}) does not match the target repository (${expectedRepo})`;
+    }
+    if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
+        return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
+    }
+    return null;
 }
 
 // Validate the optional brief cap before it reaches effectiveMaxLines/gate.
@@ -384,10 +410,10 @@ export function outcomeFromPr({ state, mergedAt } = {}) {
     return 'open';
 }
 
-// When the latest brief comment was posted (ms), or 0.
-export function briefCommentAt(comments = []) {
-    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
-    return c ? Date.parse(c.createdAt || '') || 0 : 0;
+// When the latest trusted brief comment was posted (ms), or 0.
+export function briefCommentAt(comments = [], options = {}) {
+    const c = trustedBriefComment(comments, options);
+    return c ? Date.parse(c.createdAt || c.created_at || '') || 0 : 0;
 }
 
 export const CAP_MARK = '<!-- imp-cap -->';
@@ -476,8 +502,27 @@ export function pickIssues({
 // A brief lives on the issue as a comment that starts with this marker, so
 // it's reviewable on GitHub and the dispatcher needs no local state.
 export const BRIEF_MARK = '<!-- imp-brief -->';
-export function briefFromComments(comments = []) {
-    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
+
+// Parse the trusted author allowlist once, and fail closed on an explicitly empty value.
+export function parseBriefAuthors(value) {
+    const names = value == null ? ['nitsuah'] : String(value).split(',').map((name) => name.trim()).filter(Boolean);
+    const normalized = [...new Set(names.map((name) => name.toLowerCase()))];
+    if (!normalized.length) throw new Error('IMPS_BRIEF_AUTHORS must contain at least one trusted GitHub login');
+    return normalized;
+}
+
+export function trustedBriefComment(comments = [], { allowedAuthors = ['nitsuah'] } = {}) {
+    // A marker is not authorization. Only an explicitly trusted author may supply
+    // task instructions; public issue commenters are untrusted.
+    const trusted = new Set(allowedAuthors.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
+    return [...comments].reverse().find((x) => {
+        const login = String(x.author?.login || x.user?.login || '').toLowerCase();
+        return trusted.has(login) && (x.body || '').trimStart().startsWith(BRIEF_MARK);
+    }) || null;
+}
+
+export function briefFromComments(comments = [], options = {}) {
+    const c = trustedBriefComment(comments, options);
     if (!c) return null;
     // Prose may sit around the brief: take the fenced block if there is one.
     const body = c.body.trimStart().slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
@@ -686,7 +731,12 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
         const first = t.comments[0];
         items.push({
             kind: 'thread', id: t.id, commentId: first.databaseId, author: norm(first.author), path: t.path, line: t.line,
-            text: t.comments.map((c) => `${norm(c.author)}: ${(c.body || '').replace(/<!--[\s\S]*?-->/g, '').trim()}`).join('\n\n').slice(0, 4000),
+            text: t.comments.map((c) => {
+                let cleaned = c.body || '';
+                let prev;
+                do { prev = cleaned; cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, ''); } while (cleaned !== prev);
+                return `${norm(c.author)}: ${cleaned.trim()}`;
+            }).join('\n\n').slice(0, 4000),
         });
     }
     for (const c of comments) {
@@ -767,7 +817,7 @@ export function renderReview(rv, { runId, model, served = [], turns, minutes }) 
     const lines = ['<!-- imp-review -->', `### Imp review: ${VERDICT_LABEL[rv.verdict]}`, '', rv.summary || '(no summary)', ''];
     if (rv.findings.length) {
         lines.push('| | Finding | Where |', '| --- | --- | --- |');
-        for (const f of rv.findings) lines.push(`| **${f.severity}** | ${f.title.replace(/\|/g, '\\|')} | \`${f.file}${f.line ? `:${f.line}` : ''}\` |`);
+        for (const f of rv.findings) lines.push(`| **${f.severity}** | ${f.title.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')} | \`${f.file}${f.line ? `:${f.line}` : ''}\` |`);
         lines.push('');
         for (const f of rv.findings.filter((x) => x.severity !== 'nit'))
             lines.push(`<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
@@ -965,6 +1015,7 @@ export function runGhWithReadRetry(args, run, pause = () => {}) {
 export function redactSecrets(text = '') {
     return String(text)
         .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, '[redacted]')
+        .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[redacted]')
         .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, '[redacted]')
         .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]')
         .replace(/\b([A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD))(\s*[:=]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/g, '$1$2[redacted]')
@@ -973,7 +1024,8 @@ export function redactSecrets(text = '') {
 }
 
 // The gate only kept `tests exit 1`, never why, so a repeating failure could not be diagnosed afterwards.
-// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the ledger and on the issue.
+// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the local ledger.
+// Full tail posting is opt-in via IMPS_COMMENT_OUTPUT=1; passing steps remain silent.
 export function tailOutput(text = '', max = 2000) {
     const plain = redactSecrets(String(text)).replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '').replace(/\r/g, '').trim();
     if (plain.length <= max) return plain;
@@ -1081,3 +1133,131 @@ export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
     // Same cutoff as issueFailures: a newer brief comment starts a fresh allowance.
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !(Date.parse(r.startedAt) < sinceMs) && isNoopRun(r)).length <= NOOP_FREE;
 }
+
+// ── failure diagnostic extractor ────────────────────────────────────────────
+// Recognizes known test/lint output shapes and returns a bounded summary.
+// Never invents a cause; unknown output is explicitly unavailable.
+export function extractFailureDiagnostic(output = '', runId = '', worktree = '') {
+    const safeOutput = sanitizeDiagnostic({ output: String(output || '') }, worktree).output;
+    const plain = String(safeOutput || '')
+        .replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '')
+        .replace(/\r/g, '');
+    if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+
+    // Node TAP / Vitest: strip terminal colors before matching anchored output.
+    const tapFail = plain.match(/^(?:not ok \d+ - |FAIL .+ > )(.+)$/m);
+    if (tapFail) {
+        const assertion = /\bAssertionError\b|\bERR_ASSERTION\b|\bassert(?:ion)?\s+(?:failed|failure|error)\b/i.test(plain);
+        return {
+            kind: 'test',
+            runId,
+            test: tapFail[1].slice(0, 120),
+            error: assertion ? 'assertion failure' : 'test failure',
+        };
+    }
+
+    // Vitest suite/error summary: "FAIL file.test.ts" or similar.
+    const vitestFail = plain.match(/^FAIL\s+(\S+)/m);
+    if (vitestFail) return { kind: 'test', runId, test: vitestFail[1].slice(0, 120), error: 'test failure' };
+
+    // ESLint: "error  'x' is defined but never used  no-unused-vars".
+    const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
+    if (eslintMatch) {
+        const [, severity, message, rule] = eslintMatch;
+        return { kind: 'lint', runId, rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
+    }
+
+    // ESLint compact: "path/file.js:1:1 error 'x' is defined but never used no-unused-vars".
+    const eslintCompact = plain.match(/^(.+?):\d+:\d+\s+(error|warning)\s+(.+?)\s+(\S+)$/m);
+    if (eslintCompact) {
+        const [, file, severity, message, rule] = eslintCompact;
+        return { kind: 'lint', runId, file: file.slice(0, 80), rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
+    }
+
+    const prettierMatch = plain.match(/(Insert|Delete|Replace)\s+[•·→]/);
+    if (prettierMatch) return { kind: 'lint', runId, tool: 'prettier', issue: prettierMatch[1].toLowerCase() };
+    if (/Code style issues found/i.test(plain)) return { kind: 'lint', runId, tool: 'prettier', issue: 'style' };
+
+    // An exit code alone is not a diagnostic.
+    if (/exit code \d+/i.test(plain)) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+    return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+}
+
+function normalizeDiagnosticPath(value, worktree) {
+    const windowsAbsolute = /^[A-Za-z]:[\\/]/.test(value);
+    const posixAbsolute = value.startsWith('/') && !value.startsWith('//');
+    if (!windowsAbsolute && !posixAbsolute) return value;
+
+    if (typeof worktree === 'string' && worktree.trim()) {
+        try {
+            const normalized = windowsAbsolute
+                ? win32.relative(win32.resolve(worktree), win32.resolve(value))
+                : relative(resolve(worktree), resolve(value));
+            const outside = windowsAbsolute
+                ? normalized === '..' || normalized.startsWith('..' + win32.sep) || win32.isAbsolute(normalized)
+                : normalized === '..' || normalized.startsWith('..' + sep) || isAbsolute(normalized);
+            if (!outside) return normalized ? normalized.split(/[\\/]/).join('/') : '[repo-root]';
+        } catch {
+            // Fall through to a basename-only external path.
+        }
+    }
+
+    const fileName = windowsAbsolute ? win32.basename(value) : basename(value);
+    return '<path>';
+}
+
+// Redact secret-like strings and normalize absolute paths before any issue comment.
+const absolutePathPattern = /(?<![A-Za-z0-9_.:/\\-])(?:[A-Za-z]:[\\/][^\\/\s:]+(?:[\\/][^\\/\s:]+)*|\/(?:[^/\s:]+\/)*[^/\s:]+)/g;
+export function sanitizeDiagnostic(diag, worktree = '') {
+    if (!diag || typeof diag !== 'object') return diag;
+    const out = { ...diag };
+    for (const key of Object.keys(out)) {
+        if (typeof out[key] === 'string') {
+            out[key] = redactSecrets(out[key]).replace(absolutePathPattern, (value) => normalizeDiagnosticPath(value, worktree));
+        }
+    }
+    return out;
+}
+
+function diagnosticAtom(value) {
+    return String(value)
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/[\\\x60*_{}\[\]()#+.!|~]/g, '\\$&')
+        .replace(/@/g, '&#64;')
+        .slice(0, 120);
+}
+
+export function formatFailureDiagnostic(diag) {
+    if (!diag || typeof diag !== 'object') return 'diagnostic summary unavailable';
+    if (diag.kind === 'test') {
+        const parts = [];
+        if (diag.test) parts.push('test="' + diagnosticAtom(diag.test) + '"');
+        if (diag.error) parts.push('error="' + diagnosticAtom(diag.error) + '"');
+        return parts.join(' ') || 'test failure';
+    }
+    if (diag.kind === 'lint') {
+        const parts = [];
+        if (diag.rule) parts.push('rule="' + diagnosticAtom(diag.rule) + '"');
+        if (diag.severity) parts.push(diagnosticAtom(diag.severity));
+        if (diag.tool) parts.push('tool="' + diagnosticAtom(diag.tool) + '"');
+        if (diag.file) parts.push('file="' + diagnosticAtom(diag.file) + '"');
+        if (diag.issue) parts.push('issue="' + diagnosticAtom(diag.issue) + '"');
+        return parts.join(' ') || 'lint failure';
+    }
+    return 'diagnostic summary unavailable';
+}
+
+export function failureDiagnosticSummary(gate) {
+    const parts = [];
+    const testDiag = gate?.testExit != null && gate.testExit !== 0 ? gate.testEnd?.diagnostic : null;
+    const lintDiag = gate?.lintExit != null && gate.lintExit !== 0 ? gate.lintEnd?.diagnostic : null;
+    if (testDiag?.kind === 'test') parts.push('test: ' + formatFailureDiagnostic(testDiag));
+    if (lintDiag?.kind === 'lint') parts.push('lint: ' + formatFailureDiagnostic(lintDiag));
+    if (!parts.length) return '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';
+    return '\n\n**Diagnostic summary (untrusted command output):**\n' + parts.map((part) => '- ' + part).join('\n');
+}
+
