@@ -110,6 +110,6 @@ test('alreadyGroomed detects draft marker and brief', () => {
     assert.equal(alreadyGroomed(comments), true);
 
     const briefBody = '<!-- imp-brief -->\n---\nrepo: x\nissue: 1\ntest: t\nmaxLines: 10\nallow: a\n---\nbody';
-    const comments2 = [{ body: briefBody }];
+    const comments2 = [{ user: { login: 'nitsuah' }, body: briefBody }];
     assert.equal(alreadyGroomed(comments2), true);
 });
