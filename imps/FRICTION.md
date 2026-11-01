@@ -146,3 +146,12 @@ Fire #345's Docker-based attempt ended after 61 turns / 34 tool errors with test
 The Imp runner's exact failures are unknown: command-not-found, a test assertion, or a Docker bind-mount `.git` path error are all possible; no source defect is established from the exit-only summaries. The bind-mount hypothesis is especially relevant when `git diff --check` runs inside Docker and the worktree's `.git` file points outside the mounted path.
 
 For future briefs, use local Node/npm for pure Node tests/builds; use Docker only when a browser/Compose runtime is actually required and the runner's Docker capability is verified. Keep `git diff --check` in the worktree, capture the first complete stdout/stderr, and do not requeue unchanged failures.
+
+
+### Public failure-comment diagnostic visibility (2026-11-01)
+
+Recent Imp failures again ended with exit-only issue comments: Fire #345 (09:44Z: 61 turns / 29 tool errors, test exit 1), ATS-Fill #208 (10:34Z: 61 turns / 39 tool errors, lint exit 1), Vigil #415 (09:44Z: 61 turns / 21 tool errors, test exit 1), and Vigil #416 (10:05Z: 61 turns / 4 tool errors, lint exit 1). These summaries do not establish a source defect; no first assertion or raw diagnostic was included in the public comments.
+
+Verified control-plane behavior: `imps/imp.mjs` stores redacted `testTail` / `lintTail` in the local run ledger when captured, while `imps/dispatch.mjs` posts those tails in issue comments only when `IMPS_COMMENT_OUTPUT=1`. Therefore an exit-only comment can mean output was not captured **or** was intentionally suppressed; do not infer which without the ledger. Full output remains opt-in because arbitrary test logs may contain secrets or untrusted instructions.
+
+Follow-up [#189](https://github.com/nitsuah/.github/issues/189) is `imp:ready` for a bounded safe diagnostic summary (known failure shapes only, redacted and size-limited) while keeping full tails opt-in. Until that lands, classify these as diagnostic/runner failures unless a first source/test diagnostic is available; do not requeue an unchanged attempt.
