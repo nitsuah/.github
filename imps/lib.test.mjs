@@ -1300,7 +1300,7 @@ test('failureDiagnosticSummary includes only recognized diagnostics from failed 
         lintExit: 0,
         lintEnd: { diagnostic: { kind: 'lint', rule: 'no-unused-vars' } },
     });
-    assert.match(unknown, /diagnostic summary unavailable/);
+    assert.match(unknown, /Diagnostic summary unavailable/);
     assert.doesNotMatch(unknown, /no-unused-vars|exit 1/);
 
     const testOnly = failureDiagnosticSummary({
