@@ -168,6 +168,15 @@ test('lintBrief rejects denied and generic allow paths', () => {
     }
 });
 
+
+test('lintBrief rejects absolute and traversal allow paths', () => {
+    for (const path of ['../.github/workflows/ci.yml', 'src/../.github/workflows/ci.yml', '/etc/passwd', 'C:/Windows/system.ini']) {
+        const res = lintBrief(makeBrief({ allow: path }), 100);
+        assert.equal(res.ok, false, path);
+        assert(res.errors.some(e => e.includes('repo-relative without traversal')), path);
+    }
+});
+
 test('referencesIssue detects non-closing references without matching number prefixes', () => {
     assert.equal(referencesIssue('Refs #12 and #123', 12), true);
     assert.equal(referencesIssue('See https://github.com/nitsuah/fire/issues/12', 12), true);
