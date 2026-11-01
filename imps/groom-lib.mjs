@@ -163,8 +163,8 @@ export function lintBrief(briefText, maxLines, expected = {}) {
     if (!meta.depends) errors.push('missing required field: depends');
     if (!meta.required_commit_trailer) errors.push('missing required field: required_commit_trailer');
     else if (meta.required_commit_trailer !== 'Co-Authored-By: 9router imp <noreply@anthropic.com>') errors.push('invalid required commit trailer');
-    if (!/^\\s*##\\s+Acceptance\\b/im.test(body)) errors.push('missing Acceptance section');
-    if (!/^\\s*##\\s+Invariants\\b/im.test(body)) errors.push('missing Invariants section');
+    if (!/^\s*##\s+Acceptance\b/im.test(body)) errors.push('missing Acceptance section');
+    if (!/^\s*##\s+Invariants\b/im.test(body)) errors.push('missing Invariants section');
     if (expected.repo && meta.repo !== expected.repo) errors.push('repo does not match candidate');
     if (expected.issue != null && String(meta.issue) !== String(expected.issue)) errors.push('issue does not match candidate');
     if (!meta.allow) errors.push('missing required field: allow');
