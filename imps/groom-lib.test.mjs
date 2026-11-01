@@ -9,6 +9,9 @@ import {
     hasImpLabel,
     isPrShaped,
     isQuietRepo,
+    isBotAuthor,
+    hashText,
+    runGroom,
     referencesIssue,
     hasOpenPr,
     draftBrief,
@@ -87,6 +90,20 @@ test('isQuietRepo checks human PRs and commit age', () => {
     assert.equal(isQuietRepo({ humanPRs: 1, lastCommitHours: 99 }), false); // human PR open
     assert.equal(isQuietRepo({}, 6), true); // defaults
     assert.equal(isQuietRepo({ lastCommitHours: 5 }, 6), false); // custom quietHours
+});
+
+
+test('isBotAuthor recognizes GitHub bot field variants and fails closed for unknown authors', () => {
+    assert.equal(isBotAuthor({ login: 'dependabot[bot]' }), true);
+    assert.equal(isBotAuthor({ type: 'Bot', login: 'renovate' }), true);
+    assert.equal(isBotAuthor({ is_bot: true, login: 'app' }), true);
+    assert.equal(isBotAuthor({ type: 'User', login: 'octocat' }), false);
+    assert.equal(isBotAuthor({}), false);
+});
+
+test('hashText is stable and content-sensitive', () => {
+    assert.equal(hashText('brief'), hashText('brief'));
+    assert.notEqual(hashText('brief'), hashText('different brief'));
 });
 
 test('lintBrief validates required fields and candidate identity', () => {
@@ -174,6 +191,14 @@ test('draftBrief keeps untrusted issue and repo content out of the system prompt
         globalThis.fetch = originalFetch;
     }
 });
+test('alreadyGroomed matches candidate/brief hashes and blocks legacy drafts', () => {
+    const hashedDraft = DRAFT_MARK + '\n<!-- groom-candidate-hash:abc -->\n<!-- groom-brief-hash:def -->';
+    assert.equal(alreadyGroomed([{ body: hashedDraft }], { candidateHash: 'abc' }), true);
+    assert.equal(alreadyGroomed([{ body: hashedDraft }], { candidateHash: 'different' }), false);
+    assert.equal(alreadyGroomed([{ body: hashedDraft }], { briefHash: 'def' }), true);
+    assert.equal(alreadyGroomed([{ body: DRAFT_MARK }], { candidateHash: 'new-hash' }), true);
+});
+
 test('alreadyGroomed detects draft marker and brief', () => {
     const comments = [{ body: 'some text' }];
     assert.equal(alreadyGroomed(comments), false);
@@ -185,6 +210,31 @@ test('alreadyGroomed detects draft marker and brief', () => {
     const briefBody = '<!-- imp-brief -->\n---\nrepo: x\nissue: 1\ntest: t\nmaxLines: 10\nallow: a\n---\nbody';
     const comments2 = [{ user: { login: 'nitsuah' }, body: briefBody }];
     assert.equal(alreadyGroomed(comments2), true);
+});
+
+test('runGroom records per-candidate skip reasons', async () => {
+    const previousHome = process.env.IMPS_HOME;
+    process.env.IMPS_HOME = '/tmp/imp-groom-skip-test-' + process.pid;
+    try {
+        const issues = [
+            { repository: { name: 'demo' }, number: 1, title: 'Already tagged', body: '', labels: [{ name: 'bug' }, { name: 'imp:ready' }] },
+            { repository: { name: 'demo' }, number: 2, title: 'Question', body: '', labels: [{ name: 'question' }] },
+        ];
+        const result = await runGroom({
+            owner: 'nitsuah', repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
+            dailyCap: 5, quietHours: 0, dryRun: true, gh: () => '',
+            ghJson: (args) => args[0] === 'search' && args[1] === 'issues' ? issues : (() => { throw new Error('unexpected gh call'); })(),
+        });
+        assert.equal(result.candidates, 2);
+        assert.equal(result.skipped, 2);
+        assert.equal(result.skipReasons.length, 2);
+        assert.deepEqual(result.skipReasons.map(x => x.issue), [1, 2]);
+        assert(result.skipReasons[0].reason.includes('imp:* label'));
+        assert(result.skipReasons[1].reason.includes('not a bug/small enhancement'));
+    } finally {
+        if (previousHome === undefined) delete process.env.IMPS_HOME;
+        else process.env.IMPS_HOME = previousHome;
+    }
 });
 
 test('runGroom fails closed on issue/PR eligibility lookup errors', async () => {
