@@ -5,9 +5,9 @@
 //
 //   node groom.mjs [--dry-run] [--owner nitsuah] [--json]
 //
-// Kill switch: IMPS_GROOM=0 or ~/.imps/config.json { "groom": false }
+// Hard disable: IMPS_GROOM=0/false. Enable: config.groom=true or IMPS_GROOM=1; the explicit env opt-in overrides config.groom=false.
 // Safety: daily issue cap (like rsiDailyIssueCap), never touches .github/workflows or secrets,
-// dedupes by issue number and brief hash.
+// dedupes by issue number and existing draft/brief marker (one draft per issue).
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
