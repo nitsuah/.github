@@ -583,7 +583,12 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
         const first = t.comments[0];
         items.push({
             kind: 'thread', id: t.id, commentId: first.databaseId, author: norm(first.author), path: t.path, line: t.line,
-            text: t.comments.map((c) => `${norm(c.author)}: ${(c.body || '').replace(/<!--[\s\S]*?-->/g, '').trim()}`).join('\n\n').slice(0, 4000),
+            text: t.comments.map((c) => {
+                let cleaned = c.body || '';
+                let prev;
+                do { prev = cleaned; cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, ''); } while (cleaned !== prev);
+                return `${norm(c.author)}: ${cleaned.trim()}`;
+            }).join('\n\n').slice(0, 4000),
         });
     }
     for (const c of comments) {
@@ -647,7 +652,7 @@ export function renderReview(rv, { runId, model, served = [], turns, minutes }) 
     const lines = ['<!-- imp-review -->', `### Imp review: ${VERDICT_LABEL[rv.verdict]}`, '', rv.summary || '(no summary)', ''];
     if (rv.findings.length) {
         lines.push('| | Finding | Where |', '| --- | --- | --- |');
-        for (const f of rv.findings) lines.push(`| **${f.severity}** | ${f.title.replace(/\|/g, '\\|')} | \`${f.file}${f.line ? `:${f.line}` : ''}\` |`);
+        for (const f of rv.findings) lines.push(`| **${f.severity}** | ${f.title.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')} | \`${f.file}${f.line ? `:${f.line}` : ''}\` |`);
         lines.push('');
         for (const f of rv.findings.filter((x) => x.severity !== 'nit'))
             lines.push(`<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
