@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -40,6 +40,13 @@ const { values: o } = parseArgs({
         rsi: { type: 'boolean', default: false },
     },
 });
+let briefAuthors;
+try {
+    briefAuthors = parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS);
+} catch (e) {
+    console.error(e.message);
+    process.exit(2);
+}
 const perRepo = Number(o['per-repo']);
 if (!Number.isInteger(perRepo) || perRepo < 1) {
     console.error('--per-repo must be a positive integer');
@@ -666,7 +673,7 @@ for (const i of pickable()) {
         log({ event: 'skip-epic', repo: i.repo, number: i.number });
         continue;
     }
-    const brief = briefFromComments(comments);
+    const brief = briefFromComments(comments, { allowedAuthors: briefAuthors });
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
         if (!hasMark(comments, NO_BRIEF_MARK)) {
@@ -695,7 +702,7 @@ This is labelled \`imp:ready\` but has no brief comment, so no imp will run on i
     }
     // Per-issue attempt cap: stop feeding an issue that keeps failing. A newer
     // brief comment (a human re-brief) resets the count.
-    const briefAt = briefCommentAt(comments);
+    const briefAt = briefCommentAt(comments, { allowedAuthors: briefAuthors });
     i.briefAt = briefAt;
     const fails = issueFailures(readLedger(), i.repo, i.number, briefAt);
     if (fails >= DEFAULTS.maxIssueFailures) {
