@@ -49,26 +49,31 @@ test('quota file lives in IMPS_HOME and is not tracked in the kit checkout', () 
     }
 });
 
-test('fallback strategy reserves MAX first while available; prefer uses the free model first', () => {
+test('MAX-only pool selects MAX for fallback and prefer strategies', () => {
     const h = home();
     try {
         const fallback = probe(
             h,
-            'const t = 1000; out({ picked: reserveQuota(MODEL_POOL, "fallback", t) });',
+            'const t = 1000; out({ pool: MODEL_POOL, picked: reserveQuota(MODEL_POOL, "fallback", t) });',
         );
+        assert.deepEqual(fallback.pool, { prefer: [], fallback: ['MAX'] });
         assert.equal(fallback.picked, 'MAX');
 
         const prefer = probe(
             h,
-            'const t = 1000; out({ picked: reserveQuota(MODEL_POOL, "prefer", t) });',
+            'const t = 1000; out({ pool: MODEL_POOL, picked: reserveQuota(MODEL_POOL, "prefer", t) });',
         );
-        assert.equal(prefer.picked, 'openrouter/free');
+        assert.deepEqual(prefer.pool, { prefer: [], fallback: ['MAX'] });
+        assert.equal(prefer.picked, 'MAX');
+        const stored = JSON.parse(readFileSync(join(h, 'model_quota.json'), 'utf8'));
+        assert.equal(stored.MAX.used, 2);
+        assert.equal(stored['openrouter/free'], undefined);
     } finally {
         rmSync(h, { recursive: true, force: true });
     }
 });
 
-test('a counter refills in the next window instead of stopping the fleet', () => {
+test('MAX quota exhaustion returns null until the next window refills', () => {
     const h = home();
     try {
         // Same window: exhaust MAX down to zero by writing a spent counter.
@@ -77,10 +82,11 @@ test('a counter refills in the next window instead of stopping the fleet', () =>
             h,
             'const t = 1000; for (let i = 0; i < 20; i++) decrementQuota("MAX", t); out({ picked: pickModel(MODEL_POOL, "fallback", t), reserved: reserveQuota(MODEL_POOL, "fallback", t) });',
         );
-        assert.equal(spent.picked, 'openrouter/free', 'fallback strategy should use the free model only after MAX is exhausted');
-        assert.equal(spent.reserved, 'openrouter/free', 'reservation should follow the configured fallback order');
+        assert.equal(spent.picked, null, 'MAX-only fallback must stop when MAX is exhausted');
+        assert.equal(spent.reserved, null, 'reservation must not select an unconfigured free model');
         const stored = JSON.parse(readFileSync(join(h, 'model_quota.json'), 'utf8'));
-        assert.equal(stored['openrouter/free'].used, 1);
+        assert.equal(stored.MAX.used, 1000);
+        assert.equal(stored['openrouter/free'], undefined);
 
         // One window later the same stored counter is stale, so MAX is back.
         const later = 1000 + 24 * 3600_000;
