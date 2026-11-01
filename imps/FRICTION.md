@@ -150,11 +150,16 @@ For future briefs, use local Node/npm for pure Node tests/builds; use Docker onl
 
 ### Public failure-comment diagnostic visibility (2026-11-01)
 
-Recent Imp failures again ended with exit-only issue comments: Fire #345 (09:44Z: 61 turns / 29 tool errors, test exit 1), ATS-Fill #208 (10:34Z: 61 turns / 39 tool errors, lint exit 1), Vigil #415 (09:44Z: 61 turns / 21 tool errors, test exit 1), and Vigil #416 (10:05Z: 61 turns / 4 tool errors, lint exit 1). These summaries do not establish a source defect; no first assertion or raw diagnostic was included in the public comments.
+Recent Imp failures ended with exit-only comments: Fire #345 (09:44Z: 61 turns / 29 tool errors, test exit 1), ATS-Fill #208 (10:34Z: 61 turns / 39 tool errors, lint exit 1), Vigil #415 (09:44Z: 61 turns / 21 tool errors, test exit 1), and Vigil #416 (10:05Z: 61 turns / 4 tool errors, lint exit 1). These historical summaries do not establish a source defect; no first assertion or raw diagnostic was included in those comments.
 
-Verified control-plane behavior: `imps/imp.mjs` stores redacted `testTail` / `lintTail` in the local run ledger when captured, while `imps/dispatch.mjs` posts those tails in issue comments only when `IMPS_COMMENT_OUTPUT=1`. Therefore an exit-only comment can mean output was not captured **or** was intentionally suppressed; do not infer which without the ledger. Full output remains opt-in because arbitrary test logs may contain secrets or untrusted instructions.
+[PR #191](https://github.com/nitsuah/.github/pull/191) implemented bounded diagnostic summaries and merged as `4c8f1a7a2df7d1eeb6b7f35e921de8c20f744c68`. Exact-head Imp kit [41330008525](https://github.com/nitsuah/.github/actions/runs/41330008525) passed 239/239 tests; Analyze passed, CodeQL/CodeRabbit were neutral, and no unresolved review threads remained.
 
-Follow-up [#189](https://github.com/nitsuah/.github/issues/189) is implemented in [PR #191](https://github.com/nitsuah/.github/pull/191), exact head `755aa830fb8d84fdf4371c0229094354e6c4b3df`; Imp kit CI passed 239/239, CodeQL and Analyze passed, and no review threads remain. It is still awaiting the required fresh maintainer review with write access, so it is not merged. Full tails remain opt-in. Until merge, classify exit-only failures as diagnostic/runner failures unless a first source/test diagnostic is available; do not requeue unchanged.
+Current behavior:
+- `imps/imp.mjs` extracts and sanitizes a bounded test/lint diagnostic from full output before tail truncation and records it in the local ledger.
+- `imps/dispatch.mjs` posts the structured diagnostic summary on gate-fail comments when available, marked as untrusted command output; otherwise it says `diagnostic summary unavailable` and retains the run ID.
+- Full raw tails remain opt-in via `IMPS_COMMENT_OUTPUT=1`; do not enable them just to make an exit-only comment look more complete.
+
+If a current failure still has no diagnostic summary, inspect the local ledger and classify it as runner/diagnostic failure unless a concrete source/test assertion is available. Do not requeue unchanged failures.
 
 Latest recovery pass (2026-11-01 18:55Z): Vigil #415 attempt `imp_2611011849_415` ended after 21 turns / 6 tool errors with no commit and tests not run, despite the refreshed RUNTEST-only brief. The first concrete tool error is still missing, so this is an agent/tool failure classification—not evidence of a source defect. Direct maintenance recovery is draft [PR #421](https://github.com/nitsuah/vigil/pull/421), exact head `4ab4433ce4b1f6f7d3f4c9a5da27620d3ddce403`, validation pending. Vigil #416 has a new GHASTLY claim from 18:55:31Z; leave it untouched. Do not retry #415 unchanged.
 
