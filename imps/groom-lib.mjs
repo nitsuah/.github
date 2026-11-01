@@ -26,8 +26,7 @@ export function loadGroomConfig(path) {
 
 export function groomEnabled(config = {}, env = {}) {
     if (env.IMPS_GROOM === '0' || env.IMPS_GROOM === 'false') return false;
-    if (config.groom === false) return false;
-    return true;
+    return env.IMPS_GROOM === '1' || config.groom === true;
 }
 
 /** Normalize an issue label array to just names. */
