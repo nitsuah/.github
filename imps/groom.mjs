@@ -5,6 +5,7 @@
 //
 //   node groom.mjs [--dry-run] [--owner nitsuah] [--json]
 //
+// Opt-in: IMPS_GROOM=1 or ~/.imps/config.json { "groom": true }.
 // Kill switch: IMPS_GROOM=0 or ~/.imps/config.json { "groom": false }
 // Safety: daily issue cap (like rsiDailyIssueCap), never touches .github/workflows or secrets,
 // dedupes by issue number and brief hash.
@@ -30,7 +31,7 @@ const { values: o } = parseArgs({
 
 const config = loadGroomConfig(join(HOME, 'config.json'));
 if (!groomEnabled(config, process.env)) {
-    const msg = { event: 'groom-disabled', reason: 'IMPS_GROOM=0 or config.groom=false' };
+    const msg = { event: 'groom-disabled', reason: 'not explicitly enabled or kill switch set' };
     console.log(o.json ? JSON.stringify(msg) : 'groom disabled (kill switch)');
     process.exit(0);
 }
@@ -54,7 +55,7 @@ try {
     const orgRepos = ghJson(['repo', 'list', o.owner, '--limit', '100', '--json', 'name,isPrivate']);
     for (const r of orgRepos) {
         if (r.isPrivate) continue; // skip private for now
-        repos[r.name] = { humanPRs: 0, lastCommitHours: 99 };
+        repos[r.name] = { humanPRs: null, lastCommitHours: null };
     }
 } catch (e) {
     console.error('repo list failed:', e.message);
@@ -66,14 +67,14 @@ for (const name of Object.keys(repos)) {
     try {
         const prs = ghJson(['pr', 'list', '-R', `${o.owner}/${name}`, '--state', 'open', '--json', 'author']);
         repos[name].humanPRs = prs.filter((p) => String(p.author?.type || '').toLowerCase() !== 'bot').length;
-    } catch { /* ignore */ }
+    } catch { /* leave unknown; isQuietRepo fails closed */ }
     try {
         const commits = gh(['api', `repos/${o.owner}/${name}/commits?per_page=1`, '--jq', '.[0].commit.author.date']);
         if (commits) {
             const hours = (Date.now() - Date.parse(commits)) / 36e5;
             repos[name].lastCommitHours = hours;
         }
-    } catch { /* ignore */ }
+    } catch { /* leave unknown; isQuietRepo fails closed */ }
 }
 
 const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap;
