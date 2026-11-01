@@ -155,11 +155,11 @@ Recent Imp failures ended with exit-only comments: Fire #345 (09:44Z: 61 turns /
 [PR #191](https://github.com/nitsuah/.github/pull/191) implemented bounded diagnostic summaries and merged as `4c8f1a7a2df7d1eeb6b7f35e921de8c20f744c68`. Exact-head Imp kit [41330008525](https://github.com/nitsuah/.github/actions/runs/41330008525) passed 239/239 tests; Analyze passed, CodeQL/CodeRabbit were neutral, and no unresolved review threads remained.
 
 Current behavior:
-- `imps/imp.mjs` extracts and sanitizes a bounded test/lint diagnostic from full output before tail truncation and records it in the local ledger.
-- `imps/dispatch.mjs` posts the structured diagnostic summary on gate-fail comments when available, marked as untrusted command output; otherwise it says `diagnostic summary unavailable` and retains the run ID.
-- Full raw tails remain opt-in via `IMPS_COMMENT_OUTPUT=1`; do not enable them just to make an exit-only comment look more complete.
+- `imps/imp.mjs` records redacted, bounded `testTail`/`lintTail` values in the local run ledger when captured.
+- `imps/dispatch.mjs` posts gate reasons by default and includes those redacted output tails only when `IMPS_COMMENT_OUTPUT=1`.
+- If a tail was not captured or is intentionally suppressed, inspect the local ledger and classify the failure from the available gate evidence. Do not treat an exit-only comment as proof of a source defect or requeue an unchanged failure.
 
-If a current failure still has no diagnostic summary, inspect the local ledger and classify it as runner/diagnostic failure unless a concrete source/test assertion is available. Do not requeue unchanged failures.
+If a current failure still has no usable diagnostic, inspect the local ledger and classify it as a runner/diagnostic failure unless a concrete source/test assertion is available. Do not requeue unchanged failures.
 
 Latest lifecycle update (2026-11-01 19:52Z): Vigil #415 is complete via [PR #421](https://github.com/nitsuah/vigil/pull/421), merged as `72a5daff0d162b77df51a6b7c016ec244f00a358`; exact-head CI `41339932468`, E2E `41339932370`, and Docker Smoke `41339932397` passed. Vigil #416 is complete via [PR #422](https://github.com/nitsuah/vigil/pull/422), merged as `518ff4a747f8a7604729beb9f00c7b18f2778867`; exact-head CI `41341597432`, E2E `41341597451`, and Docker Smoke `41341597461` passed. Both read-only tri-state children are closed. Parent #309 remains open because #369 is still owner-gated; no repository settings were mutated.
 
