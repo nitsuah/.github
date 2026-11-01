@@ -8,7 +8,7 @@ import { join } from 'node:path';
 const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
 const previousHome = process.env.IMPS_HOME;
 process.env.IMPS_HOME = tempHome;
-const { runClaude } = await import('./runner.mjs');
+const { runClaude, resolveMaxTurns } = await import('./runner.mjs');
 
 after(() => {
     if (previousHome === undefined) delete process.env.IMPS_HOME;
@@ -89,6 +89,13 @@ test('default-off launch preserves -p then prompt argv order', { skip: process.p
     assert.equal(launch.args[0], '-p');
     assert.equal(launch.args[1], prompt);
     assert.equal(launch.prompt, prompt);
+});
+
+test('maxTurns config rejects booleans and preserves numeric strings', () => {
+    const fallback = resolveMaxTurns({});
+    assert.equal(resolveMaxTurns({ maxTurns: true }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: false }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: '12' }), 12);
 });
 
 test('maxTurns 0 disables the cap and still records tool turns', { skip: process.platform === 'win32' }, async () => {
