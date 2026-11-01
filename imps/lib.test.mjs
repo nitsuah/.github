@@ -1287,6 +1287,11 @@ test('extractFailureDiagnostic strips ANSI and does not guess assertion causes',
     assert.equal(lint.kind, 'lint');
     assert.equal(lint.rule, 'no-unused-vars');
 
+    assert.equal(lint.message, undefined, 'raw ESLint message text is not retained in the public diagnostic');
+    const longToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJlMTIzNDU2Nzg5MA';
+    const long = extractFailureDiagnostic('not ok 3 - ' + 'x'.repeat(110) + longToken, 'run-long');
+    assert.doesNotMatch(long.test, /eyJ|alice/, 'redaction occurs before the test-name cap');
+
     const unknown = extractFailureDiagnostic('exit code 1', 'run-unknown');
     assert.equal(unknown.kind, 'unknown');
     assert.equal(unknown.note, 'diagnostic summary unavailable');
@@ -1330,12 +1335,12 @@ test('sanitizeDiagnostic redacts JWTs and normalizes private absolute paths', ()
         message: 'failed at /tmp/private/bar.test.js',
     }, '/home/alice/code/repo');
     assert.equal(unix.file, 'src/foo.js');
-    assert.match(unix.message, /\[external\]\/bar\.test\.js/);
+    assert.match(unix.message, /<path>/);
     assert.doesNotMatch(JSON.stringify(unix), /alice|eyJ/);
 
     const outside = sanitizeDiagnostic({ file: '/home/alice/private/file.js' }, '/home/alice/code/repo');
-    assert.equal(outside.file, '[external]/file.js');
-    assert.doesNotMatch(outside.file, /alice|private/);
+    assert.equal(outside.file, '<path>');
+    assert.doesNotMatch(outside.file, /alice|private|file\.js/);
 
     const windows = sanitizeDiagnostic({
         file: 'C:\\Users\\alice\\code\\repo\\src\\foo.js',

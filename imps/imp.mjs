@@ -177,7 +177,7 @@ function runGate(id) {
             const combinedOutput = [p.stdout || '', p.stderr || ''].join('\n');
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
             // Extract structured diagnostic from full output before tail truncation
-            const rawDiag = extractFailureDiagnostic(combinedOutput, id);
+            const rawDiag = extractFailureDiagnostic(combinedOutput, id, r.worktree);
             const diag = sanitizeDiagnostic(rawDiag, r.worktree);
             if (!ends[key]) ends[key] = {};
             ends[key].diagnostic = diag;

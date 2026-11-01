@@ -1137,8 +1137,9 @@ export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
 // ── failure diagnostic extractor ────────────────────────────────────────────
 // Recognizes known test/lint output shapes and returns a bounded summary.
 // Never invents a cause; unknown output is explicitly unavailable.
-export function extractFailureDiagnostic(output = '', runId = '') {
-    const plain = String(output || '')
+export function extractFailureDiagnostic(output = '', runId = '', worktree = '') {
+    const safeOutput = sanitizeDiagnostic({ output: String(output || '') }, worktree).output;
+    const plain = String(safeOutput || '')
         .replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '')
         .replace(/\r/g, '');
     if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
@@ -1163,14 +1164,14 @@ export function extractFailureDiagnostic(output = '', runId = '') {
     const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
     if (eslintMatch) {
         const [, severity, message, rule] = eslintMatch;
-        return { kind: 'lint', runId, rule: rule.slice(0, 60), severity: severity.slice(0, 10), message: message.slice(0, 120) };
+        return { kind: 'lint', runId, rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
     }
 
     // ESLint compact: "path/file.js:1:1 error 'x' is defined but never used no-unused-vars".
     const eslintCompact = plain.match(/^(.+?):\d+:\d+\s+(error|warning)\s+(.+?)\s+(\S+)$/m);
     if (eslintCompact) {
         const [, file, severity, message, rule] = eslintCompact;
-        return { kind: 'lint', runId, file: file.slice(0, 80), rule: rule.slice(0, 60), severity: severity.slice(0, 10), message: message.slice(0, 120) };
+        return { kind: 'lint', runId, file: file.slice(0, 80), rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
     }
 
     const prettierMatch = plain.match(/(Insert|Delete|Replace)\s+[•·→]/);
@@ -1202,7 +1203,7 @@ function normalizeDiagnosticPath(value, worktree) {
     }
 
     const fileName = windowsAbsolute ? win32.basename(value) : basename(value);
-    return fileName ? '[external]/' + fileName : '[external]';
+    return '<path>';
 }
 
 // Redact secret-like strings and normalize absolute paths before any issue comment.
@@ -1240,7 +1241,6 @@ export function formatFailureDiagnostic(diag) {
         if (diag.severity) parts.push(diagnosticAtom(diag.severity));
         if (diag.tool) parts.push('tool="' + diagnosticAtom(diag.tool) + '"');
         if (diag.file) parts.push('file="' + diagnosticAtom(diag.file) + '"');
-        if (diag.message) parts.push('msg="' + diagnosticAtom(diag.message) + '"');
         if (diag.issue) parts.push('issue="' + diagnosticAtom(diag.issue) + '"');
         return parts.join(' ') || 'lint failure';
     }
