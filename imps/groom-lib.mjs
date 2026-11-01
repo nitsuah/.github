@@ -157,12 +157,9 @@ export function lintBrief(briefText, maxLines, expected = {}) {
             /(^|\/)\.env(?:\.|$)/i,
             /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i,
             /(^|\/)(?:id_rsa|id_ed25519)(?:\.|$)/i,
-            /package-lock\.json$/i,
-            /yarn\.lock$/i,
-            /pnpm-lock\.yaml$/i,
-            /bun\.lockb?$/i,
+            /(^|\/)(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
         ];
-        for (const a of String(meta.allow).split(',').map((s) => s.trim())) {
+        for (const a of String(meta.allow).split(',').map((s) => s.trim().replace(/\\/g, '/').replace(/\/$/, ''))) {
             if (deny.some((re) => re.test(a))) errors.push(`denied path in allow: ${a}`);
         }
     }
