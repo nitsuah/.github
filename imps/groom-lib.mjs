@@ -280,7 +280,10 @@ export async function runGroom({
                     maxLines, allow: allowGuess,
                 });
 
-                const lint = lintBrief(briefText, maxLines);
+                const lint = lintBrief(briefText, maxLines, {
+                    repo: `${owner}/${issue.repo}`,
+                    issue: issue.number,
+                });
                 if (!lint.ok) {
                     results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}`);
                     results.skipped++;
