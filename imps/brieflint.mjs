@@ -33,7 +33,7 @@ export function lintBrief(text, { exists } = {}) {
     const max = Number(meta.maxLines);
     if (meta.maxLines && !(max >= 20)) problems.push(`maxLines ${meta.maxLines} is not a number >= 20`);
     if (/^```/m.test(body)) problems.push('nested ``` fence in the body (use ~~~)');
-    const posted = briefFromComments([{ body: `${BRIEF_MARK}\n\`\`\`markdown\n${text.trim()}\n\`\`\`` }]);
+    const posted = briefFromComments([{ author: { login: 'nitsuah' }, body: `${BRIEF_MARK}\n\`\`\`markdown\n${text.trim()}\n\`\`\`` }]);
     if (!posted || parseBrief(posted).body.trim() !== body.trim()) problems.push('briefFromComments does not return the whole brief');
     if (!meta.depends && /depends on|has not merged|not merged yet|must be merged|after #\d+ (?:is )?merged|child \d of \d/i.test(body)) {
         warnings.push('the body mentions a dependency but the front matter has no `depends:` line (e.g. `depends: #318`); without it the dispatcher can run this issue before its dependency has merged');
