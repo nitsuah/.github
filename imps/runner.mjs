@@ -71,7 +71,7 @@ export function resolveNoEditTurns(config = {}, env = process.env) {
 }
 // How many tool-call turns an imp may use: config, then defaults; 0 disables.
 export function resolveMaxTurns(config = {}) {
-    const set = (v) => (v == null || String(v).trim() === '' ? undefined : v);
+    const set = (v) => (v == null || typeof v === 'boolean' || String(v).trim() === '' ? undefined : v);
     const n = Number(set(config.maxTurns) ?? DEFAULTS.maxTurns);
     return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.maxTurns;
 }
