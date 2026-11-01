@@ -1,7 +1,8 @@
 // Pure groomer helpers: turn untriaged issues into brief drafts.
 // File I/O is limited to config. Tested in groom-lib.test.mjs.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments } from './lib.mjs';
@@ -198,10 +199,23 @@ export function lintBrief(briefText, maxLines, expected = {}) {
 }
 
 /** Check if an issue is already groomed (has draft or brief). */
-export function alreadyGroomed(comments = []) {
-    const hasDraft = comments.some((c) => (c.body || '').includes(DRAFT_MARK));
+export function hashText(text) {
+    return createHash('sha256').update(String(text || '').trim()).digest('hex').slice(0, 16);
+}
+
+export function alreadyGroomed(comments = [], hashes = {}) {
     const hasBrief = !!briefFromComments(comments);
-    return hasDraft || hasBrief;
+    if (hasBrief) return true;
+    const draftBodies = comments.map((c) => c.body || '').filter((body) => body.includes(DRAFT_MARK));
+    if (!draftBodies.length) return false;
+    if (hashes.candidateHash || hashes.briefHash) {
+        // Legacy drafts without hashes remain a hard duplicate guard.
+        if (draftBodies.some((body) => !body.includes('<!-- groom-candidate-hash:') && !body.includes('<!-- groom-brief-hash:'))) return true;
+        if (hashes.candidateHash && draftBodies.some((body) => body.includes('<!-- groom-candidate-hash:' + hashes.candidateHash + ' -->'))) return true;
+        if (hashes.briefHash && draftBodies.some((body) => body.includes('<!-- groom-brief-hash:' + hashes.briefHash + ' -->'))) return true;
+        return false;
+    }
+    return true;
 }
 
 /** Main groomer logic: find candidate issues, draft briefs, post as drafts. */
@@ -217,10 +231,15 @@ export async function runGroom({
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
 } = {}) {
-    const results = { candidates: 0, drafted: 0, skipped: 0, errors: [] };
+    const results = { candidates: 0, drafted: 0, skipped: 0, skipReasons: [], repoSkips: [], errors: [] };
+    const skip = (issue, reason) => {
+        results.skipped++;
+        results.skipReasons.push({ repo: issue.repo, issue: issue.number, reason });
+    };
 
-    // Track daily count
-    const filedPath = join(process.env.IMPS_HOME || join(homedir(), '.imps'), 'groom-filed.json');
+    // Track daily count and persistent issue/brief hashes.
+    const filedDir = process.env.IMPS_HOME || join(homedir(), '.imps');
+    const filedPath = join(filedDir, 'groom-filed.json');
     const day = new Date().toISOString().slice(0, 10);
     const filedState = (() => {
         try {
@@ -233,23 +252,24 @@ export async function runGroom({
 
     const remaining = Math.max(0, dailyCap - filedState.count);
     if (remaining <= 0) {
-        results.errors.push(`daily cap reached (${dailyCap})`);
+        results.errors.push('daily cap reached (' + dailyCap + ')');
         return results;
     }
 
     for (const repo of Object.keys(repos)) {
         if (results.drafted >= remaining) break;
-
         const repoInfo = repos[repo];
-        if (!isQuietRepo(repoInfo, quietHours)) continue;
+        if (!isQuietRepo(repoInfo, quietHours)) {
+            results.repoSkips.push({ repo, reason: 'repo is not quiet under the configured PR/commit window' });
+            continue;
+        }
 
-        // Search for untriaged issues in this repo
         let issues = [];
         try {
             issues = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
                 '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt',
-                '--', `repo:${owner}/${repo} -label:imp:*`
+                '--', 'repo:' + owner + '/' + repo + ' -label:imp:*',
             ]).map((i) => ({
                 repo: i.repository.name,
                 number: i.number,
@@ -259,87 +279,89 @@ export async function runGroom({
                 createdAt: i.createdAt,
             }));
         } catch (e) {
-            results.errors.push(`search failed for ${repo}: ${e.message}`);
+            results.errors.push('search failed for ' + repo + ': ' + e.message);
             continue;
         }
 
         for (const issue of issues) {
             if (results.drafted >= remaining) break;
             results.candidates++;
-
-            // Skip if already has imp label or is groomed
-            if (hasImpLabel(issue.labels)) { results.skipped++; continue; }
-            if (!isPrShaped(issue.labels)) { results.skipped++; continue; }
+            if (hasImpLabel(issue.labels)) { skip(issue, 'already has an imp:* label'); continue; }
+            if (!isPrShaped(issue.labels)) { skip(issue, 'not a bug/small enhancement or a security/human gate'); continue; }
 
             let comments;
             try {
-                comments = ghJson(['issue', 'view', String(issue.number), '-R', `${owner}/${issue.repo}`, '--json', 'comments']).comments;
+                comments = ghJson(['issue', 'view', String(issue.number), '-R', owner + '/' + issue.repo, '--json', 'comments']).comments;
                 if (!Array.isArray(comments)) throw new Error('issue comments response is not an array');
             } catch (error) {
-                results.errors.push(`issue eligibility lookup failed for ${issue.repo}#${issue.number}: ${error.message}`);
-                results.skipped++;
+                results.errors.push('issue eligibility lookup failed for ' + issue.repo + '#' + issue.number + ': ' + error.message);
+                skip(issue, 'issue comment lookup failed; fail closed');
                 continue;
             }
-            if (alreadyGroomed(comments)) { results.skipped++; continue; }
+            if (briefFromComments(comments)) { skip(issue, 'already has a canonical imp-brief'); continue; }
 
-            // Check for open PR. A failed lookup must never be treated as "no PR".
+            // A failed PR lookup must never be treated as no PR.
             try {
-                if (await hasOpenPr(ghJson, owner, issue.repo, issue.number)) { results.skipped++; continue; }
+                if (await hasOpenPr(ghJson, owner, issue.repo, issue.number)) { skip(issue, 'an open PR already references this issue'); continue; }
             } catch (error) {
                 results.errors.push(error.message);
-                results.skipped++;
+                skip(issue, 'open-PR lookup failed; fail closed');
                 continue;
             }
 
-            const dedupeKey = `groom:${issue.repo}#${issue.number}`;
-            if (filedState.keys.includes(dedupeKey)) { results.skipped++; continue; }
-
-            // Fetch context and draft
             try {
                 const context = await fetchRepoContext(gh, owner, issue.repo);
-                const allowGuess = ''; // no generic directory fallback; use evidence-backed paths only
-                const briefText = await draftBrief({
-                    router, owner, repo: issue.repo, issue: issue.number,
-                    title: issue.title, body: issue.body, context,
-                    maxLines, allow: allowGuess,
-                });
-
-                const lint = lintBrief(briefText, maxLines, {
-                    repo: `${owner}/${issue.repo}`,
-                    issue: issue.number,
-                });
-                if (!lint.ok) {
-                    results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}`);
-                    results.skipped++;
+                const candidateHash = hashText(issue.title + '\n' + issue.body + '\n' + JSON.stringify(context));
+                const candidateKey = 'groom-candidate:' + issue.repo + '#' + issue.number + ':' + candidateHash;
+                const legacyKey = 'groom:' + issue.repo + '#' + issue.number;
+                if (filedState.keys.includes(legacyKey) || filedState.keys.includes(candidateKey)) {
+                    skip(issue, 'candidate content hash was already filed');
+                    continue;
+                }
+                if (alreadyGroomed(comments, { candidateHash })) {
+                    skip(issue, 'an existing draft has the same candidate hash (or is a legacy draft)');
                     continue;
                 }
 
-                // Post as draft
-                if (!dryRun) {
-                    // Ensure label exists
-                    gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
-                    const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
-                    gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
-                    // Add label
-                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);
-
-                    // Track
-                    filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
-                    filedState.count++;
+                const briefText = await draftBrief({
+                    router, owner, repo: issue.repo, issue: issue.number,
+                    title: issue.title, body: issue.body, context,
+                    maxLines, allow: '',
+                });
+                const briefHash = hashText(briefText);
+                const briefKey = 'groom-brief:' + issue.repo + '#' + issue.number + ':' + briefHash;
+                if (filedState.keys.includes(briefKey) || alreadyGroomed(comments, { briefHash })) {
+                    skip(issue, 'identical brief hash was already drafted');
+                    continue;
                 }
 
+                const lint = lintBrief(briefText, maxLines, { repo: owner + '/' + issue.repo, issue: issue.number });
+                if (!lint.ok) {
+                    const reason = 'brief lint failed: ' + lint.errors.join(', ');
+                    results.errors.push('lint failed for ' + issue.repo + '#' + issue.number + ': ' + lint.errors.join(', '));
+                    skip(issue, reason);
+                    continue;
+                }
+
+                if (!dryRun) {
+                    gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', owner + '/' + issue.repo, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
+                    const commentBody = DRAFT_MARK + '\n<!-- groom-candidate-hash:' + candidateHash + ' -->\n<!-- groom-brief-hash:' + briefHash + ' -->\n```markdown\n' + briefText + '\n```';
+                    gh(['issue', 'comment', String(issue.number), '-R', owner + '/' + issue.repo, '--body', commentBody]);
+                    gh(['issue', 'edit', String(issue.number), '-R', owner + '/' + issue.repo, '--add-label', NEEDS_BRIEF_LABEL]);
+                    filedState.keys.push(candidateKey, briefKey);
+                    filedState.count++;
+                }
                 results.drafted++;
             } catch (e) {
-                results.errors.push(`draft failed for ${issue.repo}#${issue.number}: ${e.message}`);
-                results.skipped++;
+                results.errors.push('draft failed for ' + issue.repo + '#' + issue.number + ': ' + e.message);
+                skip(issue, 'draft/post failed; inspect error log');
             }
         }
     }
 
-    // Persist state
     if (!dryRun && results.drafted > 0) {
+        mkdirSync(filedDir, { recursive: true });
         writeFileSync(filedPath, JSON.stringify(filedState, null, 2) + '\n');
     }
-
     return results;
 }
