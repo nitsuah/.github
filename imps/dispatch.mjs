@@ -666,7 +666,8 @@ for (const i of pickable()) {
         log({ event: 'skip-epic', repo: i.repo, number: i.number });
         continue;
     }
-    const brief = briefFromComments(comments);
+    const briefAuthors = (process.env.IMPS_BRIEF_AUTHORS || 'nitsuah').split(',').map((name) => name.trim()).filter(Boolean);
+    const brief = briefFromComments(comments, { allowedAuthors: briefAuthors });
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
         if (!hasMark(comments, NO_BRIEF_MARK)) {
