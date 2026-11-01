@@ -122,7 +122,7 @@ test('alreadyGroomed detects draft marker and brief', () => {
     assert.equal(alreadyGroomed(comments2), true);
 });
 
-test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes prior issue keys', async () => {
+test('runGroom fails closed on issue/PR eligibility lookup errors', async () => {
     const { runGroom } = await import('./groom-lib.mjs');
     const issue = { repository: { name: 'demo' }, number: 7, title: 'Example', body: '', labels: [{ name: 'bug' }] };
     const baseArgs = {
@@ -136,7 +136,7 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
     };
     const commentsFailure = await runGroom({
         ...baseArgs,
-        ghJson: async (args) => {
+        ghJson: (args) => {
             if (args[0] === 'search' && args[1] === 'issues') return [issue];
             if (args[0] === 'issue' && args[1] === 'view') throw new Error('lookup unavailable');
             throw new Error(`unexpected gh call: ${args.join(' ')}`);
@@ -147,7 +147,7 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
 
     const prLookupFailure = await runGroom({
         ...baseArgs,
-        ghJson: async (args) => {
+        ghJson: (args) => {
             if (args[0] === 'search' && args[1] === 'issues') return [issue];
             if (args[0] === 'issue') return { comments: [] };
             if (args[0] === 'search' && args[1] === 'prs') throw new Error('PR lookup unavailable');
