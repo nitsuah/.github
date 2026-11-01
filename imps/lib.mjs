@@ -1226,8 +1226,8 @@ function diagnosticAtom(value) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/@/g, '&#64;')
         .replace(/[\\\x60*_{}\[\]()#+.!|~]/g, '\\$&')
+        .replace(/@/g, '&#64;')
         .slice(0, 120);
 }
 
