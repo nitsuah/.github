@@ -16,13 +16,13 @@ after(() => {
     rmSync(tempHome, { recursive: true, force: true });
 });
 
-function fakeCli() {
+function fakeCli(toolTurns = 0) {
     const script = join(tempHome, 'fake-claude-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.mjs');
     const source = [
         '#!/usr/bin/env node',
         "import { createInterface } from 'node:readline';",
         'const args = process.argv.slice(2);',
-        'const toolTurns = Number(process.env.FAKE_CLAUDE_TOOL_TURNS || 0);',
+        'const toolTurns = ' + toolTurns + ';',
         "const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n');",
         "const finish = (result) => {",
         "  const event = { type: 'result', subtype: 'success', result, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } };",
@@ -58,10 +58,8 @@ function fakeCli() {
 async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0 }) {
     const previousGuard = process.env.IMPS_REPEAT_FAILURE_GUARD;
     const previousBin = process.env.IMPS_CLAUDE_BIN;
-    const previousTurns = process.env.FAKE_CLAUDE_TOOL_TURNS;
-    process.env.FAKE_CLAUDE_TOOL_TURNS = String(toolTurns);
     process.env.IMPS_REPEAT_FAILURE_GUARD = guard ? '1' : '0';
-    process.env.IMPS_CLAUDE_BIN = fakeCli();
+    process.env.IMPS_CLAUDE_BIN = fakeCli(toolTurns);
     try {
         return await runClaude({
             cwd: tempHome,
@@ -80,8 +78,6 @@ async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0 })
         else process.env.IMPS_REPEAT_FAILURE_GUARD = previousGuard;
         if (previousBin === undefined) delete process.env.IMPS_CLAUDE_BIN;
         else process.env.IMPS_CLAUDE_BIN = previousBin;
-        if (previousTurns === undefined) delete process.env.FAKE_CLAUDE_TOOL_TURNS;
-        else process.env.FAKE_CLAUDE_TOOL_TURNS = previousTurns;
     }
 }
 
