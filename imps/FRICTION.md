@@ -139,3 +139,28 @@ For future journey briefs, scope responsive duplicate components to the visible/
 ### Keep Imp allowlists inside gate-denied paths (2026-10-31)
 
 Darkmoon #496's refreshed brief included `.github/workflows/ci.yml` in its allowlist even though the Imp gate denies workflow paths. That made the issue's apparent `imp:ready` brief non-dispatchable. The brief was corrected to allow only `e2e/movement.spec.ts`; workflow wiring remains a separate parent-level manual acceptance gate. Before promoting an issue to `imp:ready`, check every allowlisted path against the runner's deny paths. If a required workflow/secret/owner-only edit is denied, keep it out of the Imp brief and explicitly track the hand edit at the parent rather than widening the allowlist.
+### Docker command / runner capability mismatch (2026-11-01)
+
+Fire #345's Docker-based attempt ended after 61 turns / 34 tool errors with test exit 1 and no first raw diagnostic. VHS #114's Docker-based lint ended with exit 128 and no raw diagnostic. Motor-pool #136 had two lint-exit-2 attempts in the Playwright image. ATS-Fill #206 is a pure Node task and was rebriefed to local Node/npm. This maintenance runtime has Node 22.16/npm 10.9 but no Docker executable.
+
+The Imp runner's exact failures are unknown: command-not-found, a test assertion, or a Docker bind-mount `.git` path error are all possible; no source defect is established from the exit-only summaries. The bind-mount hypothesis is especially relevant when `git diff --check` runs inside Docker and the worktree's `.git` file points outside the mounted path.
+
+For future briefs, use local Node/npm for pure Node tests/builds; use Docker only when a browser/Compose runtime is actually required and the runner's Docker capability is verified. Keep `git diff --check` in the worktree, capture the first complete stdout/stderr, and do not requeue unchanged failures.
+
+
+### Public failure-comment diagnostic visibility (2026-11-01)
+
+Recent Imp failures again ended with exit-only issue comments: Fire #345 (09:44Z: 61 turns / 29 tool errors, test exit 1), ATS-Fill #208 (10:34Z: 61 turns / 39 tool errors, lint exit 1), Vigil #415 (09:44Z: 61 turns / 21 tool errors, test exit 1), and Vigil #416 (10:05Z: 61 turns / 4 tool errors, lint exit 1). These summaries do not establish a source defect; no first assertion or raw diagnostic was included in the public comments.
+
+Verified control-plane behavior: `imps/imp.mjs` stores redacted `testTail` / `lintTail` in the local run ledger when captured, while `imps/dispatch.mjs` posts those tails in issue comments only when `IMPS_COMMENT_OUTPUT=1`. Therefore an exit-only comment can mean output was not captured **or** was intentionally suppressed; do not infer which without the ledger. Full output remains opt-in because arbitrary test logs may contain secrets or untrusted instructions.
+
+Follow-up [#189](https://github.com/nitsuah/.github/issues/189) is implemented in [PR #191](https://github.com/nitsuah/.github/pull/191), exact head `755aa830fb8d84fdf4371c0229094354e6c4b3df`; Imp kit CI passed 239/239, CodeQL and Analyze passed, and no review threads remain. It is still awaiting the required fresh maintainer review with write access, so it is not merged. Full tails remain opt-in. Until merge, classify exit-only failures as diagnostic/runner failures unless a first source/test diagnostic is available; do not requeue unchanged.
+
+
+### Readiness and security-gate recovery (2026-11-01)
+
+- ATS-Fill #187 was rebriefed after `imp_2611011729_187` reported test/lint exit 1 without a first diagnostic. The replacement keeps the exact three-file/80-line scope, uses the extension build plus the focused responsive E2E, explicitly lints the spec, and requires stop-on-first-diagnostic behavior. It remains `imp:ready`; no active claim/PR was found.
+- Fire #168 was previously noted as visual-owner-gated in the 2026-10-31 snapshot. Current source has a bounded CSS layout issue, and the recovery brief now uses DOM geometry assertions at 1440×900 and 390×844 in the existing E2E UI suite; it does not create or refresh screenshot baselines. The stale `imp:needs-human` label was replaced with `imp:ready` after checking no active claim/PR.
+- Vigil #415/#416 remain `imp:ready` with diagnostic-first briefs and no active claim/PR, but the latest attempts still returned exit-only test/lint failures (415: 61 turns/9 tool errors; 416: 54 turns/13 tool errors). No source defect is established. Keep them ready for a fresh attempt only after the shared diagnostic-summary PR #191 is reviewed/merged; do not retry unchanged.
+- Fire #279's static audit found the default single-user `FIRE_API_KEY` gate, the state-validated Drive OAuth callback exception, and the restore-folder ownership check. The specific gap is route-level auth regression coverage; test-only [PR #426](https://github.com/nitsuah/fire/pull/426) is open at `fdfe9b070d0fb4bcfa4e58d91129bfbb684c0d10`, with CI queued and Netlify pending. Keep #279 human-led until exact-head tests and the route matrix are reviewed; no live Drive credentials were used.
+- For visual-layout tasks, prefer stable DOM geometry checks in an existing browser suite over screenshot-baseline changes when those can prove the defect. Do not infer visual approval from a green test or refresh baselines without explicit acceptance.
