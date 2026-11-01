@@ -63,8 +63,9 @@ export async function hasOpenPr(ghJson, owner, repo, issueNumber) {
             '--', `repo:${owner}/${repo} is:pr is:open ${issueNumber}`
         ]);
         return prs.some((p) => closesIssue(p.body, issueNumber, `${owner}/${repo}`));
-    } catch {
-        return false;
+    } catch (error) {
+        // Unknown PR state is not proof that no PR exists: fail closed.
+        throw new Error(`open-PR lookup failed for ${owner}/${repo}#${issueNumber}: ${error.message}`);
     }
 }
 
@@ -233,11 +234,28 @@ export async function runGroom({
             if (hasImpLabel(issue.labels)) { results.skipped++; continue; }
             if (!isPrShaped(issue.labels)) { results.skipped++; continue; }
 
-            const comments = ghJson(['issue', 'view', String(issue.number), '-R', `${owner}/${issue.repo}`, '--json', 'comments']).comments;
+            let comments;
+            try {
+                comments = ghJson(['issue', 'view', String(issue.number), '-R', `${owner}/${issue.repo}`, '--json', 'comments']).comments;
+                if (!Array.isArray(comments)) throw new Error('issue comments response is not an array');
+            } catch (error) {
+                results.errors.push(`issue eligibility lookup failed for ${issue.repo}#${issue.number}: ${error.message}`);
+                results.skipped++;
+                continue;
+            }
             if (alreadyGroomed(comments)) { results.skipped++; continue; }
 
-            // Check for open PR
-            if (await hasOpenPr(ghJson, owner, issue.repo, issue.number)) { results.skipped++; continue; }
+            // Check for open PR. A failed lookup must never be treated as "no PR".
+            try {
+                if (await hasOpenPr(ghJson, owner, issue.repo, issue.number)) { results.skipped++; continue; }
+            } catch (error) {
+                results.errors.push(error.message);
+                results.skipped++;
+                continue;
+            }
+
+            const dedupeKey = `groom:${issue.repo}#${issue.number}`;
+            if (filedState.keys.includes(dedupeKey)) { results.skipped++; continue; }
 
             // Fetch context and draft
             try {
