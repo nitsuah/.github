@@ -6,6 +6,7 @@ import {
     loadGroomConfig,
     groomEnabled,
     redactSecrets,
+    sanitizePromptData,
     draftBrief,
     hasOpenPr,
     labelNames,
