@@ -94,14 +94,14 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| Turn cap per model run | imp 40, fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
+| Turn cap per model run | imp 60 (0 disables), fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
 | Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
 | Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
 | Imp runs per 24 h / `--daily-cap` | 100 | `loopBudget` |
 | Repo cooldown | 12 h (`defaults.cooldownMs`) after two straight gate failures in a repo | `loopBudget` |
 | Attempts per issue | 2 failed/killed runs without a PR (since the latest brief), then `imp:needs-human` + one comment | `defaults.maxIssueFailures`, `issueFailures` |
-| No-edit fail-fast | 12 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
+| No-edit fail-fast | 20 tool calls with no Edit/Write, run ends `no-edit-timeout` | `defaults.noEditTurns`, `config.json` `noEditTurns`, `IMPS_NO_EDIT_TURNS` |
 | Fix rounds per PR | 2, then `imp:needs-human` | `fix.mjs --max-rounds` |
 | Auto-merge earned trust | 3 clean merges/repo (`max(ledger, GitHub seed)`) | `defaults.autoMergeTrust`, `checks.mjs` |
 | Label-watch poll | every 5 min (default on) | `defaults.labelWatchDefault`, `IMPS_LABEL_WATCH=0` |
@@ -253,7 +253,7 @@ First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority r
 What the kit does about it:
 
 - **Context trim.** Workers start with `--disable-slash-commands --no-session-persistence --tools <only what they use>`. A trivial prompt went from 14.5k to 7.7k input tokens (-47%) with the same answer. `IMPS_NO_TRIM=1` turns it off. Compare `metrics.init` (tool / slash-command / skill counts) in the ledger across versions.
-- **Fail fast.** An imp that makes `noEditTurns` tool calls (default 12, configurable) with no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is `defaults.noEditTurns`, overridable in `config.json` or `IMPS_NO_EDIT_TURNS`, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
+- **Fail fast.** An imp that makes `noEditTurns` tool calls (default 20, configurable) with no Edit/Write is stopped as `no-edit-timeout` (vhs#77 burned 41 calls exploring twice; the limit is `defaults.noEditTurns`, overridable in `config.json` or `IMPS_NO_EDIT_TURNS`, and is recorded as `metrics.noEditTurns`). `metrics.firstEditTurn` records when the first edit landed.
 - **One-shot reviews.** `review.mjs` defaults to `--mode chat`: one `/v1/chat/completions` call with the diff, brief and issue in the prompt (about 5k input) instead of a read-only agent session (about 500k). It falls back to the agent session if the answer is unusable. `review.mode` in the ledger tells them apart.
 - **Honest metrics.** Killed runs now record `turns` from tool calls and `unmetered: true` instead of zeros.
 
