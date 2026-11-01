@@ -130,7 +130,7 @@ test('redactSecrets removes common tokens and credential assignments', () => {
         'NINEROUTER_API_KEY=sk-ant-123456789012345678901234567890',
         'Authorization: Bearer eyJabcdefghijk.abcdefghijk.abcdefghijk',
         'url=https://user:password@example.test/path',
-    ].join('\\n');
+    ].join('\n');
     const clean = redactSecrets(raw);
     assert.equal(clean.includes('ghp_123456789012345678901234567890'), false);
     assert.equal(clean.includes('sk-ant-123456789012345678901234567890'), false);
@@ -145,7 +145,7 @@ test('draftBrief isolates untrusted source data and redacts before sending it', 
         captured = JSON.parse(options.body);
         return {
             ok: true,
-            json: async () => ({ content: [{ text: ['---', 'repo: owner/repo', 'issue: 123', 'test: npm test', 'maxLines: 80', 'allow: src/', '---', 'body'].join('\\n') }] }),
+            json: async () => ({ content: [{ text: ['---', 'repo: owner/repo', 'issue: 123', 'test: npm test', 'maxLines: 80', 'allow: src/', '---', 'body'].join('\n') }] }),
         };
     };
     try {
