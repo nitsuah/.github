@@ -1342,6 +1342,9 @@ test('sanitizeDiagnostic redacts JWTs and normalizes private absolute paths', ()
     assert.equal(outside.file, '<path>');
     assert.doesNotMatch(outside.file, /alice|private|file\.js/);
 
+    const relative = sanitizeDiagnostic({ file: 'src/foo.test.ts' }, '/home/alice/code/repo');
+    assert.equal(relative.file, 'src/foo.test.ts', 'repository-relative paths must not be treated as absolute');
+
     const windows = sanitizeDiagnostic({
         file: 'C:\\Users\\alice\\code\\repo\\src\\foo.js',
     }, 'C:\\Users\\alice\\code\\repo');
