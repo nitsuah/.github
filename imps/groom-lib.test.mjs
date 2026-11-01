@@ -138,8 +138,8 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
         ...baseArgs,
         ghJson: async (args) => {
             if (args[0] === 'search' && args[1] === 'issues') return [issue];
-            if (args[0] === 'issue') throw new Error('lookup unavailable');
-            throw new Error('unexpected gh call');
+            if (args[0] === 'issue' && args[1] === 'view') throw new Error('lookup unavailable');
+            throw new Error(`unexpected gh call: ${args.join(' ')}`);
         },
     });
     assert.equal(commentsFailure.drafted, 0);
