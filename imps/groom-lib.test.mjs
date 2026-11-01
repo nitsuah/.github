@@ -5,6 +5,7 @@ import {
     parseGroomConfig,
     loadGroomConfig,
     groomEnabled,
+    groomWritesApproved,
     redactSecrets,
     sanitizePromptData,
     draftBrief,
@@ -29,6 +30,16 @@ test('parseGroomConfig parses valid JSON', () => {
 test('parseGroomConfig returns empty object for invalid JSON', () => {
     const cfg = parseGroomConfig('not json');
     assert.deepEqual(cfg, {});
+});
+
+
+test('groomWritesApproved requires a separate explicit write approval', () => {
+    assert.equal(groomWritesApproved({}, {}), false);
+    assert.equal(groomWritesApproved({ groomWriteApproval: true }, {}), true);
+    assert.equal(groomWritesApproved({}, { IMPS_APPROVE_DRAFT_WRITES: '1' }), true);
+    assert.equal(groomWritesApproved({}, { IMPS_APPROVE_DRAFT_WRITES: 'true' }), true);
+    assert.equal(groomWritesApproved({ groomWriteApproval: true }, { IMPS_APPROVE_DRAFT_WRITES: '0' }), false);
+    assert.equal(groomWritesApproved({ groomWriteApproval: true }, { IMPS_APPROVE_DRAFT_WRITES: 'false' }), false);
 });
 
 test('groomEnabled is opt-in and honors explicit enable/disable overrides', () => {

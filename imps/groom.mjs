@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, resolveRouter } from './lib.mjs';
-import { runGroom, loadGroomConfig, groomEnabled } from './groom-lib.mjs';
+import { runGroom, loadGroomConfig, groomEnabled, groomWritesApproved } from './groom-lib.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 mkdirSync(HOME, { recursive: true });
@@ -92,11 +92,12 @@ const results = await runGroom({
     quietHours,
     maxLines,
     dryRun: o['dry-run'],
+    approveWrites: groomWritesApproved(config, process.env),
 });
 
 if (o.json) console.log(JSON.stringify(results, null, 2));
 else {
-    console.log(`groom: ${results.drafted} drafted, ${results.skipped} skipped, ${results.candidates} candidates`);
+    console.log(`groom: ${results.drafted} drafted, ${results.generated} generated, ${results.skipped} skipped, ${results.candidates} candidates`);
     if (results.errors.length) {
         console.log('errors:');
         for (const e of results.errors) console.log(`  - ${e}`);

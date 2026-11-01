@@ -30,6 +30,12 @@ export function groomEnabled(config = {}, env = {}) {
     return config.groom === true;
 }
 
+export function groomWritesApproved(config = {}, env = {}) {
+    if (env.IMPS_APPROVE_DRAFT_WRITES === '0' || env.IMPS_APPROVE_DRAFT_WRITES === 'false') return false;
+    if (env.IMPS_APPROVE_DRAFT_WRITES === '1' || env.IMPS_APPROVE_DRAFT_WRITES === 'true') return true;
+    return config.groomWriteApproval === true;
+}
+
 /** Normalize an issue label array to just names. */
 export function labelNames(labels = []) {
     return labels.map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
@@ -219,8 +225,9 @@ export async function runGroom({
     quietHours = DEFAULTS.quietHours,
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
+    approveWrites = false,
 } = {}) {
-    const results = { candidates: 0, drafted: 0, skipped: 0, errors: [] };
+    const results = { candidates: 0, generated: 0, drafted: 0, skipped: 0, errors: [] };
 
     // Track daily count
     const filedPath = join(process.env.IMPS_HOME || join(homedir(), '.imps'), 'groom-filed.json');
@@ -241,7 +248,7 @@ export async function runGroom({
     }
 
     for (const repo of Object.keys(repos)) {
-        if (results.drafted >= remaining) break;
+        if (results.generated >= remaining) break;
 
         const repoInfo = repos[repo];
         if (!isQuietRepo(repoInfo, quietHours)) continue;
@@ -267,7 +274,7 @@ export async function runGroom({
         }
 
         for (const issue of issues) {
-            if (results.drafted >= remaining) break;
+            if (results.generated >= remaining) break;
             results.candidates++;
 
             // Skip if already has imp label or is groomed
@@ -303,20 +310,29 @@ export async function runGroom({
                     continue;
                 }
 
-                // Post as draft
-                if (!dryRun) {
-                    // Ensure label exists
-                    gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
-                    const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
-                    gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
-                    // Add label
-                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);
-
-                    // Track
-                    filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
-                    filedState.count++;
+                // Draft generation is not permission to mutate GitHub.
+                results.generated++;
+                if (dryRun) {
+                    results.drafted++;
+                    continue;
+                }
+                if (!approveWrites) {
+                    results.skipped++;
+                    results.errors.push('draft write approval disabled; skipped ' + issue.repo + '#' + issue.number + '; set IMPS_APPROVE_DRAFT_WRITES=1 to post');
+                    continue;
                 }
 
+                // Post as draft after explicit write approval.
+                // Ensure label exists
+                gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
+                const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
+                gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
+                // Add label
+                gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);
+
+                // Track
+                filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
+                filedState.count++;
                 results.drafted++;
             } catch (e) {
                 results.errors.push(`draft failed for ${issue.repo}#${issue.number}: ${e.message}`);
