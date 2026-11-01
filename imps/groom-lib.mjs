@@ -155,7 +155,7 @@ export function lintBrief(briefText, maxLines, expected = {}) {
         const deny = [
             /^\.github(?:\/|$)/i,
             /(^|\/)\.env(?:\.|$)/i,
-            /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i,
+            /(^|\/)(?:secrets?|credentials?)(?:\/|[^/]*$)/i,
             /(^|\/)(?:id_rsa|id_ed25519)(?:\.|$)/i,
             /(^|\/)(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
         ];
