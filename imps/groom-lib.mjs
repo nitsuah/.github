@@ -152,7 +152,16 @@ export function lintBrief(briefText, maxLines, expected = {}) {
 
     // Check if allow paths look reasonable (no .github/, no lockfiles)
     if (meta.allow) {
-        const deny = [/^\.github\//, /package-lock\.json$/, /yarn\.lock$/, /pnpm-lock\.yaml$/, /bun\.lockb?$/];
+        const deny = [
+            /^\.github(?:\/|$)/i,
+            /(^|\/)\.env(?:\.|$)/i,
+            /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i,
+            /(^|\/)(?:id_rsa|id_ed25519)(?:\.|$)/i,
+            /package-lock\.json$/i,
+            /yarn\.lock$/i,
+            /pnpm-lock\.yaml$/i,
+            /bun\.lockb?$/i,
+        ];
         for (const a of String(meta.allow).split(',').map((s) => s.trim())) {
             if (deny.some((re) => re.test(a))) errors.push(`denied path in allow: ${a}`);
         }
