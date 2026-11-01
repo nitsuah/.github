@@ -43,10 +43,41 @@ export function hasImpLabel(labels) {
 /** Check if issue has PR-shaped labels (bug, enhancement, etc.). */
 export function isPrShaped(labels = []) {
     const names = labelNames(labels);
-    // Must be a bug or small enhancement; skip security, audit, investigate, etc.
-    if (names.includes('security') || names.includes('audit') || names.includes('investigate')) return false;
-    if (names.includes('needs-human')) return false;
-    return names.includes('bug') || names.includes('enhancement');
+    // Security, investigation, and human-gated labels stay out of the draft queue.
+    if (
+        names.some((name) =>
+            /^(?:security|audit|investigate|needs-human)(?:$|[:/-])/i.test(name),
+        )
+    ) {
+        return false;
+    }
+    return names.some((name) => /^(?:bug|enhancement)$/i.test(name));
+}
+
+const SENSITIVE_CANDIDATE_PATTERNS = [
+    /(?:^|[\\s`"'(])\\.github\\/workflows(?:\\/|[\\s`"'():]|$)/i,
+    /\\bworkflows?\\b/i,
+    /(?:^|[\\s`"'(])\\.env(?:\\.[\\w-]+)?(?:[\\/\\s`"'():]|$)/i,
+    /\\b(?:secrets?|credentials?)\\b/i,
+    /\\b(?:api\\s+keys?|access\\s+tokens?|refresh\\s+tokens?|private\\s+keys?|signing\\s+keys?|encryption\\s+keys?)\\b/i,
+    /\\b(?:authentication|authorization|permissions?)\\b/i,
+    /(?:^|[\\s`"'(])config\\/(?:auth|security|secrets?|credentials?|permissions?|tokens?)(?:\\/|\\.|[\\s`"'():]|$)/i,
+];
+
+/** Conservative pre-draft screen: these candidates require human/security review. */
+export function isSensitiveCandidate(issue = {}) {
+    const labels = labelNames(issue.labels);
+    if (
+        labels.some((name) =>
+            /^(?:security|audit|investigate|needs-human|workflow|secrets?|credentials?|auth|permissions?)(?:$|[:/-])/i.test(
+                name,
+            ),
+        )
+    ) {
+        return true;
+    }
+    const source = String(issue.title || '') + '\\n' + String(issue.body || '');
+    return SENSITIVE_CANDIDATE_PATTERNS.some((pattern) => pattern.test(source));
 }
 
 /** Check if repo is "quiet" - no open human PRs, no recent commits. */
@@ -276,7 +307,7 @@ export async function runGroom({
             issues = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
                 '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt',
-                '--', 'repo:' + owner + '/' + repo + ' -label:imp:*',
+                '--', 'repo:' + owner + '/' + repo + ' is:issue -label:imp:*',
             ]).map((i) => ({
                 repo: i.repository.name,
                 number: i.number,
@@ -295,6 +326,10 @@ export async function runGroom({
             results.candidates++;
             if (hasImpLabel(issue.labels)) { skip(issue, 'already has an imp:* label'); continue; }
             if (!isPrShaped(issue.labels)) { skip(issue, 'not a bug/small enhancement or a security/human gate'); continue; }
+            if (isSensitiveCandidate(issue)) {
+                skip(issue, 'security/workflow/secret/config-sensitive candidate');
+                continue;
+            }
 
             let comments;
             try {

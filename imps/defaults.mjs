@@ -33,8 +33,8 @@ export const DEFAULTS = {
     // (`noEditTurns`) or IMPS_NO_EDIT_TURNS; 0 turns the check off.
     noEditTurns: 20,
 
-    // Cap total tool-call turns for an imp run (ends `killed-max-turns`). Override in
-    // ~/.imps/config.json (`maxTurns`); 0 disables the cap.
+    // Cap total tool-call turns for a run (ends `killed-max-turns`). Override in
+    // ~/.imps/config.json (`maxTurns`); 0 turns the check off.
     maxTurns: 60,
 
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
@@ -81,8 +81,6 @@ export const DEFAULTS = {
 export function defaultsTable(d = DEFAULTS) {
     return [
         ['maxLines (brief fallback)', String(d.maxLines)],
-        ['maxTurns (imp tool-turn cap; 0 disables)', String(d.maxTurns)],
-        ['noEditTurns (no-edit fail-fast; 0 disables)', String(d.noEditTurns)],
         ['--max / --wip / --per-repo / --concurrency', `${d.max} / ${d.wip} / ${d.perRepo} / ${d.concurrency}`],
         ['--daily-cap', String(d.dailyCap)],
         ['quietHours', String(d.quietHours)],

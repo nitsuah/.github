@@ -1,6 +1,9 @@
 // node --test imps/groom-lib.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
     parseGroomConfig,
     loadGroomConfig,
@@ -8,6 +11,7 @@ import {
     labelNames,
     hasImpLabel,
     isPrShaped,
+    isSensitiveCandidate,
     isQuietRepo,
     isBotAuthor,
     hashText,
@@ -78,10 +82,20 @@ test('isPrShaped recognizes bug/enhancement and rejects security/audit/investiga
     assert.equal(isPrShaped(['enhancement']), true);
     assert.equal(isPrShaped(['bug', 'enhancement']), true);
     assert.equal(isPrShaped(['security']), false);
+    assert.equal(isPrShaped(['security-review']), false);
     assert.equal(isPrShaped(['audit']), false);
     assert.equal(isPrShaped(['investigate']), false);
     assert.equal(isPrShaped(['needs-human']), false);
+    assert.equal(isPrShaped(['needs-human:auth']), false);
     assert.equal(isPrShaped([]), false);
+});
+
+test('isSensitiveCandidate excludes security/workflow/secret/config-sensitive work', () => {
+    assert.equal(isSensitiveCandidate({ labels: ['security-review'], title: 'Review auth' }), true);
+    assert.equal(isSensitiveCandidate({ labels: ['bug'], title: 'Fix CI', body: 'Change .github/workflows/ci.yml' }), true);
+    assert.equal(isSensitiveCandidate({ labels: ['enhancement'], title: 'Rotate API key' }), true);
+    assert.equal(isSensitiveCandidate({ labels: ['bug'], title: 'Fix config auth', body: 'Update config/credentials.json' }), true);
+    assert.equal(isSensitiveCandidate({ labels: ['bug'], title: 'Fix button spacing', body: 'The card wraps at 390px.' }), false);
 });
 
 test('isQuietRepo checks human PRs and commit age', () => {
@@ -263,4 +277,124 @@ test('runGroom fails closed on issue/PR eligibility lookup errors', async () => 
     });
     assert.equal(prLookupFailure.drafted, 0);
     assert(prLookupFailure.errors.some(e => e.includes('open-PR lookup failed')));
+});
+
+test('runGroom skips sensitive candidates before issue lookups and searches issues only', async () => {
+    const issue = {
+        repository: { name: 'demo' },
+        number: 8,
+        title: 'Update CI workflow',
+        body: 'Change .github/workflows/ci.yml',
+        labels: [{ name: 'bug' }],
+    };
+    let query = '';
+    const result = await runGroom({
+        owner: 'nitsuah',
+        repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
+        dailyCap: 5,
+        quietHours: 0,
+        dryRun: true,
+        filedPath: '/tmp/imp-groom-sensitive-test-' + process.pid + '.json',
+        gh: () => '',
+        ghJson: (args) => {
+            if (args[0] === 'search' && args[1] === 'issues') {
+                query = args.at(-1);
+                return [issue];
+            }
+            throw new Error('sensitive candidate should not trigger further lookups');
+        },
+    });
+    assert.match(query, /is:issue/);
+    assert.equal(result.drafted, 0);
+    assert.equal(result.skipped, 1);
+    assert.equal(result.skipReasons[0].reason, 'security/workflow/secret/config-sensitive candidate');
+});
+
+test('runGroom enforces the persisted daily cap before searching', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'imp-groom-cap-'));
+    const filedPath = join(dir, 'groom-filed.json');
+    const day = new Date().toISOString().slice(0, 10);
+    writeFileSync(filedPath, JSON.stringify({ day, count: 1, keys: [] }));
+    let calls = 0;
+    try {
+        const result = await runGroom({
+            owner: 'nitsuah',
+            repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
+            dailyCap: 1,
+            quietHours: 0,
+            filedPath,
+            gh: () => { calls++; return ''; },
+            ghJson: () => { calls++; return []; },
+        });
+        assert.equal(result.drafted, 0);
+        assert.equal(result.candidates, 0);
+        assert.deepEqual(result.errors, ['daily cap reached (1)']);
+        assert.equal(calls, 0);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('runGroom deduplicates an already-filed issue and brief hash across runs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'imp-groom-dedupe-'));
+    const filedPath = join(dir, 'groom-filed.json');
+    const issue = {
+        repository: { name: 'demo' },
+        number: 9,
+        title: 'Fix a small bug',
+        body: 'A bounded UI defect.',
+        labels: [{ name: 'bug' }],
+    };
+    const priorHome = process.env.IMPS_HOME;
+    const priorFetch = globalThis.fetch;
+    let draftCalls = 0;
+    let writeCalls = 0;
+    process.env.IMPS_HOME = dir;
+    globalThis.fetch = async (_url, options) => {
+        const request = JSON.parse(options.body);
+        assert.equal(request.messages[0].role, 'system');
+        assert.equal(request.messages[1].role, 'user');
+        draftCalls++;
+        const brief = makeBrief({ repo: 'nitsuah/demo', issue: '9' });
+        return {
+            ok: true,
+            json: async () => ({ content: [{ text: ' ```markdown\\n' + brief + '\\n``` ' }] }),
+        };
+    };
+    const gh = (args) => {
+        if (args[0] === 'api') return '';
+        writeCalls++;
+        return '';
+    };
+    const ghJson = (args) => {
+        if (args[0] === 'search' && args[1] === 'issues') return [issue];
+        if (args[0] === 'issue' && args[1] === 'view') return { comments: [] };
+        if (args[0] === 'search' && args[1] === 'prs') return [];
+        throw new Error('unexpected ghJson call: ' + args.join(' '));
+    };
+    const options = {
+        owner: 'nitsuah',
+        repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
+        router: { baseUrl: 'https://router.example', key: 'test' },
+        dailyCap: 5,
+        quietHours: 0,
+        filedPath,
+        gh,
+        ghJson,
+    };
+    try {
+        const first = await runGroom(options);
+        const second = await runGroom(options);
+        assert.equal(first.drafted, 1);
+        assert.equal(second.drafted, 0);
+        assert.equal(second.skipped, 1);
+        assert.equal(second.skipReasons[0].reason, 'candidate content hash was already filed');
+        assert.equal(draftCalls, 1);
+        assert.equal(writeCalls, 3);
+    } finally {
+        globalThis.fetch = priorFetch;
+        if (priorHome === undefined) delete process.env.IMPS_HOME;
+        else process.env.IMPS_HOME = priorHome;
+        rmSync(dir, { recursive: true, force: true });
+    }
 });

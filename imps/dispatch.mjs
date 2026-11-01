@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -465,16 +465,17 @@ async function work(issue) {
             note(repo, number, `The model ended the run without doing anything (run ${id}: ${stats}). That is not counted against this issue; retrying automatically.`);
             return log({ event: 'retry-noop', repo, number, id });
         }
-        // One automatic second attempt, with the failing output in the brief, when a second try can plausibly fix it
-        // (test / lint / uncommitted edits, output recorded). The per-issue cap and the daily cap still bound it.
+        const diagSummary = failureDiagnosticSummary(row.gate);
+        // One automatic second attempt, with the failing output in the brief, when a second try can plausibly fix it.
+        // The same safe summary is included on retry and terminal failure comments.
         // Kill switch: IMPS_RETRY_FEEDBACK=0.
         if (process.env.IMPS_RETRY_FEEDBACK !== '0' && feedbackEligible(row.gate) && issueFailures(readLedger(), repo, number) <= 1) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
-            note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}): ${row.gate.reasons.join('; ')}. Retrying once with the failing output.`);
+            note(repo, number, "The imp didn't pass the gate (run " + id + ": " + stats + "): " + row.gate.reasons.join('; ') + "." + diagSummary + "\n\nRetrying once with the failing output.");
             return log({ event: 'retry-feedback', repo, number, id, reasons: row.gate.reasons });
         }
         relabel(repo, number, 'imp:failed', ['imp:working']);
-        note(repo, number, `The imp didn't pass the gate (run \`${id}\`: ${stats}).\n\n${(row.gate?.reasons || ['no gate result']).map((x) => `- ${x}`).join('\n')}${process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : ''}\n\nNeeds a new brief or a human.`);
+        note(repo, number, "The imp didn't pass the gate (run " + id + ": " + stats + ").\n\n" + (row.gate?.reasons || ['no gate result']).map((x) => "- " + x).join('\n') + diagSummary + (process.env.IMPS_COMMENT_OUTPUT === '1' ? outputSection('Test', 1, row.gate?.testTail) + outputSection('Lint', 1, row.gate?.lintTail) : '') + "\n\nNeeds a new brief or a human.");
         log({ event: 'gate-fail', repo, number, id, reasons: row.gate?.reasons });
     } finally {
         clearInterval(hb);
