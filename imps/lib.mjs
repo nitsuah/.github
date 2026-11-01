@@ -410,10 +410,10 @@ export function outcomeFromPr({ state, mergedAt } = {}) {
     return 'open';
 }
 
-// When the latest brief comment was posted (ms), or 0.
-export function briefCommentAt(comments = []) {
-    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
-    return c ? Date.parse(c.createdAt || '') || 0 : 0;
+// When the latest trusted brief comment was posted (ms), or 0.
+export function briefCommentAt(comments = [], options = {}) {
+    const c = trustedBriefComment(comments, options);
+    return c ? Date.parse(c.createdAt || c.created_at || '') || 0 : 0;
 }
 
 export const CAP_MARK = '<!-- imp-cap -->';
@@ -502,8 +502,27 @@ export function pickIssues({
 // A brief lives on the issue as a comment that starts with this marker, so
 // it's reviewable on GitHub and the dispatcher needs no local state.
 export const BRIEF_MARK = '<!-- imp-brief -->';
-export function briefFromComments(comments = []) {
-    const c = [...comments].reverse().find((x) => (x.body || '').trimStart().startsWith(BRIEF_MARK));
+
+// Parse the trusted author allowlist once, and fail closed on an explicitly empty value.
+export function parseBriefAuthors(value) {
+    const names = value == null ? ['nitsuah'] : String(value).split(',').map((name) => name.trim()).filter(Boolean);
+    const normalized = [...new Set(names.map((name) => name.toLowerCase()))];
+    if (!normalized.length) throw new Error('IMPS_BRIEF_AUTHORS must contain at least one trusted GitHub login');
+    return normalized;
+}
+
+export function trustedBriefComment(comments = [], { allowedAuthors = ['nitsuah'] } = {}) {
+    // A marker is not authorization. Only an explicitly trusted author may supply
+    // task instructions; public issue commenters are untrusted.
+    const trusted = new Set(allowedAuthors.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
+    return [...comments].reverse().find((x) => {
+        const login = String(x.author?.login || x.user?.login || '').toLowerCase();
+        return trusted.has(login) && (x.body || '').trimStart().startsWith(BRIEF_MARK);
+    }) || null;
+}
+
+export function briefFromComments(comments = [], options = {}) {
+    const c = trustedBriefComment(comments, options);
     if (!c) return null;
     // Prose may sit around the brief: take the fenced block if there is one.
     const body = c.body.trimStart().slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
