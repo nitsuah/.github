@@ -134,7 +134,7 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
         dryRun: true,
         gh: () => '',
     };
-    const lookupFailure = await runGroom({
+    const commentsFailure = await runGroom({
         ...baseArgs,
         ghJson: async (args) => {
             if (args[0] === 'search') return [issue];
@@ -142,6 +142,18 @@ test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes pr
             throw new Error('unexpected gh call');
         },
     });
-    assert.equal(lookupFailure.drafted, 0);
-    assert(lookupFailure.errors.some(e => e.includes('issue eligibility lookup failed')));
+    assert.equal(commentsFailure.drafted, 0);
+    assert(commentsFailure.errors.some(e => e.includes('issue eligibility lookup failed')));
+
+    const prLookupFailure = await runGroom({
+        ...baseArgs,
+        ghJson: async (args) => {
+            if (args[0] === 'search' && args[1] === 'issues') return [issue];
+            if (args[0] === 'issue') return { comments: [] };
+            if (args[0] === 'search' && args[1] === 'prs') throw new Error('PR lookup unavailable');
+            throw new Error('unexpected gh call');
+        },
+    });
+    assert.equal(prLookupFailure.drafted, 0);
+    assert(prLookupFailure.errors.some(e => e.includes('open-PR lookup failed')));
 });
