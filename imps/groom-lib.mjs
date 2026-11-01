@@ -55,6 +55,13 @@ export function isQuietRepo(repoInfo, quietHours = DEFAULTS.quietHours) {
     return humanPRs === 0 && lastCommitHours >= quietHours;
 }
 
+/** Identify bot authors across gh CLI/GitHub API field variants. */
+export function isBotAuthor(author) {
+    const login = String(author?.login || '').toLowerCase();
+    const type = String(author?.type || '').toLowerCase();
+    return author?.is_bot === true || type === 'bot' || login.endsWith('[bot]');
+}
+
 /** Match a PR reference to an issue without requiring a closing keyword. */
 export function referencesIssue(text = '', issueNumber) {
     const number = String(issueNumber ?? '').trim();
