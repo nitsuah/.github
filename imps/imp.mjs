@@ -23,10 +23,10 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, extractFailureDiagnostic, sanitizeDiagnostic } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, resolveMaxTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -143,18 +143,7 @@ async function run() {
 
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
-    const homeConfig = loadHomeConfig();
-    const metrics = await runClaude({
-        cwd: wt,
-        prompt,
-        model: chosenModel,
-        tools,
-        minutes: o.minutes,
-        budget: o.budget,
-        maxTurns: resolveMaxTurns(homeConfig),
-        noEditByTurn: resolveNoEditTurns(homeConfig),
-        transcript: row.transcript,
-    });
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: DEFAULTS.maxTurns || 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
     update(id, { endedAt: new Date().toISOString(), metrics });
     writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
@@ -174,15 +163,9 @@ function runGate(id) {
         process.stderr.write(p.stderr || '');
         // Each stream keeps its own bounded tail so a noisy stderr cannot push the failure out of stdout.
         if (key) {
-            const combinedOutput = [p.stdout || '', p.stderr || ''].join('\n');
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
-            // Extract structured diagnostic from full output before tail truncation
-            const rawDiag = extractFailureDiagnostic(combinedOutput, id, r.worktree);
-            const diag = sanitizeDiagnostic(rawDiag, r.worktree);
-            if (!ends[key]) ends[key] = {};
-            ends[key].diagnostic = diag;
             // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
-            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}), ...ends[key] };
+            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}) };
         }
         return p.status;
     };
@@ -277,7 +260,7 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, testExit, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
+    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
