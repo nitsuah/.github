@@ -115,3 +115,27 @@ test('alreadyGroomed detects draft marker and brief', () => {
     const comments2 = [{ user: { login: 'nitsuah' }, body: briefBody }];
     assert.equal(alreadyGroomed(comments2), true);
 });
+
+test('runGroom fails closed on issue/PR eligibility lookup errors and dedupes prior issue keys', async () => {
+    const { runGroom } = await import('./groom-lib.mjs');
+    const issue = { repository: { name: 'demo' }, number: 7, title: 'Example', body: '', labels: [{ name: 'bug' }] };
+    const baseArgs = {
+        owner: 'nitsuah',
+        repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
+        router: { baseUrl: 'https://router.example', key: 'test' },
+        dailyCap: 5,
+        quietHours: 0,
+        dryRun: true,
+        gh: () => '',
+    };
+    const lookupFailure = await runGroom({
+        ...baseArgs,
+        ghJson: async (args) => {
+            if (args[0] === 'search') return [issue];
+            if (args[0] === 'issue') throw new Error('lookup unavailable');
+            throw new Error('unexpected gh call');
+        },
+    });
+    assert.equal(lookupFailure.drafted, 0);
+    assert(lookupFailure.errors.some(e => e.includes('issue eligibility lookup failed')));
+});
