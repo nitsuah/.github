@@ -133,11 +133,15 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
 }
 
 /** Lint a brief: validate required fields, scope, size. Returns { ok, errors, briefMeta }. */
-export function lintBrief(briefText, maxLines) {
+export function lintBrief(briefText, maxLines, expected = {}) {
     const { meta, body } = parseBrief(briefText);
     const errors = [];
 
     if (!meta.test) errors.push('missing required field: test');
+    if (!meta.repo) errors.push('missing required field: repo');
+    if (!meta.issue) errors.push('missing required field: issue');
+    if (expected.repo && meta.repo !== expected.repo) errors.push('repo does not match candidate');
+    if (expected.issue != null && String(meta.issue) !== String(expected.issue)) errors.push('issue does not match candidate');
     if (!meta.allow) errors.push('missing required field: allow');
     if (!meta.maxLines) errors.push('missing required field: maxLines');
     else {
