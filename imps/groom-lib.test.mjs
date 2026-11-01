@@ -213,16 +213,13 @@ test('alreadyGroomed detects draft marker and brief', () => {
 });
 
 test('runGroom records per-candidate skip reasons', async () => {
-    const previousHome = process.env.IMPS_HOME;
-    process.env.IMPS_HOME = '/tmp/imp-groom-skip-test-' + process.pid;
-    try {
-        const issues = [
+    const issues = [
             { repository: { name: 'demo' }, number: 1, title: 'Already tagged', body: '', labels: [{ name: 'bug' }, { name: 'imp:ready' }] },
             { repository: { name: 'demo' }, number: 2, title: 'Question', body: '', labels: [{ name: 'question' }] },
         ];
         const result = await runGroom({
             owner: 'nitsuah', repos: { demo: { humanPRs: 0, lastCommitHours: 999 } },
-            dailyCap: 5, quietHours: 0, dryRun: true, gh: () => '',
+            dailyCap: 5, quietHours: 0, dryRun: true, filedPath: '/tmp/imp-groom-skip-test-' + process.pid + '.json', gh: () => '',
             ghJson: (args) => args[0] === 'search' && args[1] === 'issues' ? issues : (() => { throw new Error('unexpected gh call'); })(),
         });
         assert.equal(result.candidates, 2);
@@ -231,10 +228,6 @@ test('runGroom records per-candidate skip reasons', async () => {
         assert.deepEqual(result.skipReasons.map(x => x.issue), [1, 2]);
         assert(result.skipReasons[0].reason.includes('imp:* label'));
         assert(result.skipReasons[1].reason.includes('not a bug/small enhancement'));
-    } finally {
-        if (previousHome === undefined) delete process.env.IMPS_HOME;
-        else process.env.IMPS_HOME = previousHome;
-    }
 });
 
 test('runGroom fails closed on issue/PR eligibility lookup errors', async () => {
