@@ -71,7 +71,9 @@ test('isQuietRepo checks human PRs and commit age', () => {
 
 test('lintBrief validates required fields', () => {
     const valid = `---\nrepo: owner/repo\nissue: 123\ntest: npm test\nmaxLines: 80\nallow: src/\n---\nbody`;
-    assert.deepEqual(lintBrief(valid, 100), { ok: true, errors: [], briefMeta: { repo: 'owner/repo', issue: '123', test: 'npm test', maxLines: '80', allow: 'src/' } });
+    assert.deepEqual(lintBrief(valid, 100, { repo: 'owner/repo', issue: 123 }), { ok: true, errors: [], briefMeta: { repo: 'owner/repo', issue: '123', test: 'npm test', maxLines: '80', allow: 'src/' } });
+    assert(lintBrief(valid, 100, { repo: 'other/repo', issue: 123 }).errors.includes('repo does not match candidate'));
+    assert(lintBrief(valid, 100, { repo: 'owner/repo', issue: 456 }).errors.includes('issue does not match candidate'));
 
     const missingTest = `---\nrepo: owner/repo\nissue: 123\nmaxLines: 80\nallow: src/\n---\nbody`;
     assert.deepEqual(lintBrief(missingTest, 100).ok, false);
@@ -101,6 +103,10 @@ test('lintBrief rejects denied paths in allow', () => {
 
     const lockfile = `---\nrepo: owner/repo\nissue: 123\ntest: npm test\nmaxLines: 80\nallow: package-lock.json\n---\nbody`;
     assert.equal(lintBrief(lockfile, 100).ok, false);
+    for (const path of ['.env', 'src/.env.production', 'secrets/', 'config/credentials.json', 'id_rsa']) {
+        const brief = `---\nrepo: owner/repo\nissue: 123\ntest: npm test\nmaxLines: 80\nallow: ${path}\n---\nbody`;
+        assert.equal(lintBrief(brief, 100).ok, false, path);
+    }
 });
 
 test('alreadyGroomed detects draft marker and brief', () => {
