@@ -1207,7 +1207,7 @@ function normalizeDiagnosticPath(value, worktree) {
 }
 
 // Redact secret-like strings and normalize absolute paths before any issue comment.
-const absolutePathPattern = /(?<![:/])(?:[A-Za-z]:[\\/][^\\/\s:]+(?:[\\/][^\\/\s:]+)*|\/(?:[^/\s:]+\/)*[^/\s:]+)/g;
+const absolutePathPattern = /(?<![A-Za-z0-9_.:/\\-])(?:[A-Za-z]:[\\/][^\\/\s:]+(?:[\\/][^\\/\s:]+)*|\/(?:[^/\s:]+\/)*[^/\s:]+)/g;
 export function sanitizeDiagnostic(diag, worktree = '') {
     if (!diag || typeof diag !== 'object') return diag;
     const out = { ...diag };
