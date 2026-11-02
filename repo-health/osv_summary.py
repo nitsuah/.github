@@ -2,7 +2,7 @@
 
 Usage: python osv_summary.py <osv.json> <repo-name> [--min-severity 7.0]
 Prints markdown plus a '## For TIRE' section (one line per HIGH/CRITICAL finding with a known fix).
-Exit code: 1 when any finding is at or above --min-severity, else 0.
+Exit code: 1 when any finding is at or above --min-severity, 2 when scanner output is invalid.
 """
 import argparse
 import json
@@ -61,7 +61,6 @@ def render(items, repo, min_severity):
     lines = ["## Dependency advisories (osv-scanner)", ""]
     if not items:
         return "\n".join(lines + ["No known vulnerabilities."]) + "\n"
-    lines += ["| Package | Current | Fixed in | Advisory | Severity |", "|---|---|---|---|---|"]
     lines += ["| Package | Current | Fixed in | Advisory | Severity | Scanner source |",
               "|---|---|---|---|---|---|"]
     for f in items:
