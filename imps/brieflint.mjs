@@ -13,7 +13,6 @@ import { BRIEF_MARK, briefFromComments, parseBrief } from './lib.mjs';
 // wiring are written (vigil#359: 56 inline lines, 136-line diff; fire#335: 107 lines, 160-line diff).
 export const SIZE_FACTOR = 2.5;
 
-
 /**
  * Accept the standalone brief file or the marker-first comment as posted to GitHub.
  * Match briefFromComments()' first-fence contract, but fail closed when the
