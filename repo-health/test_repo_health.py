@@ -45,6 +45,17 @@ def test_osv_summary_for_tire_line():
     assert "HIGH" in out and "LOW" in out
 
 
+def test_osv_summary_includes_source_path():
+    data = {"results": [{"source": {"type": "lockfile", "path": "backend/package-lock.json"},
+                         "packages": [{"package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"},
+                                       "vulnerabilities": [{"id": "GHSA-x", "affected": [{"package": {"name": "lodash"},
+                                           "ranges": [{"events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}],
+                                       "groups": [{"ids": ["GHSA-x"], "max_severity": "7.5"}]}]}]}
+    out = osv.render(osv.findings(data), "sample", 7.0)
+    assert "backend/package-lock.json" in out
+    assert "lockfile" in out
+
+
 def test_osv_summary_empty():
     assert "No known vulnerabilities" in osv.render(osv.findings({}), "fire", 7.0)
 
