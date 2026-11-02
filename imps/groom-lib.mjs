@@ -118,6 +118,7 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
         body: JSON.stringify({
             model: 'MAX',
             max_tokens: 4000,
+            stream: false,
             messages: [
                 { role: 'system', content: sys },
                 { role: 'user', content: 'Write the brief.' },
