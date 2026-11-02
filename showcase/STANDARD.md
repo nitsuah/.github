@@ -130,3 +130,16 @@ Start from [`templates/page-skeleton.html`](./templates/page-skeleton.html) for 
 ## Improving this (RSI)
 
 Each `/promo` or `/brag` run appends a short entry to [`stash/agent/prompts/PROMO.md`](https://github.com/nitsuah/stash/blob/main/agent/prompts/PROMO.md): what ran, what broke, what you changed. A fix that would help the next repo lands in **vigil** (detection or `apply`) or in **this file** in the same week, not in the one repo where you hit it.
+
+## Pull-request acceptance for generated visual docs
+
+A bot-generated visual-docs PR that changes only generated screenshots, diagrams, or other showcase assets does not need a separate manual visual sign-off when all of the following are true:
+
+- The exact PR head has green required CI, including the deterministic screenshot/Playwright validation and relevant E2E journeys.
+- The generated files are the only changed paths; there is no source/UI behavior change and no unapproved baseline expansion.
+- Any locked showcase asset remains unchanged, and the PR's source commit matches the generated artifact input.
+
+An `action_required`, pending, missing, or skipped required check is not a pass. Obtain the required workflow approval or rerun first. A green deterministic capture validates the generated artifact against its fixture; it does not replace human review for a new UI behavior, product-design change, or explicitly owner-gated baseline update.
+
+For qualifying generated-assets-only PRs, merge after exact-head checks pass and ordinary review/scope requirements are satisfied; do not leave them open solely for an additional visual-approval comment.
+
