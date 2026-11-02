@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -117,9 +117,25 @@ async function run() {
     if (fetch.code) throw new Error(`git fetch failed: ${fetch.err}`);
     const base = meta.base || git(repoDir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').out.replace(/^origin\//, '') || 'main';
     const wt = resolve(CODE, `${meta.repo}-${id}`);
-    const branch = `imp/${meta.issue}-${id.slice(4, 14)}`;
-    const add = git(repoDir, 'worktree', 'add', '-q', wt, '-b', branch, `origin/${base}`);
-    if (add.code) throw new Error(add.err);
+    const runSuffix = id.slice(4, 14);
+    const branchExists = (candidate) => {
+        const check = git(repoDir, 'show-ref', '--verify', '--quiet', `refs/heads/${candidate}`);
+        if (check.code === 0) return true;
+        if (check.code === 1) return false;
+        throw new Error(`git show-ref failed: ${check.err}`);
+    };
+    let branch = uniqueImpBranchName(meta.issue, runSuffix, branchExists);
+    let add;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        add = git(repoDir, 'worktree', 'add', '-q', wt, '-b', branch, `origin/${base}`);
+        if (!add.code) break;
+
+        // A concurrent or previous retry can create the ref between the
+        // preflight and worktree add. Never delete/reuse that branch.
+        if (!branchExists(branch)) throw new Error(add.err);
+        branch = uniqueImpBranchName(meta.issue, `${runSuffix}-retry${attempt + 1}`, branchExists);
+    }
+    if (add?.code) throw new Error(add.err);
     const lock = git(wt, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (lock.code) throw new Error(`could not disable push: ${lock.err}`);
     // Worktree-local identity: never inherit a repo's stale user (fire had `openhands`).

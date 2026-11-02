@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
     assert.deepEqual(parseBriefAuthors(undefined), ['nitsuah']);
@@ -1363,3 +1363,15 @@ test('sanitizeDiagnostic redacts JWTs and normalizes private absolute paths', ()
     assert.equal(windows.file, 'src/foo.js');
 });
 
+test('uniqueImpBranchName never reuses an existing local branch', () => {
+    const base = 'imp/150-2611020023';
+    assert.equal(uniqueImpBranchName(150, '2611020023', () => false), base);
+
+    const used = new Set([base]);
+    assert.equal(uniqueImpBranchName(150, '2611020023', (name) => used.has(name)), `${base}-2`);
+    used.add(`${base}-2`);
+    assert.equal(uniqueImpBranchName(150, '2611020023', (name) => used.has(name)), `${base}-3`);
+    assert.deepEqual([...used], [base, `${base}-2`], 'existing refs are checked but never deleted or modified');
+
+    assert.throws(() => uniqueImpBranchName('not-an-issue', '2611020023', () => false), /Invalid issue or run suffix/);
+});
