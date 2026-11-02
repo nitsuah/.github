@@ -28,7 +28,7 @@ import { DEFAULTS } from './defaults.mjs';
 
 function makeBrief(overrides = {}, body = '## Acceptance\n- focused test\n\n## Invariants\n- no secrets\n') {
     const meta = {
-        repo: 'owner/repo',
+        repo: 'motor-pool',
         issue: '123',
         test: 'npm test',
         lint: 'npm run lint',
@@ -127,17 +127,18 @@ test('hashText is stable and content-sensitive', () => {
 
 test('lintBrief validates required fields and candidate identity', () => {
     const valid = makeBrief();
-    assert.deepEqual(lintBrief(valid, 100, { repo: 'owner/repo', issue: 123 }), {
+    assert.deepEqual(lintBrief(valid, 100, { repo: 'motor-pool', issue: 123 }), {
         ok: true,
         errors: [],
         briefMeta: {
-            repo: 'owner/repo', issue: '123', test: 'npm test', lint: 'npm run lint',
+            repo: 'motor-pool', issue: '123', test: 'npm test', lint: 'npm run lint',
             maxLines: '80', allow: 'src/file.js', depends: 'none',
             required_commit_trailer: 'Co-Authored-By: 9router imp <noreply@anthropic.com>',
         },
     });
-    assert(lintBrief(valid, 100, { repo: 'other/repo', issue: 123 }).errors.includes('repo does not match candidate'));
-    assert(lintBrief(valid, 100, { repo: 'owner/repo', issue: 456 }).errors.includes('issue does not match candidate'));
+    assert(lintBrief(valid, 100, { repo: 'other', issue: 123 }).errors.includes('repo does not match candidate'));
+    assert(lintBrief(makeBrief({ repo: 'nitsuah/motor-pool' }), 100, { repo: 'motor-pool', issue: 123 }).errors.includes('repo does not match candidate'));
+    assert(lintBrief(valid, 100, { repo: 'motor-pool', issue: 456 }).errors.includes('issue does not match candidate'));
 
     for (const [field, message] of [
         ['test', 'missing required field: test'],
@@ -397,9 +398,10 @@ test('runGroom deduplicates an already-filed issue and brief hash across runs', 
     globalThis.fetch = async (_url, options) => {
         const request = JSON.parse(options.body);
         assert.equal(request.messages[0].role, 'system');
+        assert.match(request.messages[0].content, /short repository slug only/i);
         assert.equal(request.messages[1].role, 'user');
         draftCalls++;
-        const brief = makeBrief({ repo: 'nitsuah/demo', issue: '9' });
+        const brief = makeBrief({ repo: 'demo', issue: '9' });
         return {
             ok: true,
             json: async () => ({ content: [{ text: ' ```markdown\n' + brief + '\n``` ' }] }),
