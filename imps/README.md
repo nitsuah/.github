@@ -181,6 +181,6 @@ Claude Code runs this under Git Bash on Windows, so `%VAR%` does not expand; the
 
 ```bash
 node --test imps/*.test.mjs
-node imps/check-defaults.mjs   # STANDARD.md vs defaults.mjs
+node imps/check-defaults.mjs   # STANDARD.md/README.md vs defaults.mjs
 node imps/warlock.mjs          # this machine's topology (WARLOCK.md)
 ```
