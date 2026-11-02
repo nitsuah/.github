@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
 
-export const DRAFT_MARK = '<!-- imp-brief-draft -->';
+export const DRAFT_MARK = '<!-- imp-brief -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
 
 /** Parse ~/.imps/config.json text. Missing/invalid → {}. */
@@ -90,7 +90,7 @@ export async function draftBrief({ router, owner, repo, issue, title, body, cont
 
 The brief MUST be valid front-matter + body:
 - Front matter keys: repo, issue, test, maxLines, allow (lint optional)
-- repo: ${owner}/${repo}
+- repo: ${repo}
 - issue: ${issue}
 - test: the exact command to run (e.g., "npm test", "cargo test", "go test ./...")
 - maxLines: ${maxLines} (do not exceed)
@@ -109,7 +109,7 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
 
     const res = await fetch(`${router.baseUrl}/messages`, {
         method: 'POST',
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(180_000),
         headers: {
             'content-type': 'application/json',
             'x-api-key': router.key || '',
@@ -128,7 +128,7 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
 
     if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
-    const text = data.content?.[0]?.text || '';
+    const text = data.content?.find(c => c.type === 'text')?.text || data.content?.[0]?.text || '';
     const m = text.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
     return (m ? m[1] : text).trim();
 }
@@ -163,7 +163,10 @@ export function lintBrief(briefText, maxLines) {
 
 /** Check if an issue is already groomed (has draft or brief). */
 export function alreadyGroomed(comments = []) {
-    const hasDraft = comments.some((c) => (c.body || '').includes(DRAFT_MARK));
+    const hasDraft = comments.some((c) => {
+        const body = (c.body || '').trimStart();
+        return body.startsWith(DRAFT_MARK) || body.startsWith('<!-- imp-brief-draft -->');
+    });
     const hasBrief = !!briefFromComments(comments);
     return hasDraft || hasBrief;
 }
@@ -262,7 +265,7 @@ export async function runGroom({
                 if (!dryRun) {
                     // Ensure label exists
                     gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
-                    const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
+                    const commentBody = BRIEF_MARK + '\n```markdown\n' + briefText + '\n```';
                     gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
                     // Add label
                     gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);

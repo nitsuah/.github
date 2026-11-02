@@ -113,7 +113,7 @@ async function routerUp() {
     try {
         const r = await fetch(`${base}/messages`, {
             method: 'POST',
-            signal: AbortSignal.timeout(60_000),
+            signal: AbortSignal.timeout(180_000),
             headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
             body: JSON.stringify({ model: 'MAX', max_tokens: 5, stream: false, messages: [{ role: 'user', content: 'say ok' }] }),
         });

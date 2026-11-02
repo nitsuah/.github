@@ -14,6 +14,7 @@ import {
     DRAFT_MARK,
     NEEDS_BRIEF_LABEL,
 } from './groom-lib.mjs';
+import { BRIEF_MARK } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 test('parseGroomConfig parses valid JSON', () => {
@@ -105,7 +106,7 @@ test('alreadyGroomed detects draft marker and brief', () => {
     const comments = [{ body: 'some text' }];
     assert.equal(alreadyGroomed(comments), false);
 
-    const draftBody = DRAFT_MARK + '\n```markdown\nbrief\n```';
+    const draftBody = BRIEF_MARK + '\n```markdown\nbrief\n```';
     comments.push({ body: draftBody });
     assert.equal(alreadyGroomed(comments), true);
 
