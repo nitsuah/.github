@@ -229,7 +229,7 @@ test('labelWatchEnabled defaults on with kill switches', () => {
 });
 
 test('DEFAULTS expose the numbers STANDARD.md and CLI must agree on', () => {
-    assert.equal(DEFAULTS.maxLines, 150);
+    assert.equal(DEFAULTS.maxLines, 180);
     assert.equal(DEFAULTS.perRepo, 6);
     assert.equal(DEFAULTS.concurrency, 6);
     assert.equal(DEFAULTS.wip, 12);
