@@ -1,7 +1,7 @@
 // node --test imps/brieflint.test.mjs   (no deps)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { codeLines, lintBrief } from './brieflint.mjs';
+import { codeLines, extractBriefInput, lintBrief } from './brieflint.mjs';
 
 const brief = (front, body = '## Issue o/r#1\nDo the thing.\n') => `---\nrepo: r\nissue: 1\ntest: docker run x --config config/v.mjs y\nmaxLines: 100\nallow: a.js, a.test.js\n${front}---\n${body}`;
 const code = (n) => `~~~js\n${'x();\n'.repeat(n)}~~~\n`;
@@ -46,4 +46,31 @@ test('a body that talks about a dependency needs a `depends:` line', () => {
     const r = lintBrief(brief('', body));
     assert.ok(r.warnings.some((w) => w.includes('depends:')));
     assert.deepEqual(lintBrief(brief('depends: #318\n', body)).warnings, []);
+});
+
+
+test('a full marker-first comment extracts and preserves the brief body', () => {
+    const source = brief('depends: none\n', '## Issue o/r#1\nPreserve this body exactly.\\n');
+    const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source.trim() + '\n' + '\x60\x60\x60\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, null);
+    assert.equal(extracted.brief, source.trim() + '\n');
+
+    const r = lintBrief(comment, { exists: () => true });
+    assert.deepEqual(r.problems, []);
+    assert.equal(r.meta.repo, 'r');
+    assert.equal(r.meta.issue, '1');
+});
+
+test('an unclosed or missing marker-first outer fence gets a precise diagnostic', () => {
+    const source = brief('').trim();
+    const malformed = [
+        '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source,
+        '<!-- imp-brief -->\n' + source,
+    ];
+    for (const comment of malformed) {
+        const r = lintBrief(comment);
+        assert.deepEqual(r.problems, ['unclosed or missing outer fence']);
+        assert.equal(r.meta.repo, undefined);
+    }
 });
