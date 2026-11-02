@@ -102,8 +102,13 @@ test('isQuietRepo checks human PRs and commit age', () => {
     assert.equal(isQuietRepo({ humanPRs: 0, lastCommitHours: 10 }), true);
     assert.equal(isQuietRepo({ humanPRs: 0, lastCommitHours: 5 }), false); // too recent
     assert.equal(isQuietRepo({ humanPRs: 1, lastCommitHours: 99 }), false); // human PR open
-    assert.equal(isQuietRepo({}, 6), true); // defaults
-    assert.equal(isQuietRepo({ lastCommitHours: 5 }, 6), false); // custom quietHours
+    assert.equal(isQuietRepo({}, 6), false); // missing PR/commit evidence fails closed
+    assert.equal(isQuietRepo({ humanPRs: 0 }, 6), false); // missing commit age fails closed
+    assert.equal(isQuietRepo({ lastCommitHours: 99 }, 6), false); // missing PR count fails closed
+    assert.equal(isQuietRepo({ humanPRs: null, lastCommitHours: 99 }, 6), false);
+    assert.equal(isQuietRepo({ humanPRs: 0, lastCommitHours: 99, prLookupFailed: true }, 6), false);
+    assert.equal(isQuietRepo({ humanPRs: 0, lastCommitHours: 99, commitLookupFailed: true }, 6), false);
+    assert.equal(isQuietRepo({ lastCommitHours: 5, humanPRs: 0 }, 6), false); // custom quietHours
 });
 
 
@@ -233,6 +238,36 @@ test('alreadyGroomed detects draft marker and brief', () => {
     const briefBody = '<!-- imp-brief -->\n---\nrepo: x\nissue: 1\ntest: t\nmaxLines: 10\nallow: a\n---\nbody';
     const comments2 = [{ user: { login: 'nitsuah' }, body: briefBody }];
     assert.equal(alreadyGroomed(comments2), true);
+});
+
+test('runGroom fails closed when repo activity evidence is missing', async () => {
+    const cases = [
+        {
+            repoInfo: { humanPRs: null, lastCommitHours: 999, prLookupFailed: true },
+            reason: 'open human-PR count unavailable; fail closed',
+        },
+        {
+            repoInfo: { humanPRs: 0, lastCommitHours: null, commitLookupFailed: true },
+            reason: 'latest commit age unavailable; fail closed',
+        },
+    ];
+    for (const item of cases) {
+        let calls = 0;
+        const result = await runGroom({
+            owner: 'nitsuah',
+            repos: { demo: item.repoInfo },
+            dailyCap: 5,
+            quietHours: 0,
+            dryRun: false,
+            filedPath: '/tmp/imp-groom-unknown-activity-' + process.pid + '.json',
+            gh: () => { calls++; return ''; },
+            ghJson: () => { calls++; throw new Error('unknown repo activity must skip before issue search'); },
+        });
+        assert.equal(result.drafted, 0);
+        assert.equal(result.candidates, 0);
+        assert.deepEqual(result.repoSkips, [{ repo: 'demo', reason: item.reason }]);
+        assert.equal(calls, 0);
+    }
 });
 
 test('runGroom records per-candidate skip reasons', async () => {
