@@ -436,7 +436,7 @@ export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`
 // (b) dirty-tree'd the checkout so update.ps1/setup.ps1 refused to run at all
 // (#59). One counter per machine also matches what it measures — this
 // machine's spend — and a per-machine home is what a second machine gets.
-export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
+export const MODEL_POOL = { prefer: [], fallback: ['MAX'] };
 const QUOTA = join(HOME, 'model_quota.json');
 
 // Counters refill on a rolling window. Without one, a counter that can finally

@@ -3,7 +3,7 @@
 import { DEFAULTS } from './defaults.mjs';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 export function resolveImpsCodeRoot({ env = process.env, home = homedir() } = {}) {
     const explicit = typeof env.IMPS_CODE === 'string' && env.IMPS_CODE !== '' ? env.IMPS_CODE : '';
@@ -17,6 +17,28 @@ export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists 
     const path = join(codeRoot, repo);
     const gitMarker = join(path, '.git');
     return { repo, path, gitMarker, checkedOut: Boolean(exists(gitMarker)) };
+}
+
+/**
+ * Pick a fresh local branch name for an Imp run without deleting or reusing
+ * a branch left by a previous attempt. The exists callback checks local refs.
+ */
+export function uniqueImpBranchName(issue, runSuffix, exists = () => false) {
+    const issueId = String(issue ?? '').trim();
+    const suffix = String(runSuffix ?? '').trim();
+    if (!/^\d+$/.test(issueId) || !/^[A-Za-z0-9._-]+$/.test(suffix)) {
+        throw new Error('Invalid issue or run suffix for Imp branch name');
+    }
+    if (typeof exists !== 'function') throw new TypeError('exists must be a function');
+
+    const base = `imp/${issueId}-${suffix}`;
+    if (!exists(base)) return base;
+
+    for (let attempt = 2; attempt <= 100; attempt += 1) {
+        const candidate = `${base}-${attempt}`;
+        if (!exists(candidate)) return candidate;
+    }
+    throw new Error(`could not find an unused Imp branch name for issue #${issueId}`);
 }
 
 /** Return a configured model strategy only when it is a non-empty string; otherwise use the safe default. */
@@ -265,7 +287,7 @@ export function writeStreamJsonMessage(stream, message, state) {
 // The kit's own defaults and each repo's guardrail config are off limits: an
 // imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
-    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|mix\.lock|pubspec\.lock|podfile\.lock|gradle\.lockfile|packages\.lock\.json|package\.resolved|flake\.lock|deno\.lock)$/i,
     /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/, /(^|\/)CODEOWNERS$/];
 
 // An unscoped brief (no `allow:`) must not reach the kit itself. Kit self-work
@@ -1015,6 +1037,7 @@ export function runGhWithReadRetry(args, run, pause = () => {}) {
 export function redactSecrets(text = '') {
     return String(text)
         .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, '[redacted]')
+        .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[redacted]')
         .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, '[redacted]')
         .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]')
         .replace(/\b([A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD))(\s*[:=]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/g, '$1$2[redacted]')
@@ -1023,7 +1046,8 @@ export function redactSecrets(text = '') {
 }
 
 // The gate only kept `tests exit 1`, never why, so a repeating failure could not be diagnosed afterwards.
-// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the ledger and on the issue.
+// Keep the tail of the output (ANSI stripped, cut at a line boundary) in the local ledger.
+// Full tail posting is opt-in via IMPS_COMMENT_OUTPUT=1; passing steps remain silent.
 export function tailOutput(text = '', max = 2000) {
     const plain = redactSecrets(String(text)).replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '').replace(/\r/g, '').trim();
     if (plain.length <= max) return plain;
@@ -1131,3 +1155,131 @@ export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
     // Same cutoff as issueFailures: a newer brief comment starts a fresh allowance.
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !(Date.parse(r.startedAt) < sinceMs) && isNoopRun(r)).length <= NOOP_FREE;
 }
+
+// ── failure diagnostic extractor ────────────────────────────────────────────
+// Recognizes known test/lint output shapes and returns a bounded summary.
+// Never invents a cause; unknown output is explicitly unavailable.
+export function extractFailureDiagnostic(output = '', runId = '', worktree = '') {
+    const safeOutput = sanitizeDiagnostic({ output: String(output || '') }, worktree).output;
+    const plain = String(safeOutput || '')
+        .replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '')
+        .replace(/\r/g, '');
+    if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+
+    // Node TAP / Vitest: strip terminal colors before matching anchored output.
+    const tapFail = plain.match(/^(?:not ok \d+ - |FAIL .+ > )(.+)$/m);
+    if (tapFail) {
+        const assertion = /\bAssertionError\b|\bERR_ASSERTION\b|\bassert(?:ion)?\s+(?:failed|failure|error)\b/i.test(plain);
+        return {
+            kind: 'test',
+            runId,
+            test: tapFail[1].slice(0, 120),
+            error: assertion ? 'assertion failure' : 'test failure',
+        };
+    }
+
+    // Vitest suite/error summary: "FAIL file.test.ts" or similar.
+    const vitestFail = plain.match(/^FAIL\s+(\S+)/m);
+    if (vitestFail) return { kind: 'test', runId, test: vitestFail[1].slice(0, 120), error: 'test failure' };
+
+    // ESLint: "error  'x' is defined but never used  no-unused-vars".
+    const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
+    if (eslintMatch) {
+        const [, severity, message, rule] = eslintMatch;
+        return { kind: 'lint', runId, rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
+    }
+
+    // ESLint compact: "path/file.js:1:1 error 'x' is defined but never used no-unused-vars".
+    const eslintCompact = plain.match(/^(.+?):\d+:\d+\s+(error|warning)\s+(.+?)\s+(\S+)$/m);
+    if (eslintCompact) {
+        const [, file, severity, message, rule] = eslintCompact;
+        return { kind: 'lint', runId, file: file.slice(0, 80), rule: rule.slice(0, 60), severity: severity.slice(0, 10) };
+    }
+
+    const prettierMatch = plain.match(/(Insert|Delete|Replace)\s+[•·→]/);
+    if (prettierMatch) return { kind: 'lint', runId, tool: 'prettier', issue: prettierMatch[1].toLowerCase() };
+    if (/Code style issues found/i.test(plain)) return { kind: 'lint', runId, tool: 'prettier', issue: 'style' };
+
+    // An exit code alone is not a diagnostic.
+    if (/exit code \d+/i.test(plain)) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+    return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
+}
+
+function normalizeDiagnosticPath(value, worktree) {
+    const windowsAbsolute = /^[A-Za-z]:[\\/]/.test(value);
+    const posixAbsolute = value.startsWith('/') && !value.startsWith('//');
+    if (!windowsAbsolute && !posixAbsolute) return value;
+
+    if (typeof worktree === 'string' && worktree.trim()) {
+        try {
+            const normalized = windowsAbsolute
+                ? win32.relative(win32.resolve(worktree), win32.resolve(value))
+                : relative(resolve(worktree), resolve(value));
+            const outside = windowsAbsolute
+                ? normalized === '..' || normalized.startsWith('..' + win32.sep) || win32.isAbsolute(normalized)
+                : normalized === '..' || normalized.startsWith('..' + sep) || isAbsolute(normalized);
+            if (!outside) return normalized ? normalized.split(/[\\/]/).join('/') : '[repo-root]';
+        } catch {
+            // Fall through to a basename-only external path.
+        }
+    }
+
+    const fileName = windowsAbsolute ? win32.basename(value) : basename(value);
+    return '<path>';
+}
+
+// Redact secret-like strings and normalize absolute paths before any issue comment.
+const absolutePathPattern = /(?<![A-Za-z0-9_.:/\\-])(?:[A-Za-z]:[\\/][^\\/\s:]+(?:[\\/][^\\/\s:]+)*|\/(?:[^/\s:]+\/)*[^/\s:]+)/g;
+export function sanitizeDiagnostic(diag, worktree = '') {
+    if (!diag || typeof diag !== 'object') return diag;
+    const out = { ...diag };
+    for (const key of Object.keys(out)) {
+        if (typeof out[key] === 'string') {
+            out[key] = redactSecrets(out[key]).replace(absolutePathPattern, (value) => normalizeDiagnosticPath(value, worktree));
+        }
+    }
+    return out;
+}
+
+function diagnosticAtom(value) {
+    return String(value)
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/[\\\x60*_{}\[\]()#+.!|~]/g, '\\$&')
+        .replace(/@/g, '&#64;')
+        .slice(0, 120);
+}
+
+export function formatFailureDiagnostic(diag) {
+    if (!diag || typeof diag !== 'object') return 'diagnostic summary unavailable';
+    if (diag.kind === 'test') {
+        const parts = [];
+        if (diag.test) parts.push('test="' + diagnosticAtom(diag.test) + '"');
+        if (diag.error) parts.push('error="' + diagnosticAtom(diag.error) + '"');
+        return parts.join(' ') || 'test failure';
+    }
+    if (diag.kind === 'lint') {
+        const parts = [];
+        if (diag.rule) parts.push('rule="' + diagnosticAtom(diag.rule) + '"');
+        if (diag.severity) parts.push(diagnosticAtom(diag.severity));
+        if (diag.tool) parts.push('tool="' + diagnosticAtom(diag.tool) + '"');
+        if (diag.file) parts.push('file="' + diagnosticAtom(diag.file) + '"');
+        if (diag.issue) parts.push('issue="' + diagnosticAtom(diag.issue) + '"');
+        return parts.join(' ') || 'lint failure';
+    }
+    return 'diagnostic summary unavailable';
+}
+
+export function failureDiagnosticSummary(gate) {
+    const parts = [];
+    const testDiag = gate?.testExit != null && gate.testExit !== 0 ? gate.testEnd?.diagnostic : null;
+    const lintDiag = gate?.lintExit != null && gate.lintExit !== 0 ? gate.lintEnd?.diagnostic : null;
+    if (testDiag?.kind === 'test') parts.push('test: ' + formatFailureDiagnostic(testDiag));
+    if (lintDiag?.kind === 'lint') parts.push('lint: ' + formatFailureDiagnostic(lintDiag));
+    if (!parts.length) return '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';
+    return '\n\n**Diagnostic summary (untrusted command output):**\n' + parts.map((part) => '- ' + part).join('\n');
+}
+

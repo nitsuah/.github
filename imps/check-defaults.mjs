@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fail if STANDARD.md / CLI headers disagree with defaults.mjs.
+// Fail if STANDARD.md / README / CLI headers disagree with defaults.mjs.
 //   node imps/check-defaults.mjs
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -8,6 +8,7 @@ import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const std = readFileSync(join(HERE, 'STANDARD.md'), 'utf8');
+const readme = readFileSync(join(HERE, 'README.md'), 'utf8');
 const dispatch = readFileSync(join(HERE, 'dispatch.mjs'), 'utf8');
 const errors = [];
 
@@ -24,6 +25,9 @@ const need = [
 
 for (const [label, re] of need) {
     if (!re.test(std)) errors.push(`STANDARD.md missing/outdated: ${label}`);
+}
+if (!readme.includes(`maxLines fallback **${DEFAULTS.maxLines}**`)) {
+    errors.push(`README.md missing/outdated: maxLines fallback ${DEFAULTS.maxLines}`);
 }
 
 // dispatch header comment should match DEFAULTS
