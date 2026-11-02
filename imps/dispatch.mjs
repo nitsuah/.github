@@ -115,7 +115,7 @@ async function routerUp() {
             method: 'POST',
             signal: AbortSignal.timeout(60_000),
             headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
+            body: JSON.stringify({ model: 'MAX', max_tokens: 5, stream: false, messages: [{ role: 'user', content: 'say ok' }] }),
         });
         return r.ok;
     } catch {
