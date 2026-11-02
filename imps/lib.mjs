@@ -19,6 +19,28 @@ export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists 
     return { repo, path, gitMarker, checkedOut: Boolean(exists(gitMarker)) };
 }
 
+/**
+ * Pick a fresh local branch name for an Imp run without deleting or reusing
+ * a branch left by a previous attempt. The exists callback checks local refs.
+ */
+export function uniqueImpBranchName(issue, runSuffix, exists = () => false) {
+    const issueId = String(issue ?? '').trim();
+    const suffix = String(runSuffix ?? '').trim();
+    if (!/^\\d+$/.test(issueId) || !/^[A-Za-z0-9._-]+$/.test(suffix)) {
+        throw new Error('Invalid issue or run suffix for Imp branch name');
+    }
+    if (typeof exists !== 'function') throw new TypeError('exists must be a function');
+
+    const base = `imp/${issueId}-${suffix}`;
+    if (!exists(base)) return base;
+
+    for (let attempt = 2; attempt <= 100; attempt += 1) {
+        const candidate = `${base}-${attempt}`;
+        if (!exists(candidate)) return candidate;
+    }
+    throw new Error(`could not find an unused Imp branch name for issue #${issueId}`);
+}
+
 /** Return a configured model strategy only when it is a non-empty string; otherwise use the safe default. */
 export function normalizeModelStrategy(config) {
     const value = config?.modelStrategy;
