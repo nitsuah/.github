@@ -151,9 +151,44 @@ if (process.platform !== 'win32') {
         } catch { /* systemctl not available */ }
     }
 
+    // Check groomer wrapper
+    const groom = join(HOME, 'groom.sh');
+    const groomBody = read(groom);
+    let groomCronExists = false;
+    let groomCronCurrent = false;
+    let groomSystemdExists = false;
+    let groomSystemdCurrent = false;
+    if (groomBody) {
+        // Check cron for groom.sh
+        try {
+            const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
+            if (cron.status === 0) {
+                const lines = (cron.stdout || '').split('\n');
+                const groomLine = lines.find(l => l.includes('groom.sh'));
+                groomCronExists = Boolean(groomLine);
+                groomCronCurrent = groomLine ? groomLine.includes(groom) : false;
+            }
+        } catch { /* crontab not available */ }
+        // Check systemd for groomer
+        try {
+            const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+            if (timer.status === 0) {
+                const lines = (timer.stdout || '').split('\n');
+                const groomTimer = lines.find(l => l.includes('imps-groom'));
+                groomSystemdExists = Boolean(groomTimer);
+                if (groomTimer) {
+                    const svc = spawnSync('systemctl', ['--user', 'show', 'imps-groom.service', '-p', 'ExecStart'], { encoding: 'utf8', windowsHide: true });
+                    const execStart = (svc.stdout || '').trim().replace('ExecStart=', '');
+                    groomSystemdCurrent = execStart.includes(groom);
+                }
+            }
+        } catch { /* systemctl not available */ }
+    }
+
     const topology = countDispatchSchedulers(cronLines, hourly, systemdExists && systemdCurrent);
     const watchDetail = watchBody ? (watchCronExists && watchCronCurrent ? 'cron: label-watch.sh' : watchCronExists ? 'cron: ' + watch + ' (mismatch)' : '') + (watchSystemdExists && watchSystemdCurrent ? 'systemd: imps-label-watch.timer' : watchSystemdExists ? 'systemd: ' + watch + ' (mismatch)' : '') : '';
-    const detail = [topology.names.join('; '), cronMismatch ? 'cron: hourly.sh (path mismatch)' : '', systemdExists && !systemdCurrent ? 'systemd: ' + hourly + ' (mismatch)' : '', watchDetail].filter(Boolean).join('; ') || 'no active dispatch scheduler';
+    const groomDetail = groomBody ? (groomCronExists && groomCronCurrent ? 'cron: groom.sh' : groomCronExists ? 'cron: ' + groom + ' (mismatch)' : '') + (groomSystemdExists && groomSystemdCurrent ? 'systemd: imps-groom.timer' : groomSystemdExists ? 'systemd: ' + groom + ' (mismatch)' : '') : '';
+    const detail = [topology.names.join('; '), cronMismatch ? 'cron: hourly.sh (path mismatch)' : '', systemdExists && !systemdCurrent ? 'systemd: ' + hourly + ' (mismatch)' : '', watchDetail, groomDetail].filter(Boolean).join('; ') || 'no active dispatch scheduler';
     check('exactly one dispatch task', topology.count === 1, detail);
 } else {
     const ps = [
@@ -163,6 +198,13 @@ if (process.platform !== 'win32') {
     const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true });
     const tasks = (r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     check('exactly one dispatch task', tasks.length === 1, tasks.length ? tasks.join(', ') : 'no Scheduled Task runs a dispatcher — nothing is reading the queue');
+
+    // Check groomer Scheduled Task
+    const groomPs = 'Get-ScheduledTask -TaskName "imps-groom" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TaskName';
+    const groomResult = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', groomPs], { encoding: 'utf8', windowsHide: true });
+    const groomTask = (groomResult.stdout || '').trim();
+    const groomExists = groomTask === 'imps-groom';
+    check('groomer task registered', groomExists, groomExists ? 'imps-groom' : 'imps-groom not found — run setup.ps1 to register daily groomer');
 }
 
 // ── a cycle that died leaves the lock behind ──────────────────────────────
