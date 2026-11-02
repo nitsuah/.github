@@ -24,7 +24,7 @@ export function extractBriefInput(text) {
     if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
 
     const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
-    const fenced = commentBody.match(/\x60{3}(?:markdown|md)?\n([\s\S]*?)\n\x60{3}/);
+    const fenced = commentBody.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
     if (!fenced) return { brief: '', error: 'unclosed or missing outer fence' };
     return { brief: fenced[1].trim() + '\n', error: null };
 }
