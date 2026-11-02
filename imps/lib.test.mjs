@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -1378,4 +1378,86 @@ test('uniqueImpBranchName never reuses an existing local branch', () => {
     assert.deepEqual([...used], [base, `${base}-2`], 'existing refs are checked but never deleted or modified');
 
     assert.throws(() => uniqueImpBranchName('not-an-issue', '2611020023', () => false), /Invalid issue or run suffix/);
+});
+
+// ── activeCooldowns tests ─────────────────────────────────────
+test('activeCooldowns: two active failures returns sorted repo + ISO expiry', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const fail = (id, hoursAgo, repo, kitSha) => ({ id, repo, issue: 1, kitSha, startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } });
+    const rows = [
+        fail('imp_1', 5, 'fire', 'kit1'),  // 5h ago
+        fail('imp_2', 3, 'fire', 'kit1'),  // 3h ago (latest failed gate) -> expires 2026-10-30T09:00:00Z
+        fail('imp_3', 4, 'vigil', 'kit1'), // 4h ago
+        fail('imp_4', 2, 'vigil', 'kit1'), // 2h ago (latest failed gate) -> expires 2026-10-30T10:00:00Z
+    ];
+    const budget = loopBudget(rows, now, { kit: 'kit1' });
+    const cd = activeCooldowns(budget, now);
+    // fire latest failed at 3h ago -> expiry = 3h + 24h = 27h from now = 2026-10-30T09:00:00Z
+    // vigil latest failed at 2h ago -> expiry = 2h + 24h = 26h from now = 2026-10-30T10:00:00Z
+    // fire expires EARLIER (09:00 < 10:00), so fire comes first
+    assert.equal(cd.length, 2);
+    assert.equal(cd[0].repo, 'fire'); // earlier expiry first
+    assert.equal(cd[1].repo, 'vigil');
+    assert.match(cd[0].cooldownUntil, /^2026-10-30T09:00:00/);
+    assert.match(cd[1].cooldownUntil, /^2026-10-30T10:00:00/);
+});
+
+test('activeCooldowns: expired cooldown returns empty', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    // Failure 30h ago -> expired (cooldownMs = 24h)
+    const rows = [
+        { id: 'imp_1', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 30 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+        { id: 'imp_2', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 28 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+    ];
+    const budget = loopBudget(rows, now, { kit: 'kit1' });
+    const cd = activeCooldowns(budget, now);
+    assert.deepEqual(cd, []);
+});
+
+test('activeCooldowns: one failure (not two straight) returns empty', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const rows = [
+        { id: 'imp_1', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 3 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+    ];
+    const budget = loopBudget(rows, now, { kit: 'kit1' });
+    const cd = activeCooldowns(budget, now);
+    assert.deepEqual(cd, []);
+});
+
+test('activeCooldowns: size-only failures do not trigger cooldown', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const size = ['diff 136 lines > 100'];
+    const rows = [
+        { id: 'imp_1', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 5 * 3600_000).toISOString(), gate: { pass: false, reasons: size } },
+        { id: 'imp_2', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 3 * 3600_000).toISOString(), gate: { pass: false, reasons: size } },
+    ];
+    const budget = loopBudget(rows, now, { kit: 'kit1' });
+    const cd = activeCooldowns(budget, now);
+    assert.deepEqual(cd, []);
+});
+
+test('activeCooldowns: kit SHA mismatch filters out old-kit failures', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const rows = [
+        { id: 'imp_1', repo: 'fire', issue: 1, kitSha: 'old', startedAt: new Date(now - 5 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+        { id: 'imp_2', repo: 'fire', issue: 1, kitSha: 'old', startedAt: new Date(now - 3 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+    ];
+    const budget = loopBudget(rows, now, { kit: 'new' });
+    const cd = activeCooldowns(budget, now);
+    assert.deepEqual(cd, []);
+});
+
+test('activeCooldowns: output contains only repo slug and ISO cooldownUntil', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const rows = [
+        { id: 'imp_1', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 5 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+        { id: 'imp_2', repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - 3 * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } },
+    ];
+    const budget = loopBudget(rows, now, { kit: 'kit1' });
+    const cd = activeCooldowns(budget, now);
+    assert.equal(cd.length, 1);
+    assert.equal(Object.keys(cd[0]).length, 2);
+    assert.ok('repo' in cd[0]);
+    assert.ok('cooldownUntil' in cd[0]);
+    assert.match(cd[0].cooldownUntil, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });

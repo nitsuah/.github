@@ -495,6 +495,23 @@ export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     return { runsLast24h, cooldown };
 }
 
+/**
+ * Build a sorted list of active cooldowns with their expiry timestamps.
+ * Uses the `cooldown` object from loopBudget (repo -> latest failed-gate startedAt).
+ * Returns [{ repo, cooldownUntil }] sorted by cooldownUntil ascending.
+ * Empty array when no active cooldowns.
+ */
+export function activeCooldowns(loopBudgetResult, now = Date.now()) {
+    const { cooldown } = loopBudgetResult;
+    const out = [];
+    for (const [repo, failedAt] of Object.entries(cooldown)) {
+        const until = Date.parse(failedAt) + DEFAULTS.cooldownMs;
+        if (until > now) out.push({ repo, cooldownUntil: new Date(until).toISOString() });
+    }
+    out.sort((a, b) => a.cooldownUntil.localeCompare(b.cooldownUntil));
+    return out;
+}
+
 export function pickIssues({
     candidates, repos,
     max = DEFAULTS.max, wip = DEFAULTS.wip, perRepo = 1,
