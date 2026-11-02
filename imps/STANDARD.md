@@ -128,6 +128,8 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
   - **No merge without a bound head.** `mergeReady` requires the checks to be green *and* GitHub's `headRefOid` to equal the commit the runner pushed — a push between the poll and the merge leaves the PR open.
 - **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust**: `max(ledger clean merges, GitHub-seeded count of past merged imp PRs that passed checks and were not reverted)`. Seed query errors fail closed. Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
 
+- **Workflow approval is a human gate, not a check result.** If a check is `action_required` / waiting for approval and the run has **zero jobs**, do not classify it as pending, running, or green; do not repeatedly rerun it or merge. Record the exact PR head and run, then request maintainer approval/re-run. After approval, verify the resulting required checks complete successfully on that exact head. If approval is withheld, leave the PR open.
+
 ## What gets measured
 
 `imp.mjs` writes one ledger row per run to `~/.imps/runs.jsonl`, and the full transcript to `~/.imps/runs/<id>.jsonl`.
