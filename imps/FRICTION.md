@@ -106,6 +106,11 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 
 - `.github` PR #156 merged as `ecae8867f5b0f20a3b0b7f201bb1727d712c38c4` after seven size-only gate failures across motor-pool #125, VHS #124, Darkmoon #494/#495, Vigil #406, and Fire #321/#326. `effectiveMaxLines()` now floors brief caps at `DEFAULTS.maxLines` (150), preserves higher caps, adds fix-round slack after the floor, and leaves malformed caps fail-closed. Exact-head Imp kit run `41171398024` succeeded (213 pass, 2 skipped, 0 fail). This corrects brief sizing only; size-only retry policy #122 and post-format budget policy #143 remain owner-gated.
 
+### Default maxLines drift (2026-11-02)
+
+- PR #211 raised `DEFAULTS.maxLines` from 150 to 180, but the tests and `STANDARD.md`/`README.md` still encoded 150. Exact-head Imp kit run [41372640309](https://github.com/nitsuah/.github/actions/runs/41372640309) exposed three failures: two stale maxLines expectations and a `groom-lib.test.mjs` fixture that omitted the trusted author now required by `briefFromComments`.
+- Recovery in this PR updates the default assertions/docs to 180 and makes the brief fixture explicitly trusted, with a negative assertion for an untrusted author. No runtime code or authorization behavior changes.
+
 ### Child acceptance after PR closure (2026-10-31)
 
 - Fire #338 exposed a lifecycle gap: PR #368 merged as `ccf41a3` and auto-closed the child after adding state/markup, but the current default branch still had no visible profile-panel toggle or `saveChaosProfile` / `clearChaosProfile` handlers. The PR's exact-head CI run `40992503422` succeeded, while review findings for both missing behaviors were explicitly marked "Not in this PR." The child was reopened for tracking, focused follow-up #399 is `imp:ready`, and #340 remains blocked on #399. Lesson: verify every child's acceptance against the merged code; a green PR and auto-closed issue do not prove the user journey is complete.
