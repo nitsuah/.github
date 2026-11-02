@@ -54,7 +54,12 @@ try {
     const orgRepos = ghJson(['repo', 'list', o.owner, '--limit', '100', '--json', 'name,isPrivate,isFork']);
     for (const r of orgRepos) {
         if (r.isPrivate || r.isFork) continue; // public, non-fork repositories only
-        repos[r.name] = { humanPRs: 0, lastCommitHours: 99 };
+        repos[r.name] = {
+            humanPRs: null,
+            lastCommitHours: null,
+            prLookupFailed: false,
+            commitLookupFailed: false,
+        };
     }
 } catch (e) {
     console.error('repo list failed:', e.message);
@@ -66,14 +71,20 @@ for (const name of Object.keys(repos)) {
     try {
         const prs = ghJson(['pr', 'list', '-R', `${o.owner}/${name}`, '--state', 'open', '--json', 'author']);
         repos[name].humanPRs = prs.filter((p) => !isBotAuthor(p.author)).length;
-    } catch { /* ignore */ }
+    } catch {
+        repos[name].prLookupFailed = true;
+    }
     try {
         const commits = gh(['api', `repos/${o.owner}/${name}/commits?per_page=1`, '--jq', '.[0].commit.author.date']);
-        if (commits) {
-            const hours = (Date.now() - Date.parse(commits)) / 36e5;
-            repos[name].lastCommitHours = hours;
+        const commitTime = commits ? Date.parse(commits) : NaN;
+        if (Number.isFinite(commitTime)) {
+            repos[name].lastCommitHours = (Date.now() - commitTime) / 36e5;
+        } else {
+            repos[name].commitLookupFailed = true;
         }
-    } catch { /* ignore */ }
+    } catch {
+        repos[name].commitLookupFailed = true;
+    }
 }
 
 const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap;
