@@ -63,3 +63,23 @@ def test_osv_summary_empty():
 def test_root_hygiene_never_flags_directories():
     keep, unknown = rh.classify(["src", "stray.txt"], dirs={"src"})
     assert keep == ["src"] and unknown == ["stray.txt"]
+
+
+def test_osv_summary_empty_results_is_clean(tmp_path, monkeypatch, capsys):
+    import sys
+
+    result = tmp_path / "osv.json"
+    result.write_text('{"results": []}', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["osv_summary.py", str(result), "fire"])
+    assert osv.main() == 0
+    assert "No known vulnerabilities" in capsys.readouterr().out
+
+
+def test_osv_summary_invalid_output_is_operational_error(tmp_path, monkeypatch, capsys):
+    import sys
+
+    result = tmp_path / "osv.json"
+    result.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["osv_summary.py", str(result), "fire"])
+    assert osv.main() == 2
+    assert "ERROR: unable to parse OSV scanner output" in capsys.readouterr().err
