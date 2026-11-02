@@ -81,9 +81,29 @@ export function isSensitiveCandidate(issue = {}) {
 }
 
 /** Check if repo is "quiet" - no open human PRs, no recent commits. */
+function repoEligibilityReason(repoInfo, quietHours = DEFAULTS.quietHours) {
+    if (
+        !repoInfo ||
+        repoInfo.prLookupFailed ||
+        !Number.isInteger(repoInfo.humanPRs) ||
+        repoInfo.humanPRs < 0
+    ) {
+        return 'open human-PR count unavailable; fail closed';
+    }
+    if (
+        repoInfo.commitLookupFailed ||
+        !Number.isFinite(repoInfo.lastCommitHours)
+    ) {
+        return 'latest commit age unavailable; fail closed';
+    }
+    if (repoInfo.humanPRs > 0) return 'open human PR exists';
+    if (repoInfo.lastCommitHours < quietHours) return 'recent commit is inside the quiet window';
+    return null;
+}
+
+/** Check if repo is quiet; missing/failed activity evidence is never treated as quiet. */
 export function isQuietRepo(repoInfo, quietHours = DEFAULTS.quietHours) {
-    const { humanPRs = 0, lastCommitHours = 99 } = repoInfo || {};
-    return humanPRs === 0 && lastCommitHours >= quietHours;
+    return repoEligibilityReason(repoInfo, quietHours) === null;
 }
 
 /** Identify bot authors across gh CLI/GitHub API field variants. */
@@ -308,8 +328,9 @@ export async function runGroom({
     for (const repo of Object.keys(repos)) {
         if (results.drafted >= remaining) break;
         const repoInfo = repos[repo];
-        if (!isQuietRepo(repoInfo, quietHours)) {
-            results.repoSkips.push({ repo, reason: 'repo is not quiet under the configured PR/commit window' });
+        const repoSkipReason = repoEligibilityReason(repoInfo, quietHours);
+        if (repoSkipReason) {
+            results.repoSkips.push({ repo, reason: repoSkipReason });
             continue;
         }
 
