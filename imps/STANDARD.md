@@ -8,7 +8,7 @@ Imps are headless `claude -p` workers, run through 9router, that each take **one
 brief.md ──► imp.mjs run ──► worktree + claude -p (clean env, 9router) ──► local commits
                                                                               │
               imp.mjs gate ◄──────────────────────────────────────────────────┘
-              (tests in Docker, diff size, scope, deny paths, trailer)
+              (declared test/lint commands, diff size, scope, deny paths, trailer)
                   │ pass                       │ fail
                   ▼                            ▼
               imp.mjs pr  → PR labelled `imp`          ledger → rsi.mjs / next RSI pass
@@ -37,7 +37,7 @@ allow: app/lib/, docs/CHANGELOG.md
 
 **Required front matter:** `repo` and `issue` **must** be present in the YAML front matter and must exactly match the target repository slug and issue number. The dispatcher validates this before any imp run starts; on mismatch it logs `invalid-brief`, relabels the issue `imp:failed`, and posts a correction comment. It does not create a ledger run/claim or increment the issue attempt count.
 
-Front matter values are parsed from the brief. The effective gate cap is `max(brief.maxLines, DEFAULTS.maxLines)` (180) plus any explicit fix-round slack: a brief cap below 180 is floored to 180, a higher cap is honored, and a non-numeric cap fails closed. `maxLines` counts the imp-authored added+deleted lines (runner formatting excluded). `allow` is the path prefixes the diff may touch. `{wt}` becomes the worktree path. Mount `node_modules` as a named volume (`imp-nm-<repo>`) so Linux installs never land in the Windows worktree. The runner runs `test` itself in the gate; the imp's own "tests pass" claim is never trusted. Front-matter values are taken verbatim; inline `#` comments are unsupported.
+Front matter values are parsed from the brief. The effective gate cap is `max(brief.maxLines, DEFAULTS.maxLines)` (180) plus any explicit fix-round slack: a brief cap below 180 is floored to 180, a higher cap is honored, and a non-numeric cap fails closed. `maxLines` counts the imp-authored added+deleted lines (runner formatting excluded). `allow` is the path prefixes the diff may touch. `{wt}` becomes the worktree path. The gate executes `test:` and `lint:` literally as shell commands in the worktree (`spawnSync` with `gateShell()`); it does **not** add a Docker wrapper. Prefer the repository's native focused command (for example, `npm test -- <focused-file>`) when the runner toolchain is available. Include `docker run` explicitly only when the brief requires a containerized toolchain; then mount `{wt}` and a named `imp-nm-<repo>` volume so Linux installs do not land in a Windows worktree. A shell exit 127 is the command-not-found class: verify the exact executable and capture stderr rather than treating it as an assertion failure. The gate runs the declared test/lint commands itself; the imp's own "tests pass" claim is never trusted. Front-matter values are taken verbatim; inline `#` comments are unsupported.
 
 ## The queue and the hourly dispatcher
 
