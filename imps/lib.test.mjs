@@ -1218,10 +1218,10 @@ test('isEpicIssueBody recognizes only the explicit tracking-only marker and leav
 });
 
 test('effectiveMaxLines: a brief cap never goes below the default, and slack is added on top', () => {
-    assert.equal(effectiveMaxLines('45'), 150, 'a too-tight cap is lifted to the default');
-    assert.equal(effectiveMaxLines(undefined), 150);
+    assert.equal(effectiveMaxLines('45'), 180, 'a too-tight cap is lifted to the default');
+    assert.equal(effectiveMaxLines(undefined), 180);
     assert.equal(effectiveMaxLines('250'), 250, 'a higher cap is kept');
-    assert.equal(effectiveMaxLines('45', '20'), 170, 'slack applies after the floor');
+    assert.equal(effectiveMaxLines('45', '20'), 200, 'slack applies after the floor');
     assert.ok(Number.isNaN(effectiveMaxLines('abc')), 'a non-numeric cap still fails the gate instead of passing');
 });
 
