@@ -109,7 +109,7 @@ weeks? Which kinds count as "small"? Should audit/security issues get their own 
 ### Default maxLines drift (2026-11-02)
 
 - PR #211 raised `DEFAULTS.maxLines` from 150 to 180, but the tests and `STANDARD.md`/`README.md` still encoded 150. Exact-head Imp kit run [41372640309](https://github.com/nitsuah/.github/actions/runs/41372640309) exposed three failures: two stale maxLines expectations and a `groom-lib.test.mjs` fixture that omitted the trusted author now required by `briefFromComments`.
-- Recovery in this PR updates the default assertions/docs to 180 and makes the brief fixture explicitly trusted, with a negative assertion for an untrusted author. No runtime code or authorization behavior changes.
+- Recovery in this PR updates the default assertions/docs to 180, makes the brief fixture explicitly trusted with an untrusted-author negative assertion, and adds README default verification to `check-defaults.mjs`, now run in Imp kit CI. No runtime code or authorization behavior changes.
 
 ### Child acceptance after PR closure (2026-10-31)
 
