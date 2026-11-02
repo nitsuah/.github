@@ -26,7 +26,7 @@ export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists 
 export function uniqueImpBranchName(issue, runSuffix, exists = () => false) {
     const issueId = String(issue ?? '').trim();
     const suffix = String(runSuffix ?? '').trim();
-    if (!/^\\d+$/.test(issueId) || !/^[A-Za-z0-9._-]+$/.test(suffix)) {
+    if (!/^\d+$/.test(issueId) || !/^[A-Za-z0-9._-]+$/.test(suffix)) {
         throw new Error('Invalid issue or run suffix for Imp branch name');
     }
     if (typeof exists !== 'function') throw new TypeError('exists must be a function');
