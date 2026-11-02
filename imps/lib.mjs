@@ -287,7 +287,7 @@ export function writeStreamJsonMessage(stream, message, state) {
 // The kit's own defaults and each repo's guardrail config are off limits: an
 // imp that can edit its own limits can widen the gate it is judged by (#57).
 const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
-    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|mix\.lock|pubspec\.lock|podfile\.lock|gradle\.lockfile|packages\.lock\.json|package\.resolved|flake\.lock|deno\.lock)$/i,
     /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/, /(^|\/)CODEOWNERS$/];
 
 // An unscoped brief (no `allow:`) must not reach the kit itself. Kit self-work
