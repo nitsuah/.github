@@ -21,7 +21,7 @@ export const DEFAULTS = {
     fixMaxRounds: 3,
 
     // Repo cooldown after two straight gate failures (ms)
-    cooldownMs: 12 * 3600_000,
+    cooldownMs: 24 * 3600_000,
 
     // Per-issue attempt cap: this many failed/killed runs on one issue (since its
     // latest brief) and the dispatcher stops, labels it imp:needs-human, and

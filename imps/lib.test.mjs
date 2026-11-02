@@ -906,11 +906,11 @@ test('infraRuns counts only infra-flagged runs of this issue inside the window',
     assert.ok(INFRA_RETRY_CAP >= 2);
 });
 
-test('loopBudget cooldown follows defaults.cooldownMs: two straight gate failures cool a repo for 12 h, not 24', () => {
+test('loopBudget cooldown follows defaults.cooldownMs: two straight gate failures cool a repo for 24 h', () => {
     const now = Date.parse('2026-10-29T12:00:00Z');
     const fail = (id, hoursAgo) => ({ id, repo: 'r', issue: 1, startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons: ['x'] } });
-    assert.ok(loopBudget([fail('imp_1', 14), fail('imp_2', 10)], now).cooldown.r, 'last failure 10 h ago: still cooling');
-    assert.equal(loopBudget([fail('imp_1', 20), fail('imp_2', 13)], now).cooldown.r, undefined, 'last failure 13 h ago: cooled down');
+    assert.ok(loopBudget([fail('imp_1', 26), fail('imp_2', 23)], now).cooldown.r, 'last failure 23 h ago: still cooling');
+    assert.equal(loopBudget([fail('imp_1', 30), fail('imp_2', 25)], now).cooldown.r, undefined, 'last failure 25 h ago: cooled down');
 });
 
 test('isSizeOnlyFailure is true only when every failure reason is the diff cap', () => {
