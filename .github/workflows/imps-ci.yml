@@ -23,6 +23,8 @@ jobs:
           node-version: '22'
       - name: Run Imp kit unit tests
         run: node --test imps/*.test.mjs
+      - name: Check documented defaults
+        run: node imps/check-defaults.mjs
       - name: Syntax-check all Imp kit modules
         run: |
           for f in imps/*.mjs; do
