@@ -13,6 +13,23 @@ import { BRIEF_MARK, briefFromComments, parseBrief } from './lib.mjs';
 // wiring are written (vigil#359: 56 inline lines, 136-line diff; fire#335: 107 lines, 160-line diff).
 export const SIZE_FACTOR = 2.5;
 
+
+/**
+ * Accept the standalone brief file or the marker-first comment as posted to GitHub.
+ * Match briefFromComments()' first-fence contract, but fail closed when the
+ * comment wrapper is malformed instead of parsing the marker as front matter.
+ */
+export function extractBriefInput(text) {
+    const input = String(text);
+    const trimmed = input.trimStart();
+    if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
+
+    const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
+    const fenced = commentBody.match(/\x60{3}(?:markdown|md)?\n([\s\S]*?)\n\x60{3}/);
+    if (!fenced) return { brief: '', error: 'unclosed or missing outer fence' };
+    return { brief: fenced[1].trim() + '\n', error: null };
+}
+
 export function codeLines(body) {
     let inside = false;
     let n = 0;
@@ -27,7 +44,9 @@ export function codeLines(body) {
 export function lintBrief(text, { exists } = {}) {
     const problems = [];
     const warnings = [];
-    const { meta, body } = parseBrief(text);
+    const extracted = extractBriefInput(text);
+    if (extracted.error) return { meta: {}, problems: [extracted.error], warnings: [] };
+    const { meta, body } = parseBrief(extracted.brief);
     for (const k of ['repo', 'issue', 'test', 'maxLines', 'allow']) if (!meta[k]) problems.push(`missing front matter: ${k}`);
     for (const k of ['allow', 'maxLines', 'repo', 'issue']) if (/\s#\s/.test(meta[k] || '')) problems.push(`trailing # comment in ${k}`);
     const max = Number(meta.maxLines);
