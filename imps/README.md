@@ -103,7 +103,7 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 | `no-brief` | an `imp:ready` issue with no brief gets one explanatory comment (not repeated) |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |
 
-Defaults (from `defaults.mjs`): per-repo **6**, concurrency **6**, wip **12**, daily **60**, maxLines fallback **150**, auto-merge trust **3** clean merges.
+Defaults (from `defaults.mjs`): per-repo **6**, concurrency **6**, wip **12**, daily **60**, maxLines fallback **180**, auto-merge trust **3** clean merges.
 
 ## Ledger outcomes
 
