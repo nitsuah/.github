@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, SERVED_MODEL_PROBE_FAILED, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -45,6 +45,7 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     const recovery = loopBudget([
         { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
         { id: 'imp_8', repo: 'fire', startedAt: '2026-10-23T10:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
+        { id: 'imp_9', repo: 'fire', startedAt: '2026-10-23T11:00:00Z', outcome: SERVED_MODEL_PROBE_FAILED, gate: null },
     ], now);
     assert.deepEqual(Object.keys(recovery.cooldown), []);
 });
@@ -911,6 +912,7 @@ test('issueFailures counts ended runs without a PR since the latest brief', () =
     // a run that never started (no claude binary) is not the issue's failure
     assert.equal(issueFailures([run('imp_6', '2026-10-23T00:00:00Z', { metrics: { end: 'spawn-failed' } })], 'a', 5), 0);
     assert.equal(issueFailures([run('imp_7', '2026-10-23T01:00:00Z', { outcome: COMMIT_RECOVERY_FAILED })], 'a', 5), 0);
+    assert.equal(issueFailures([run('imp_8', '2026-10-23T02:00:00Z', { outcome: SERVED_MODEL_PROBE_FAILED })], 'a', 5), 0);
 });
 
 test('gateShell: Git Bash on Windows (not WSL bash), IMPS_SHELL override, default shell elsewhere', () => {
