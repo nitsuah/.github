@@ -331,6 +331,142 @@ test('gate fails on size, scope, deny paths, trailer and tests', () => {
     assert.equal(f.lines, 40);
 });
 
+test('gate rejects unresolved conflict markers in added diff lines', () => {
+    const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
+    // Added line with <<<<<<< marker
+    const diff1 = `diff --git a/app/lib/a.js b/app/lib/a.js
+index 123..456 100644
+--- a/app/lib/a.js
++++ b/app/lib/a.js
+@@ -1,3 +1,5 @@
+ function foo() {
++<<<<<<< HEAD
++    return 1;
++=======
++    return 2;
++>>>>>>> branch
+ }
+`;
+    const g1 = gate({ numstat: '5\t0\tapp/lib/a.js', commits: [ok], testExit: 0, diff: diff1 });
+    assert.equal(g1.pass, false);
+    assert.ok(g1.reasons.includes('unresolved conflict marker in app/lib/a.js'));
+
+    // Multiple markers in same file
+    const diff2 = `diff --git a/app/lib/b.js b/app/lib/b.js
+index 123..456 100644
+--- a/app/lib/b.js
++++ b/app/lib/b.js
+@@ -1,2 +1,6 @@
+ function bar() {
++<<<<<<< HEAD
++    return 1;
++=======
++    return 2;
++>>>>>>> branch
+ }
+`;
+    const g2 = gate({ numstat: '5\t0\tapp/lib/b.js', commits: [ok], testExit: 0, diff: diff2 });
+    assert.equal(g2.pass, false);
+    assert.ok(g2.reasons.includes('unresolved conflict marker in app/lib/b.js'));
+
+    // Multiple files with markers
+    const diff3 = `diff --git a/app/lib/a.js b/app/lib/a.js
+index 123..456 100644
+--- a/app/lib/a.js
++++ b/app/lib/a.js
+@@ -1,3 +1,5 @@
+ function foo() {
++<<<<<<< HEAD
++    return 1;
++=======
++    return 2;
++>>>>>>> branch
+ }
+diff --git a/app/lib/c.js b/app/lib/c.js
+index 123..456 100644
+--- a/app/lib/c.js
++++ b/app/lib/c.js
+@@ -1,2 +1,4 @@
+ function baz() {
++>>>>>>> other
+ }
+`;
+    const g3 = gate({ numstat: '5\t0\tapp/lib/a.js\n3\t0\tapp/lib/c.js', commits: [ok], testExit: 0, diff: diff3 });
+    assert.equal(g3.pass, false);
+    assert.equal(g3.reasons.filter(r => r.startsWith('unresolved conflict marker')).length, 2);
+    assert.ok(g3.reasons.includes('unresolved conflict marker in app/lib/a.js'));
+    assert.ok(g3.reasons.includes('unresolved conflict marker in app/lib/c.js'));
+
+    // False positive: marker text inside a normal added source string (not a conflict marker)
+    const diff4 = `diff --git a/app/lib/d.js b/app/lib/d.js
+index 123..456 100644
+--- a/app/lib/d.js
++++ b/app/lib/d.js
+@@ -1,2 +1,4 @@
+ function qux() {
++    const msg = '<<<<<<< This is not a marker';
++    console.log(msg);
+ }
+`;
+    const g4 = gate({ numstat: '3\t0\tapp/lib/d.js', commits: [ok], testExit: 0, diff: diff4 });
+    assert.equal(g4.pass, true, g4.reasons.join());
+
+    // False positive: marker in removed line (not added)
+    const diff5 = `diff --git a/app/lib/e.js b/app/lib/e.js
+index 123..456 100644
+--- a/app/lib/e.js
++++ b/app/lib/e.js
+@@ -1,4 +1,2 @@
+ function quux() {
+-<<<<<<< HEAD
+-    return 1;
+-=======
+-    return 2;
+ }
+`;
+    const g5 = gate({ numstat: '0\t4\tapp/lib/e.js', commits: [ok], testExit: 0, diff: diff5 });
+    assert.equal(g5.pass, true, g5.reasons.join());
+
+    // False positive: marker in context line (not added)
+    const diff6 = `diff --git a/app/lib/f.js b/app/lib/f.js
+index 123..456 100644
+--- a/app/lib/f.js
++++ b/app/lib/f.js
+@@ -1,5 +1,6 @@
+ function corge() {
++    return 3;
+     <<<<<<< HEAD
+     return 1;
+     =======
+     return 2;
+     >>>>>>> branch
+ }
+`;
+    const g6 = gate({ numstat: '1\t0\tapp/lib/f.js', commits: [ok], testExit: 0, diff: diff6 });
+    assert.equal(g6.pass, true, g6.reasons.join());
+
+    // False positive: +++ header line that happens to contain marker-like text
+    const diff7 = `diff --git a/app/lib/g.js b/app/lib/g.js
+index 123..456 100644
+--- a/app/lib/g.js
++++ b/app/lib/g.js<<<<<<< header
+@@ -1,2 +1,3 @@
+ function grault() {
++    return 1;
+ }
+`;
+    const g7 = gate({ numstat: '1\t0\tapp/lib/g.js', commits: [ok], testExit: 0, diff: diff7 });
+    assert.equal(g7.pass, true, g7.reasons.join());
+
+    // No diff provided - should not crash
+    const g8 = gate({ numstat: '1\t0\ta.js', commits: [ok], testExit: 0 });
+    assert.equal(g8.pass, true);
+
+    // Empty diff
+    const g9 = gate({ numstat: '', commits: [ok], testExit: 0, diff: '' });
+    assert.equal(g9.pass, true);
+});
+
 test('report tallies runs, tokens, error kinds and recurring gate failures', () => {
     const rows = [
         { id: 'r1', repo: 'fire', issue: 166, model: 'MAX', metrics: { turns: 47, served: ['a', 'b'], tokens: { input: 788, cacheRead: 0, output: 5 }, errorKinds: { 'edit-miss': 7 } }, gate: { pass: false, reasons: ['diff 129 lines > 40'] } },

@@ -319,7 +319,7 @@ export function effectiveMaxLines(metaMax, slack = 0) {
     return (Number.isNaN(n) ? n : Math.max(n, DEFAULTS.maxLines)) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -343,7 +343,43 @@ export function gate({ numstat, commits, testExit, dirty = false, maxLines = DEF
     // on: it is the same uncommitted-edit cause wearing another name (#53).
     if (testExit !== 0 && !(testExit == null && dirty && !commits.length))
         reasons.push(testExit == null ? 'tests not run' : `tests exit ${testExit}`);
+    // Reject unresolved conflict markers in added diff lines.
+    if (diff) {
+        const markerPaths = findConflictMarkers(diff);
+        for (const path of markerPaths) reasons.push(`unresolved conflict marker in ${path}`);
+    }
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
+}
+
+function findConflictMarkers(diff) {
+    const paths = new Set();
+    const lines = diff.split('\n');
+    let currentPath = null;
+    let inHunk = false;
+    for (const line of lines) {
+        if (line.startsWith('+++ ')) {
+            // New file path in diff header
+            const match = line.match(/^\+\+\+\s+(.+)/);
+            if (match) {
+                currentPath = match[1].replace(/^a\//, '').replace(/^b\//, '');
+            }
+        } else if (line.startsWith('--- ')) {
+            // Old file path - don't track
+        } else if (line.startsWith('@@ ')) {
+            inHunk = true;
+        } else if (inHunk) {
+            if (line.startsWith('+')) {
+                const content = line.slice(1);
+                if (content.startsWith('<<<<<<< ') || content.startsWith('=======') || content.startsWith('>>>>>>> ')) {
+                    if (currentPath) paths.add(currentPath);
+                }
+            } else if (!line.startsWith(' ') && !line.startsWith('-')) {
+                // Non-diff line ends hunk context
+                inHunk = false;
+            }
+        }
+    }
+    return [...paths].sort();
 }
 
 // Refuse to open a PR for an issue that closed while the imp was working,
