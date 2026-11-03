@@ -8,7 +8,7 @@ import { join } from 'node:path';
 const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
 const previousHome = process.env.IMPS_HOME;
 process.env.IMPS_HOME = tempHome;
-const { runClaude, resolveMaxTurns } = await import('./runner.mjs');
+const { runClaude, resolveMaxTurns, probeServedModel } = await import('./runner.mjs');
 
 after(() => {
     if (previousHome === undefined) delete process.env.IMPS_HOME;
@@ -122,4 +122,83 @@ test('opt-in stream-json delivers initial prompt and the third-repeat nudge to t
     assert.equal(received[0].message.content, prompt);
     assert.equal(received[1].type, 'user');
     assert.match(received[1].message.content, /^Repeated missing-path:/);
+});
+
+test('served-model probe compares configured and served IDs with a bounded Anthropic request', async () => {
+    let seen;
+    const result = await probeServedModel({
+        baseUrl: 'https://router.example/v1/',
+        key: 'test-key',
+        configuredModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+        timeoutMs: 1000,
+        fetchImpl: async (url, init) => {
+            seen = { url, init };
+            return { ok: true, status: 200, json: async () => ({ model: 'nvidia/nemotron-3-ultra-550b-a55b' }) };
+        },
+    });
+    assert.deepEqual(result, {
+        pass: true,
+        configuredModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+        servedModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+        reason: null,
+    });
+    assert.equal(seen.url, 'https://router.example/v1/messages');
+    assert.equal(seen.init.method, 'POST');
+    assert.equal(seen.init.headers['x-api-key'], 'test-key');
+    assert.equal(seen.init.headers['anthropic-version'], '2023-06-01');
+    const body = JSON.parse(seen.init.body);
+    assert.equal(body.model, 'nvidia/nemotron-3-ultra-550b-a55b');
+    assert.equal(body.max_tokens, 1);
+    assert.deepEqual(body.messages, [{ role: 'user', content: 'Reply with OK.' }]);
+    assert.ok(seen.init.signal instanceof AbortSignal);
+});
+
+test('served-model probe fails closed on identity mismatch', async () => {
+    const result = await probeServedModel({
+        baseUrl: 'https://router.example/v1',
+        key: 'test-key',
+        configuredModel: 'configured-model',
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ model: 'different-served-model' }) }),
+    });
+    assert.deepEqual(result, {
+        pass: false,
+        configuredModel: 'configured-model',
+        servedModel: 'different-served-model',
+        reason: 'served-model-mismatch',
+    });
+});
+
+test('served-model probe fails closed on malformed identity and network errors', async () => {
+    const malformed = await probeServedModel({
+        baseUrl: 'https://router.example/v1',
+        key: 'test-key',
+        configuredModel: 'configured-model',
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ id: 'no-model-field' }) }),
+    });
+    assert.equal(malformed.reason, 'probe-model-missing');
+    assert.equal(malformed.servedModel, null);
+
+    const network = await probeServedModel({
+        baseUrl: 'https://router.example/v1',
+        key: 'test-key',
+        configuredModel: 'configured-model',
+        fetchImpl: async () => { throw new Error('do not expose this secret'); },
+    });
+    assert.deepEqual(network, {
+        pass: false,
+        configuredModel: 'configured-model',
+        servedModel: null,
+        reason: 'probe-network-error',
+    });
+});
+
+test('served-model probe does not call fetch without router credentials', async () => {
+    let called = false;
+    const result = await probeServedModel({
+        baseUrl: 'https://router.example/v1',
+        configuredModel: 'configured-model',
+        fetchImpl: async () => { called = true; },
+    });
+    assert.equal(called, false);
+    assert.equal(result.reason, 'router-config-missing');
 });
