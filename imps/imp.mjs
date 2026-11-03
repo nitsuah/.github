@@ -184,13 +184,13 @@ async function runGate(id) {
         process.stdout.write(p.stdout || '');
         process.stderr.write(p.stderr || '');
         if (key) {
-            tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\\n');
+            tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
             if (p.status !== 0 || p.signal || p.error) {
                 ends[key] = {
                     ...(p.status !== null && p.status !== undefined ? { exitCode: p.status } : {}),
                     ...(p.signal ? { signal: p.signal } : {}),
                     ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}),
-                    diagnostic: extractFailureDiagnostic([p.stdout, p.stderr].filter(Boolean).join('\\n'), id, r.worktree),
+                    diagnostic: extractFailureDiagnostic([p.stdout, p.stderr].filter(Boolean).join('\n'), id, r.worktree),
                 };
             }
         }
@@ -206,7 +206,7 @@ async function runGate(id) {
         shell(formatCmd);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
-            git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\\n\\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
+            git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
             formatted = true;
         }
     }
@@ -233,7 +233,7 @@ async function runGate(id) {
                 'Create exactly one new commit with subject: imp: work for #' + r.issue + ' (commit recovery)',
                 'Include this exact trailer: Co-Authored-By: 9router imp <noreply@anthropic.com>',
                 'Do not amend, rebase, push, run tests/lint, or modify source files. Stop after the commit and report its SHA.'
-            ].join('\\n');
+            ].join('\n');
             try {
                 recoveryMetrics = await runClaude({
                     cwd: r.worktree,
@@ -293,7 +293,7 @@ async function runGate(id) {
         shell(formatCmd);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
-            const style = git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\\n\\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
+            const style = git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
             if (!style.code) formatted = true;
         }
     }
@@ -301,8 +301,8 @@ async function runGate(id) {
     const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', r.baseSha + '..HEAD').out;
     const diff = git(r.worktree, 'diff', '--no-renames', r.baseSha + '..HEAD').out;
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', r.baseSha + '..HEAD').out;
-    const commits = log.split('\\0').map((s) => s.trim()).filter(Boolean)
-        .map((s) => s.split('\\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
+    const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
+        .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
     const dirty = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
     let lintExit = null;
