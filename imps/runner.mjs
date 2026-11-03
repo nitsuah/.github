@@ -199,6 +199,49 @@ export function cleanEnv(src = process.env, settings) {
     return env;
 }
 
+export async function probeServedModel({ baseUrl, key, configuredModel, fetchImpl = globalThis.fetch, timeoutMs = 5000 } = {}) {
+    const configured = typeof configuredModel === 'string' ? configuredModel.trim() : '';
+    if (!baseUrl || !key || !configured || typeof fetchImpl !== 'function') {
+        return { pass: false, configuredModel: configured || null, servedModel: null, reason: 'router-config-missing' };
+    }
+    const normalizedBase = String(baseUrl).replace(/\\/+$/, '');
+    const url = normalizedBase.endsWith('/messages') ? normalizedBase : normalizedBase + '/messages';
+    let response;
+    try {
+        response = await fetchImpl(url, {
+            method: 'POST',
+            headers: {
+                'x-api-key': key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: configured,
+                max_tokens: 1,
+                messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    } catch {
+        return { pass: false, configuredModel: configured, servedModel: null, reason: 'probe-network-error' };
+    }
+    if (!response?.ok) {
+        return { pass: false, configuredModel: configured, servedModel: null, reason: 'probe-http-' + String(response?.status || 'unknown') };
+    }
+    let body;
+    try {
+        body = await response.json();
+    } catch {
+        return { pass: false, configuredModel: configured, servedModel: null, reason: 'probe-invalid-json' };
+    }
+    const servedModel = typeof body?.model === 'string' ? body.model.trim() : '';
+    if (!servedModel) {
+        return { pass: false, configuredModel: configured, servedModel: null, reason: 'probe-model-missing' };
+    }
+    const pass = servedModel === configured;
+    return { pass, configuredModel: configured, servedModel, reason: pass ? null : 'served-model-mismatch' };
+}
+
 // One headless `claude -p` run. Streams the transcript to `transcript`,
 // prints tool calls, enforces the wall-clock limit, and returns the summary.
 // Never useful to a worker, and each is a way out of the worktree.
