@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -677,10 +677,17 @@ for (const i of pickable()) {
     const brief = briefFromComments(comments, { allowedAuthors: briefAuthors });
     if (!brief) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
+        if (!dry && missingBriefRequiresUnready(i.labels, brief)) {
+            try {
+                gh(['issue', 'edit', String(i.number), '-R', `${o.owner}/${i.repo}`, '--remove-label', 'imp:ready']);
+                log({ event: 'unready-no-brief', repo: i.repo, number: i.number });
+            } catch (e) {
+                log({ event: 'label-cleanup-error', repo: i.repo, number: i.number, out: String(e.message).slice(-300) });
+            }
+        }
         if (!hasMark(comments, NO_BRIEF_MARK)) {
             try {
-                comment(i.repo, i.number, `${NO_BRIEF_MARK}
-This is labelled \`imp:ready\` but has no brief comment, so no imp will run on it. A brief is a comment starting with \`<!-- imp-brief -->\` (see imps/STANDARD.md). Not repeating this note.`);
+                comment(i.repo, i.number, NO_BRIEF_MARK + "\nThis issue was labelled `imp:ready` but has no trusted marker-first brief comment, so the dispatcher skipped it. Keep `imp:ready` off until a trusted comment starting with `<!-- imp-brief -->` is added (see imps/STANDARD.md). Not repeating this note.");
             } catch (e) {
                 log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
             }

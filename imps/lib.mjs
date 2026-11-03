@@ -598,6 +598,11 @@ export function trustedBriefComment(comments = [], { allowedAuthors = ['nitsuah'
     }) || null;
 }
 
+export function missingBriefRequiresUnready(labels = [], brief = null) {
+    if (brief) return false;
+    return labels.some((label) => (typeof label === 'string' ? label : label?.name) === 'imp:ready');
+}
+
 export function briefFromComments(comments = [], options = {}) {
     const c = trustedBriefComment(comments, options);
     if (!c) return null;
