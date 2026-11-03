@@ -43,8 +43,8 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
 
     const recovery = loopBudget([
-        { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
-        { id: 'imp_8', repo: 'fire', startedAt: '2026-10-23T10:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
+        { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },
+        { id: 'imp_8', repo: 'fire', startedAt: '2026-10-23T10:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },
     ], now);
     assert.deepEqual(Object.keys(recovery.cooldown), []);
 });
@@ -678,21 +678,24 @@ test('commit recovery prompts once only when the worktree is dirty', () => {
     assert.equal(shouldPromptCommitRecovery({}), false);
 });
 
-test('commit recovery requires exactly one non-empty commit and clean porcelain status', () => {
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true }), {
-        pass: true, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, reason: null,
+test('commit recovery requires exactly one non-empty commit, clean status, and the exact trailer', () => {
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true, trailerValid: true }), {
+        pass: true, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, trailerValid: true, reason: null,
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', commitCount: 0, dirty: false, changed: true }), {
-        pass: false, newCommit: false, exactlyOneCommit: false, clean: true, hasChanges: true, reason: 'no new commit',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', commitCount: 0, dirty: false, changed: true, trailerValid: true }), {
+        pass: false, newCommit: false, exactlyOneCommit: false, clean: true, hasChanges: true, trailerValid: true, reason: 'no new commit',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 2, dirty: false, changed: true }), {
-        pass: false, newCommit: true, exactlyOneCommit: false, clean: true, hasChanges: true, reason: 'expected exactly one new commit, found 2',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 2, dirty: false, changed: true, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: false, clean: true, hasChanges: true, trailerValid: true, reason: 'expected exactly one new commit, found 2',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: true, changed: true }), {
-        pass: false, newCommit: true, exactlyOneCommit: true, clean: false, hasChanges: true, reason: 'worktree not clean',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: true, changed: true, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: false, hasChanges: true, trailerValid: true, reason: 'worktree not clean',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: false }), {
-        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: false, reason: 'new commit has no changes',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: false, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: false, trailerValid: true, reason: 'new commit has no changes',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true, trailerValid: false }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, trailerValid: false, reason: 'required commit trailer missing or incorrect',
     });
 });
 

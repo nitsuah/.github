@@ -311,12 +311,13 @@ export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
     return !!dirty && !attempted;
 }
 
-export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty, changed } = {}) {
+export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty, changed, trailerValid } = {}) {
     const newCommit = !!afterHead && afterHead !== beforeHead;
     const exactlyOneCommit = commitCount === 1;
     const clean = !dirty;
     const hasChanges = !!changed;
-    const pass = newCommit && exactlyOneCommit && clean && hasChanges;
+    const exactTrailer = trailerValid === true;
+    const pass = newCommit && exactlyOneCommit && clean && hasChanges && exactTrailer;
     const reason = pass
         ? null
         : !newCommit
@@ -325,8 +326,10 @@ export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty
                 ? `expected exactly one new commit, found ${commitCount}`
                 : !clean
                     ? 'worktree not clean'
-                    : 'new commit has no changes';
-    return { pass, newCommit, exactlyOneCommit, clean, hasChanges, reason };
+                    : !hasChanges
+                        ? 'new commit has no changes'
+                        : 'required commit trailer missing or incorrect';
+    return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
 }
 
 // The pre-push gate. Deterministic: numstat lines from
@@ -549,7 +552,7 @@ export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && r.outcome !== COMMIT_RECOVERY_FAILED && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }

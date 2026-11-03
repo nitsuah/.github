@@ -127,11 +127,12 @@ test('opt-in stream-json delivers initial prompt and the third-repeat nudge to t
 test('commit-recovery claim is atomic, expires, and does not retry a finalized attempt', () => {
     const id = 'imp_commit_recovery_claim_' + Date.now();
     const now = Date.parse('2026-11-03T10:00:00Z');
-    appendRow({ id, repo: 'fire', issue: 1, startedAt: new Date(now).toISOString() });
+    appendRow({ id, repo: 'fire', issue: 1, outcome: 'commit-recovery-failed', startedAt: new Date(now).toISOString() });
 
     const first = claimCommitRecovery(id, now);
     assert.equal(first.claimed, true);
     assert.equal(first.row.commitRecovery.inProgress, true);
+    assert.equal(first.row.outcome, null);
 
     const second = claimCommitRecovery(id, now + 1000);
     assert.equal(second.claimed, false);

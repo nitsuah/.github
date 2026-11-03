@@ -170,6 +170,7 @@ export function claimCommitRecovery(id, now = Date.now()) {
         if (existing?.attempted && !existing.inProgress) return {};
         claimed = true;
         return {
+            outcome: null,
             commitRecovery: {
                 attempted: true,
                 pass: null,

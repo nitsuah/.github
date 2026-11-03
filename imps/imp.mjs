@@ -236,9 +236,9 @@ async function runGate(id) {
                 update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
                 return COMMIT_RECOVERY_FAILED;
             }
-        } else {
-            commitRecovery = claim.row.commitRecovery;
+            return COMMIT_RECOVERY_IN_PROGRESS;
         }
+        commitRecovery = claim.row.commitRecovery;
         const claimedAt = claim.claimedAt;
         const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         const recoveryModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
@@ -281,7 +281,10 @@ async function runGate(id) {
         const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
         const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
         const changed = Boolean(recoveryDiff.trim());
-        const verified = verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty: Boolean(dirtyAfter), changed });
+        const recoveryMessage = commitCount === 1 ? git(r.worktree, 'log', '-1', '--format=%B').out : '';
+        const requiredTrailer = 'Co-Authored-By: 9router imp <noreply@anthropic.com>';
+        const trailerValid = recoveryMessage.trimEnd().split(/\r?\n/).at(-1) === requiredTrailer;
+        const verified = verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty: Boolean(dirtyAfter), changed, trailerValid });
         const pass = !recoveryError && verified.pass;
         const servedModel = Array.isArray(recoveryMetrics?.served) ? (recoveryMetrics.served[0] || null) : (recoveryMetrics?.served || null);
         const recovery = {
@@ -295,6 +298,7 @@ async function runGate(id) {
             clean: !dirtyAfter,
             changed,
             commitCount,
+            trailerValid,
             reason: pass ? null : (recoveryError || verified.reason),
             configuredModel: recoveryModel || null,
             servedModel,
@@ -366,7 +370,10 @@ async function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
+    update(id, (current) => ({
+        ...(current.outcome === COMMIT_RECOVERY_FAILED ? { outcome: null } : {}),
+        gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
+    }));
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }

@@ -431,7 +431,7 @@ async function work(issue) {
                     ? 'The imp:working label was removed; the issue is left unlabelled.'
                     : 'Removal of imp:working was not confirmed after three attempts; the label may remain, but the failure marker prevents automatic requeue until a newer claim is posted.';
                 try {
-                    note(repo, number, COMMIT_RECOVERY_FAILED_MARK + '\\nCommit recovery for run `' + id + '` failed: ' + reason + '. No normal gate ran. This is the distinct `commit-recovery-failed` outcome and does not consume the issue attempt or repo cooldown. ' + labelState + ' Inspect the worktree and requeue only after a corrected brief/manual recovery.');
+                    note(repo, number, COMMIT_RECOVERY_FAILED_MARK + String.fromCharCode(10) + 'Commit recovery for run `' + id + '` failed: ' + reason + '. No normal gate ran. This is the distinct `commit-recovery-failed` outcome and does not consume the issue attempt or repo cooldown. ' + labelState + ' Inspect the worktree and requeue only after a corrected brief/manual recovery.');
                 } catch (e) {
                     log({ event: 'commit-recovery-note-error', repo, number, id, error: String(e.message).slice(0, 200) });
                 }
