@@ -1328,8 +1328,9 @@ export function formatFailureDiagnostic(diag) {
 
 export function failureDiagnosticSummary(gate) {
     const parts = [];
-    const testDiag = gate?.testExit != null && gate.testExit !== 0 ? gate.testEnd?.diagnostic : null;
-    const lintDiag = gate?.lintExit != null && gate.lintExit !== 0 ? gate.lintEnd?.diagnostic : null;
+    const failedStep = (exit, end) => exit != null ? exit !== 0 : Boolean(end?.signal || end?.error);
+    const testDiag = failedStep(gate?.testExit, gate?.testEnd) ? gate?.testEnd?.diagnostic : null;
+    const lintDiag = failedStep(gate?.lintExit, gate?.lintEnd) ? gate?.lintEnd?.diagnostic : null;
     if (testDiag?.kind === 'test') parts.push('test: ' + formatFailureDiagnostic(testDiag));
     if (lintDiag?.kind === 'lint') parts.push('lint: ' + formatFailureDiagnostic(lintDiag));
     if (!parts.length) return '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';

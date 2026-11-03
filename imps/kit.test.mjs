@@ -68,3 +68,11 @@ test('dispatch skips missing target checkouts before pickIssues and logs only lo
     const preflightBlock = dispatch.slice(preflightAt, pickAt);
     assert.doesNotMatch(preflightBlock, /\b(?:comment|relabel|work)\s*\(/, 'missing checkout handling must not comment, relabel, or claim');
 });
+
+test('imp gate attaches failure diagnostics to non-zero test/lint command results', () => {
+    const imp = src('imp.mjs');
+    assert.match(imp, /extractFailureDiagnostic/);
+    assert.match(imp, /if \(p\.status !== 0 \|\| p\.signal \|\| p\.error\)/);
+    assert.match(imp, /diagnostic:\s*extractFailureDiagnostic\(/);
+    assert.match(imp, /ends\[key\]\s*=/);
+});
