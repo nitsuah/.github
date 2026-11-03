@@ -248,6 +248,7 @@ function runGate(id) {
         }
     }
     const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
+    const diff = git(r.worktree, 'diff', '--no-renames', `${r.baseSha}..HEAD`).out;
     // Only the imp's own commits must carry the imp trailer: a human or the
     // hypervisor may push a fix to the PR branch between rounds.
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
@@ -265,7 +266,7 @@ function runGate(id) {
         lintExit = shell(meta.lint, 'lint');
     }
     const g = gate({
-        numstat, commits, testExit, dirty: Boolean(dirty),
+        numstat, commits, testExit, dirty: Boolean(dirty), diff,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: effectiveMaxLines(meta.maxLines, o.slack),
