@@ -347,7 +347,7 @@ async function runGate(id) {
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
-    const dirty = git(r.worktree, 'status', '--porcelain').out;
+    const dirtyBeforeChecks = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
     let lintExit = null;
     if (meta.test && commits.length) {
@@ -358,8 +358,11 @@ async function runGate(id) {
         console.log(`lint: ${meta.lint}`);
         lintExit = shell(meta.lint, 'lint');
     }
+    // Tests and lint can create untracked or modify tracked files; gate the final tree.
+    const dirtyAfterChecks = git(r.worktree, 'status', '--porcelain').out;
+    const dirty = Boolean(dirtyBeforeChecks || dirtyAfterChecks);
     const g = gate({
-        numstat, commits, testExit, dirty: Boolean(dirty), diff,
+        numstat, commits, testExit, dirty, diff,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: effectiveMaxLines(meta.maxLines, o.slack),
