@@ -331,6 +331,25 @@ test('gate fails on size, scope, deny paths, trailer and tests', () => {
     assert.equal(f.lines, 40);
 });
 
+test('gate rejects a dirty worktree even when commits exist', () => {
+    const committedDirty = gate({
+        numstat: '1\t0\tapp/lib/privacy.js',
+        commits: [ok],
+        testExit: 0,
+        dirty: true,
+        maxLines: 10,
+        allow: ['app/lib/'],
+    });
+    assert.equal(committedDirty.pass, false);
+    assert.deepEqual(committedDirty.reasons, ['edits left uncommitted']);
+
+    const noCommitDirty = gate({ numstat: '', commits: [], testExit: null, dirty: true });
+    assert.deepEqual(noCommitDirty.reasons, ['edits left uncommitted']);
+
+    const cleanNoCommit = gate({ numstat: '', commits: [], testExit: null, dirty: false });
+    assert.deepEqual(cleanNoCommit.reasons, ['no commits', 'tests not run']);
+});
+
 test('gate rejects unresolved conflict markers in added diff lines', () => {
     const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
     // Added line with <<<<<<< marker
