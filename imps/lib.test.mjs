@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -197,6 +197,13 @@ test('briefFromComments takes the newest marked comment and strips a code fence'
     // Intro prose before the fence, CRLF from GitHub, and a fenced test: command inside.
     const withProse = `${BRIEF_MARK}\r\nImp brief (written by Opus triage).\r\n\r\n\`\`\`markdown\r\n---\r\nrepo: vigil\r\nissue: 277\r\n---\r\nbody\r\n\`\`\`\r\n`;
     assert.equal(briefFromComments([{ author: { login: 'nitsuah' }, body: withProse }]), '---\nrepo: vigil\nissue: 277\n---\nbody\n');
+});
+
+test('missing canonical brief requires removing imp:ready', () => {
+    assert.equal(missingBriefRequiresUnready(['imp:ready'], null), true);
+    assert.equal(missingBriefRequiresUnready([{ name: 'imp:ready' }], null), true);
+    assert.equal(missingBriefRequiresUnready(['bug'], null), false);
+    assert.equal(missingBriefRequiresUnready(['imp:ready'], '---\\nrepo: fire\\nissue: 1\\n---\\nbody'), false);
 });
 
 test('parseBrief reads front matter and leaves the body', () => {
