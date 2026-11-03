@@ -253,7 +253,9 @@ async function runGate(id) {
         }
         const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
-        const verified = verifyCommitRecovery({ beforeHead, afterHead, dirty: Boolean(dirtyAfter) });
+        const recoveryDiff = git(r.worktree, 'diff', '--stat', beforeHead + '..' + afterHead).out;
+        const changed = Boolean(recoveryDiff.trim());
+        const verified = verifyCommitRecovery({ beforeHead, afterHead, dirty: Boolean(dirtyAfter), changed });
         const pass = !recoveryError && verified.pass;
         const servedModel = Array.isArray(recoveryMetrics?.served) ? (recoveryMetrics.served[0] || null) : (recoveryMetrics?.served || null);
         const recovery = {
@@ -262,6 +264,7 @@ async function runGate(id) {
             beforeHead,
             afterHead,
             clean: !dirtyAfter,
+            changed,
             reason: pass ? null : (recoveryError || verified.reason),
             configuredModel: recoveryModel || null,
             servedModel,
