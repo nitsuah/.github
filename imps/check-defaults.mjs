@@ -20,6 +20,7 @@ const need = [
     [`maxLines default ${DEFAULTS.maxLines}`, new RegExp(`maxLines[^\\n]*default[^\\n]*${DEFAULTS.maxLines}|default[^\\n]*${DEFAULTS.maxLines}[^\\n]*maxLines`, 'i')],
     [`autoMergeTrust ${DEFAULTS.autoMergeTrust}`, new RegExp(`(earned.?trust|autoMergeTrust)[^\\n]*${DEFAULTS.autoMergeTrust}|${DEFAULTS.autoMergeTrust}[^\\n]*(clean merged|autoMergeTrust|earned)`, 'i')],
     ['maxTurns ' + DEFAULTS.maxTurns, new RegExp('Turn cap per model run[^\\n]*imp ' + DEFAULTS.maxTurns)],
+    ['repo cooldown ' + (DEFAULTS.cooldownMs / 3600000) + ' h', new RegExp('Repo cooldown[^\\n]*' + (DEFAULTS.cooldownMs / 3600000) + ' h[^\\n]*defaults\\.cooldownMs')],
     ['noEditTurns ' + DEFAULTS.noEditTurns, new RegExp('No-edit fail-fast[^\\n]*' + DEFAULTS.noEditTurns + ' tool calls')],
 ];
 
