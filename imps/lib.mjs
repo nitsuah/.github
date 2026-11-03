@@ -301,10 +301,24 @@ const CODE_EXT = /\.(m?[jt]sx?|cjs|py|go|rs|java|rb|php|sh|ps1|cmd|css|scss|html
 const NON_CODE_RE = /(\.(md|mdx|txt|rst|png|jpe?g|gif|webp|svg|ico|pdf)$|(^|\/)(docs?|screenshots?)\/|(^|\/)(TASKS|CHANGELOG|ROADMAP|README)(\.[a-z]+)?$)/i;
 const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 
-// An imp that edited and verified but never committed is salvageable: the
-// runner commits for it rather than failing a run whose work is already done (#54).
-export function shouldAutoCommit({ impCommits, dirty, testExit } = {}) {
-    return impCommits === 0 && !!dirty && testExit === 0;
+// A dirty worktree gets one commit-only recovery prompt. The caller verifies
+// a new HEAD and a clean porcelain status before allowing the normal gate to run.
+export const COMMIT_RECOVERY_FAILED = 'commit-recovery-failed';
+
+export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
+    return !!dirty && !attempted;
+}
+
+export function verifyCommitRecovery({ beforeHead, afterHead, dirty } = {}) {
+    const newCommit = !!afterHead && afterHead !== beforeHead;
+    const clean = !dirty;
+    const pass = newCommit && clean;
+    return {
+        pass,
+        newCommit,
+        clean,
+        reason: pass ? null : !newCommit ? 'no new commit' : 'worktree not clean',
+    };
 }
 
 // The pre-push gate. Deterministic: numstat lines from
@@ -445,7 +459,8 @@ export function duplicateImpPrs(open = [], merged = []) {
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
     const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && !r.infra && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && !r.infra
+        && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
     // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
     return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
 }
