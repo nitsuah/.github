@@ -304,6 +304,7 @@ const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 // A dirty worktree gets one commit-only recovery prompt. The caller verifies
 // a new HEAD and a clean porcelain status before allowing the normal gate to run.
 export const COMMIT_RECOVERY_FAILED = 'commit-recovery-failed';
+export const SERVED_MODEL_PROBE_FAILED = 'served-model-probe-failed';
 
 export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
     return !!dirty && !attempted;
@@ -461,7 +462,7 @@ export function duplicateImpPrs(open = [], merged = []) {
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
     const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && !r.infra
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && r.outcome !== SERVED_MODEL_PROBE_FAILED && !r.infra
         && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
     // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
     return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
