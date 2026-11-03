@@ -53,7 +53,8 @@ const runsToday = rows().filter((r) => (r.startedAt || '').startsWith(today)).le
 
 // Local cooldowns from this machine's ledger and current kit SHA
 const budget = loopBudget(rows(), Date.now(), { kit: kitSha() });
-const cooldowns = activeCooldowns(budget);
+const SLUG = /^[A-Za-z0-9._-]+$/;
+const cooldowns = activeCooldowns(budget).filter((c) => SLUG.test(c.repo) && c.repo !== '.' && c.repo !== '..');
 const cooldownLines = cooldowns.length
     ? cooldowns.map((c) => `| ${c.repo} | \`${c.cooldownUntil}\` |`).join('\n')
     : '| none | |';
