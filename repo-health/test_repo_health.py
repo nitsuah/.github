@@ -45,6 +45,17 @@ def test_osv_summary_for_tire_line():
     assert "HIGH" in out and "LOW" in out
 
 
+def test_osv_summary_includes_source_path():
+    data = {"results": [{"source": {"type": "lockfile", "path": "backend/package-lock.json"},
+                         "packages": [{"package": {"name": "lodash", "version": "4.17.20", "ecosystem": "npm"},
+                                       "vulnerabilities": [{"id": "GHSA-x", "affected": [{"package": {"name": "lodash"},
+                                           "ranges": [{"events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}],
+                                       "groups": [{"ids": ["GHSA-x"], "max_severity": "7.5"}]}]}]}
+    out = osv.render(osv.findings(data), "sample", 7.0)
+    assert "backend/package-lock.json" in out
+    assert "lockfile" in out
+
+
 def test_osv_summary_empty():
     assert "No known vulnerabilities" in osv.render(osv.findings({}), "fire", 7.0)
 
@@ -52,3 +63,23 @@ def test_osv_summary_empty():
 def test_root_hygiene_never_flags_directories():
     keep, unknown = rh.classify(["src", "stray.txt"], dirs={"src"})
     assert keep == ["src"] and unknown == ["stray.txt"]
+
+
+def test_osv_summary_empty_results_is_clean(tmp_path, monkeypatch, capsys):
+    import sys
+
+    result = tmp_path / "osv.json"
+    result.write_text('{"results": []}', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["osv_summary.py", str(result), "fire"])
+    assert osv.main() == 0
+    assert "No known vulnerabilities" in capsys.readouterr().out
+
+
+def test_osv_summary_invalid_output_is_operational_error(tmp_path, monkeypatch, capsys):
+    import sys
+
+    result = tmp_path / "osv.json"
+    result.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["osv_summary.py", str(result), "fire"])
+    assert osv.main() == 2
+    assert "ERROR: unable to parse OSV scanner output" in capsys.readouterr().err

@@ -58,13 +58,33 @@ jobs:
       - name: Dependency advisories (osv-scanner)
         id: osv
         run: |
+          # Allow repositories without package manifests/lockfiles to produce a valid
+          # empty result. Keep scanner operational errors separate from findings.
           set +e
-          # Exit 1 = vulnerabilities found, 128 = nothing to scan; both are fine here.
           docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:v2.7.0 \
-            scan source -r --format json /src > osv.json 2> osv.err
+            scan source -r --format json --allow-no-lockfiles /src > osv.json 2> osv.err
+          scanner_status=$?
+          set -e
+
+          if [ "$scanner_status" -eq 128 ] && [ ! -s osv.json ]; then
+            printf '{"results":[]}\n' > osv.json
+          elif [ "$scanner_status" -gt 1 ]; then
+            cat osv.err >&2
+            echo "ERROR: OSV-Scanner failed with exit $scanner_status" >&2
+            exit "$scanner_status"
+          fi
+
+          set +e
           python3 .repo-health-kit/repo-health/osv_summary.py osv.json "${GITHUB_REPOSITORY#*/}" \
             --min-severity "${{ inputs.min-severity }}" >> health.md
-          if [ $? -ne 0 ]; then echo "red=true" >> "$GITHUB_OUTPUT"; else echo "red=false" >> "$GITHUB_OUTPUT"; fi
+          summary_status=$?
+          set -e
+          case "$summary_status" in
+            0) echo "red=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "red=true" >> "$GITHUB_OUTPUT" ;;
+            2) echo "ERROR: OSV summary rejected scanner output; refusing to open/close an advisory issue." >&2; exit 2 ;;
+            *) echo "ERROR: unexpected OSV summary exit $summary_status" >&2; exit "$summary_status" ;;
+          esac
           cat health.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open or update the advisory issue
