@@ -687,7 +687,7 @@ for (const i of pickable()) {
         }
         if (!hasMark(comments, NO_BRIEF_MARK)) {
             try {
-                comment(i.repo, i.number, NO_BRIEF_MARK + "\\nThis is labelled `imp:ready` but has no brief comment, so no imp will run on it. A brief is a comment starting with `<!-- imp-brief -->` (see imps/STANDARD.md). Not repeating this note.");
+                comment(i.repo, i.number, NO_BRIEF_MARK + "\nThis is labelled `imp:ready` but has no brief comment, so no imp will run on it. A brief is a comment starting with `<!-- imp-brief -->` (see imps/STANDARD.md). Not repeating this note.");
             } catch (e) {
                 log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
             }
