@@ -486,6 +486,125 @@ index 123..456 100644
     assert.equal(g9.pass, true);
 });
 
+// Exact-seven-equals separator rule: ======= with optional trailing whitespace matches
+test('gate detects exact-seven-equals conflict separator in added lines', () => {
+    const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
+
+    // ======= with trailing spaces - should match
+    const diff1 = `diff --git a/app/lib/a.js b/app/lib/a.js
+index 123..456 100644
+--- a/app/lib/a.js
++++ b/app/lib/a.js
+@@ -1,2 +1,4 @@
+ function foo() {
++=======
++    return 2;
+ }
+`;
+    const g1 = gate({ numstat: '3\t0\tapp/lib/a.js', commits: [ok], testExit: 0, diff: diff1 });
+    assert.equal(g1.pass, false);
+    assert.ok(g1.reasons.includes('unresolved conflict marker in app/lib/a.js'));
+
+    // ======= with trailing tabs - should match
+    const diff2 = `diff --git a/app/lib/b.js b/app/lib/b.js
+index 123..456 100644
+--- a/app/lib/b.js
++++ b/app/lib/b.js
+@@ -1,2 +1,4 @@
+ function bar() {
++=======
++    return 2;
+ }
+`;
+    const g2 = gate({ numstat: '3\t0\tapp/lib/b.js', commits: [ok], testExit: 0, diff: diff2 });
+    assert.equal(g2.pass, false);
+    assert.ok(g2.reasons.includes('unresolved conflict marker in app/lib/b.js'));
+
+    // ======= alone on line - should match
+    const diff3 = `diff --git a/app/lib/c.js b/app/lib/c.js
+index 123..456 100644
+--- a/app/lib/c.js
++++ b/app/lib/c.js
+@@ -1,2 +1,4 @@
+ function baz() {
++=======
+ }
+`;
+    const g3 = gate({ numstat: '2\t0\tapp/lib/c.js', commits: [ok], testExit: 0, diff: diff3 });
+    assert.equal(g3.pass, false);
+    assert.ok(g3.reasons.includes('unresolved conflict marker in app/lib/c.js'));
+});
+
+// Eight or more equals - should NOT match (not a conflict separator)
+test('gate does not flag eight-or-more equals as conflict marker', () => {
+    const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
+
+    // ======== (8 equals) - should NOT match
+    const diff1 = `diff --git a/app/lib/a.js b/app/lib/a.js
+index 123..456 100644
+--- a/app/lib/a.js
++++ b/app/lib/a.js
+@@ -1,2 +1,4 @@
+ function foo() {
++========
+ }
+`;
+    const g1 = gate({ numstat: '2\t0\tapp/lib/a.js', commits: [ok], testExit: 0, diff: diff1 });
+    assert.equal(g1.pass, true, g1.reasons.join());
+
+    // ========= (9 equals) - should NOT match
+    const diff2 = `diff --git a/app/lib/b.js b/app/lib/b.js
+index 123..456 100644
+--- a/app/lib/b.js
++++ b/app/lib/b.js
+@@ -1,2 +1,4 @@
+ function bar() {
++=========
+ }
+`;
+    const g2 = gate({ numstat: '2\t0\tapp/lib/b.js', commits: [ok], testExit: 0, diff: diff2 });
+    assert.equal(g2.pass, true, g2.reasons.join());
+
+    // ========== (10 equals) - should NOT match
+    const diff3 = `diff --git a/app/lib/c.js b/app/lib/c.js
+index 123..456 100644
+--- a/app/lib/c.js
++++ b/app/lib/c.js
+@@ -1,2 +1,4 @@
+ function baz() {
++==========
+ }
+`;
+    const g3 = gate({ numstat: '2\t0\tapp/lib/c.js', commits: [ok], testExit: 0, diff: diff3 });
+    assert.equal(g3.pass, true, g3.reasons.join());
+
+    // ======= with text after (not just whitespace) - should NOT match as exact separator
+    // but should still match as <<<<<<< pattern (since it starts with =======)
+    // Actually, our rule is: content.startsWith('=======') AND matches /^=======\s*$/
+    // So ======= text would NOT match the exact separator but would match the startsWith
+    // Wait - the code checks: isExactSeparator = content.startsWith('=======') && !content.startsWith('========') && /^=======\s*$/.test(content)
+    // So =======text would NOT pass isExactSeparator because of the regex
+    // But content.startsWith('=======') is true, so we need to check...
+    // Actually the logic is: content.startsWith('<<<<<<< ') || isExactSeparator || content.startsWith('>>>>>>> ')
+    // So =======text would match startsWith('=======') but NOT isExactSeparator
+    // BUT wait - the old code had: content.startsWith('=======') - which would match =======text
+    // The new code: content.startsWith('<<<<<<< ') || isExactSeparator || content.startsWith('>>>>>>> ')
+    // where isExactSeparator requires /^=======\s*$/
+    // So =======text would NOT match anymore - that's correct behavior
+
+    const diff4 = `diff --git a/app/lib/d.js b/app/lib/d.js
+index 123..456 100644
+--- a/app/lib/d.js
++++ b/app/lib/d.js
+@@ -1,2 +1,4 @@
+ function qux() {
++======= not a separator
+ }
+`;
+    const g4 = gate({ numstat: '2\t0\tapp/lib/d.js', commits: [ok], testExit: 0, diff: diff4 });
+    assert.equal(g4.pass, true, g4.reasons.join()); // Should pass - not an exact separator
+});
+
 test('report tallies runs, tokens, error kinds and recurring gate failures', () => {
     const rows = [
         { id: 'r1', repo: 'fire', issue: 166, model: 'MAX', metrics: { turns: 47, served: ['a', 'b'], tokens: { input: 788, cacheRead: 0, output: 5 }, errorKinds: { 'edit-miss': 7 } }, gate: { pass: false, reasons: ['diff 129 lines > 40'] } },

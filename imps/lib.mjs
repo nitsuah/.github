@@ -371,7 +371,8 @@ function findConflictMarkers(diff) {
         } else if (inHunk) {
             if (line.startsWith('+')) {
                 const content = line.slice(1);
-                if (content.startsWith('<<<<<<< ') || content.startsWith('=======') || content.startsWith('>>>>>>> ')) {
+                const isExactSeparator = content.startsWith('=======') && !content.startsWith('========') && /^=======\s*$/.test(content);
+                if (content.startsWith('<<<<<<< ') || isExactSeparator || content.startsWith('>>>>>>> ')) {
                     if (currentPath) paths.add(currentPath);
                 }
             } else if (!line.startsWith(' ') && !line.startsWith('-')) {
