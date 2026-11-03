@@ -45,11 +45,13 @@ GitHub issues are the queue; labels are the state.
 
 | Label | Set by | Meaning |
 | --- | --- | --- |
-| `imp:ready` | Opus triage (daily) | The issue has a brief comment and may be taken |
+| `imp:ready` | Opus triage (daily) | A valid current brief is present, declared dependencies are closed/merged, and no known issue-level gate blocks it; eligible for dispatcher selection (global caps may still defer) |
 | `imp:working` | dispatcher | An imp is on it now |
 | `imp:pr` | dispatcher | An imp PR is open (the issue comment links it) |
 | `imp:failed` | dispatcher | Gate failed; reasons are commented. It needs a new brief or a human |
 | `imp:needs-human` | fix.mjs | Open PR needs a human (max fix rounds, conflict, or gate fail on fix) |
+
+Before applying `imp:ready`, verify the current default-branch code/tests, canonical brief metadata and executable commands, exact allowlist/diff cap, dependencies, active claims/open PRs, and known repo cooldown or human/visual/production gates. The dispatcher skips unmet entries in the leading reference list of a `depends:` line (for example `depends: #318, vigil#12`) even if the label is present. Prose such as `part 2 of #439` is not read as a dependency, so write each dependency as a reference. Leave blocked issues unlabelled so the queue count represents genuinely dispatchable work.
 
 **The brief** is an issue comment whose first line is `<!-- imp-brief -->`, followed by the brief (front matter + body, optionally in a ```` ```markdown ```` fence). The newest such comment wins. Writing it on the issue keeps every brief reviewable, and the dispatcher needs no local state.
 
