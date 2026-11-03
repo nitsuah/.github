@@ -19,7 +19,7 @@
 | `fire#221` / #338 | #441 verified existing `state.chaosProfile` persistence through `saveState()`; no schema or DB/state edit is needed. #399 remains the UI/save/clear child after a scope-gate failure; #408 and #340 remain downstream | Parent checklist refreshed; #399 unlabelled pending local Fire current-kit/cooldown/priority |
 | `vigil#305` / #425 | #425's latest brief is bounded for redacted phase timing; the last run had uncommitted edits, test exit 1, and no diagnostic summary. Parent #305 still needs a real stuck-run request/Netlify trace | #425 unlabelled pending local kit/cooldown (estimate 2026-11-04T01:23Z only if local ledger confirms); no production fix inferred |
 | `fire#279` | Test-only [PR #426](https://github.com/nitsuah/fire/pull/426) merged and exact-head test/e2e-ui passed; route matrix is documented, but the complete authorization/ownership review remains human-led | Keep `imp:needs-human`; no real Drive credentials/data or cross-account acceptance inferred |
-| Queue integrity
+| Queue integrity | The current label search found 0 `imp:ready` issues. ATS-fill #233 is now `imp:pr` with PR #234 checks partly pending; Security Pipeline #50 remains `imp:failed` due the missing local checkout; #158/#444/#399/#425 remain unlabelled pending local kit/cooldown evidence | Do not promote cooldown-sensitive candidates or retry an unchanged environment failure; verify the local current-kit SHA/ledger first |
 
 ## Exact-head validation when a repository has no CI
 
