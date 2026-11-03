@@ -672,15 +672,18 @@ test('commit recovery prompts once only when the worktree is dirty', () => {
     assert.equal(shouldPromptCommitRecovery({}), false);
 });
 
-test('commit recovery requires a new HEAD and clean porcelain status', () => {
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false }), {
-        pass: true, newCommit: true, clean: true, reason: null,
+test('commit recovery requires a new non-empty commit and clean porcelain status', () => {
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false, changed: true }), {
+        pass: true, newCommit: true, clean: true, hasChanges: true, reason: null,
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', dirty: false }), {
-        pass: false, newCommit: false, clean: true, reason: 'no new commit',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', dirty: false, changed: true }), {
+        pass: false, newCommit: false, clean: true, hasChanges: true, reason: 'no new commit',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: true }), {
-        pass: false, newCommit: true, clean: false, reason: 'worktree not clean',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: true, changed: true }), {
+        pass: false, newCommit: true, clean: false, hasChanges: true, reason: 'worktree not clean',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false, changed: false }), {
+        pass: false, newCommit: true, clean: true, hasChanges: false, reason: 'new commit has no changes',
     });
 });
 
