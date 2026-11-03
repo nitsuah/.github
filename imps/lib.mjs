@@ -330,7 +330,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     const files = parse(numstat);
     const lines = parse(numstat).reduce((n, f) => n + f.lines, 0);
     const reasons = [];
-    if (!commits.length) reasons.push(dirty ? 'edits left uncommitted' : 'no commits');
+    if (dirty) reasons.push('edits left uncommitted');
+    else if (!commits.length) reasons.push('no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
         if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
