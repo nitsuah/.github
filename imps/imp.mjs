@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // imps: headless `claude -p` workers that take one GitHub issue to one PR.
-// The imp edits and commits in its own worktree; this runner gates the result,
+// The imp edits in its own worktree; if it leaves dirty changes, the gate offers
+// one commit-only recovery prompt before the normal gate. This runner then gates,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
@@ -213,12 +214,9 @@ async function runGate(id) {
         }
     }
     // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
-    // An imp that edits, verifies, and stops should not lose the work over the
-    // one step it forgets (#53/#54). The runner commits instead — only when the
-    // imp made no commits of its own and the brief's test passes on that exact
-    // tree, so a genuinely red run still fails. The runner writes the trailer,
-    // so it cannot be forgotten either.
-    // An uncommitted edit gets one commit-only recovery prompt; never auto-stage it.
+    // A dirty worktree gets one commit-only recovery prompt; the runner never
+    // stages or commits those edits itself. The normal gate runs only after a
+    // new non-empty commit and clean status are verified.
     let commitRecovered = false;
     let commitRecovery = r.commitRecovery || null;
     const leftover = git(r.worktree, 'status', '--porcelain').out;
@@ -256,7 +254,7 @@ async function runGate(id) {
                     transcript: recoveryTranscript,
                 });
             } catch (e) {
-                recoveryError = String(e?.message || e).slice(0, 500);
+                recoveryError = 'commit-only recovery prompt errored; inspect local transcript';
             }
         }
         const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
