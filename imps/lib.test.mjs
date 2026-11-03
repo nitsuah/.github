@@ -1597,3 +1597,21 @@ test('activeCooldowns: output contains only repo slug and ISO cooldownUntil', ()
     assert.ok('cooldownUntil' in cd[0]);
     assert.match(cd[0].cooldownUntil, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
+
+test('failureDiagnosticSummary includes recognized diagnostics for abnormal command termination only', () => {
+    const abnormal = failureDiagnosticSummary({
+        testExit: null,
+        testEnd: { signal: 'SIGTERM', diagnostic: { kind: 'test', test: 'killed test', error: 'test failure' } },
+        lintExit: 0,
+        lintEnd: { diagnostic: { kind: 'lint', rule: 'no-unused-vars' } },
+    });
+    assert.match(abnormal, /test:.*killed test/);
+    assert.doesNotMatch(abnormal, /lint:|no-unused-vars/);
+
+    const unrun = failureDiagnosticSummary({
+        testExit: null,
+        testEnd: { diagnostic: { kind: 'test', test: 'stale output', error: 'test failure' } },
+    });
+    assert.match(unrun, /Diagnostic summary unavailable/);
+    assert.doesNotMatch(unrun, /stale output/);
+});
