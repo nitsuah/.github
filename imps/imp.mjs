@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // imps: headless `claude -p` workers that take one GitHub issue to one PR.
-// The imp edits and commits in its own worktree; this runner gates the result,
+// The imp edits in its own worktree; if it leaves dirty changes, the gate offers
+// one commit-only recovery prompt before the normal gate. This runner then gates,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
@@ -23,13 +24,14 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const COMMIT_RECOVERY_TOOLS = ['Read', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git log:*)'];
 function loadHomeConfig() {
     try {
         const p = join(HOME, 'config.json');
@@ -167,7 +169,7 @@ async function run() {
     console.log(`next: node imp.mjs gate ${id}`);
 }
 
-function runGate(id) {
+async function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
     // Output is echoed as before, and the tail of 'test' and 'lint' runs is kept for the ledger and the issue comment.
@@ -212,46 +214,130 @@ function runGate(id) {
         }
     }
     // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
-    // An imp that edits, verifies, and stops should not lose the work over the
-    // one step it forgets (#53/#54). The runner commits instead — only when the
-    // imp made no commits of its own and the brief's test passes on that exact
-    // tree, so a genuinely red run still fails. The runner writes the trailer,
-    // so it cannot be forgotten either.
-    let autoCommitted = false;
-    let earlyTestExit = null;
+    // A dirty worktree gets one commit-only recovery prompt; the runner never
+    // stages or commits those edits itself. The normal gate runs only after a
+    // new non-empty commit and clean status are verified.
+    let commitRecovered = false;
+    let commitRecovery = r.commitRecovery || null;
     const leftover = git(r.worktree, 'status', '--porcelain').out;
-    if (meta.test && leftover && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out === '0') {
-        console.log(`tests (dirty tree): ${meta.test}`);
-        earlyTestExit = shell(meta.test, 'test');
-        const dirtyOut = git(r.worktree, 'status', '--porcelain').out;
-        if (shouldAutoCommit({ impCommits: 0, dirty: dirtyOut, testExit: earlyTestExit })) {
-            git(r.worktree, 'add', '-A');
-            const salvage = git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
-            if (salvage.code) {
-                // A rejected commit (a hook, a lock) means the work is still uncommitted: say so, and do not format over it.
-                console.log(`salvage commit failed (${String(salvage.err).slice(0, 200)}); leaving the edits uncommitted`);
-            } else {
-                autoCommitted = true;
-                // The imp's work is this commit. impHead was read before it existed, so the
-                // size check below compared baseSha..baseSha and saw zero lines.
-                impHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+    if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
+        console.log('commit recovery previously failed; refusing to gate a dirty tree');
+        update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+        return COMMIT_RECOVERY_FAILED;
+    }
+    if (shouldPromptCommitRecovery({ dirty: leftover, attempted: Boolean(commitRecovery?.attempted) })) {
+        const claim = claimCommitRecovery(id);
+        if (!claim.claimed) {
+            if (claim.row.commitRecovery?.inProgress) {
+                console.log('commit recovery already in progress');
+                return COMMIT_RECOVERY_IN_PROGRESS;
+            }
+            if (claim.row.commitRecovery?.attempted && !claim.row.commitRecovery.pass && leftover) {
+                update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+                return COMMIT_RECOVERY_FAILED;
+            }
+            return COMMIT_RECOVERY_IN_PROGRESS;
+        }
+        commitRecovery = claim.row.commitRecovery;
+        const claimedAt = claim.claimedAt;
+        const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        const recoveryModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
+        const recoveryTranscript = join(HOME, 'runs', id + '-commit-recovery.jsonl');
+        const allow = (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        let recoveryMetrics = null;
+        let recoveryError = null;
+        if (!recoveryModel) {
+            recoveryError = 'no model quota available for one-shot commit recovery';
+        } else {
+            const recoveryPrompt = [
+                'This is one bounded commit-only recovery for an existing Imp run. Do not edit or write files.',
+                'Issue: #' + r.issue + ' in ' + r.repo + '.',
+                'Allowed paths only: ' + (allow.join(', ') || '(none; do not commit)') + '.',
+                'Inspect git status and diff. If no safe changed path is inside the allowlist, stop without committing.',
+                'Stage only allowlisted changed paths. Do not use git add -A or stage any denied/out-of-scope path.',
+                'Do not stage .github/, imps/defaults.mjs, imps-config.yml, .env files, secrets, or lockfiles.',
+                'Create exactly one new commit with subject: imp: work for #' + r.issue + ' (commit recovery)',
+                'Include this exact trailer: Co-Authored-By: 9router imp <noreply@anthropic.com>',
+                'Do not amend, rebase, push, run tests/lint, or modify source files. Stop after the commit and report its SHA.'
+            ].join('\n');
+            try {
+                recoveryMetrics = await runClaude({
+                    cwd: r.worktree,
+                    prompt: recoveryPrompt,
+                    model: recoveryModel,
+                    tools: COMMIT_RECOVERY_TOOLS,
+                    minutes: 3,
+                    budget: Math.min(Number(o.budget) || 2, 2),
+                    maxTurns: 6,
+                    noEditByTurn: 0,
+                    transcript: recoveryTranscript,
+                });
+            } catch (e) {
+                recoveryError = 'commit-only recovery prompt errored; inspect local transcript';
             }
         }
+        const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
+        const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
+        const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
+        const changed = Boolean(recoveryDiff.trim());
+        const recoveryMessage = commitCount === 1 ? git(r.worktree, 'log', '-1', '--format=%B').out : '';
+        const requiredTrailer = 'Co-Authored-By: 9router imp <noreply@anthropic.com>';
+        const trailerValid = recoveryMessage.trimEnd().split(/\r?\n/).at(-1) === requiredTrailer;
+        const verified = verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty: Boolean(dirtyAfter), changed, trailerValid });
+        const pass = !recoveryError && verified.pass;
+        const servedModel = Array.isArray(recoveryMetrics?.served) ? (recoveryMetrics.served[0] || null) : (recoveryMetrics?.served || null);
+        const recovery = {
+            attempted: true,
+            pass,
+            inProgress: false,
+            claimedAt,
+            pid: process.pid,
+            beforeHead,
+            afterHead,
+            clean: !dirtyAfter,
+            changed,
+            commitCount,
+            trailerValid,
+            reason: pass ? null : (recoveryError || verified.reason),
+            configuredModel: recoveryModel || null,
+            servedModel,
+            metrics: recoveryMetrics ? {
+                end: recoveryMetrics.end,
+                turns: recoveryMetrics.turns,
+                toolErrors: recoveryMetrics.toolErrors,
+                finalText: tailOutput(String(recoveryMetrics.finalText || ''), 500),
+            } : null,
+            transcript: recoveryTranscript,
+            at: new Date().toISOString(),
+        };
+        if (!pass) {
+            const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+                ? { outcome: COMMIT_RECOVERY_FAILED, gate: null, commitRecovery: recovery }
+                : {});
+            if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
+            writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: COMMIT_RECOVERY_FAILED, failureSignatures: ['commit-recovery-failed'] });
+            console.log('commit recovery failed: ' + (recovery.reason || 'new commit and clean status were not verified'));
+            return COMMIT_RECOVERY_FAILED;
+        }
+        const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+            ? { commitRecovery: recovery }
+            : {});
+        if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
+        commitRecovered = true;
+        commitRecovery = recovery;
+        impHead = afterHead;
+        writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'commit-recovery-pass', failureSignatures: [] });
     }
-    // The format step above skips a dirty tree, so work the runner just salvaged was never formatted: five of the six
-    // recorded lint failures were exactly that. Format it now, as its own style commit (impHead stays at the imp's
-    // work, so the size check still measures only the imp's lines).
-    if (autoCommitted && formatCmd) {
-        console.log(`format (after the runner commit): ${formatCmd}`);
+    // A verified recovery commit is formatted as a separate runner commit; the
+    // normal gate then tests the final, clean tree.
+    if (commitRecovered && formatCmd) {
+        console.log('format (after commit recovery): ' + formatCmd);
         shell(formatCmd);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
             const style = git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
-            if (!style.code) {
-                formatted = true;
-                // The salvage test ran on the unformatted tree; test the final commit instead.
-                earlyTestExit = null;
-            }
+            if (!style.code) formatted = true;
         }
     }
     const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
@@ -261,10 +347,10 @@ function runGate(id) {
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
-    const dirty = git(r.worktree, 'status', '--porcelain').out;
-    let testExit = earlyTestExit;
+    const dirtyBeforeChecks = git(r.worktree, 'status', '--porcelain').out;
+    let testExit = null;
     let lintExit = null;
-    if (meta.test && commits.length && testExit == null) {
+    if (meta.test && commits.length) {
         console.log(`tests: ${meta.test}`);
         testExit = shell(meta.test, 'test');
     }
@@ -272,8 +358,11 @@ function runGate(id) {
         console.log(`lint: ${meta.lint}`);
         lintExit = shell(meta.lint, 'lint');
     }
+    // Tests and lint can create untracked or modify tracked files; gate the final tree.
+    const dirtyAfterChecks = git(r.worktree, 'status', '--porcelain').out;
+    const dirty = Boolean(dirtyBeforeChecks || dirtyAfterChecks);
     const g = gate({
-        numstat, commits, testExit, dirty: Boolean(dirty), diff,
+        numstat, commits, testExit, dirty, diff,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: effectiveMaxLines(meta.maxLines, o.slack),
@@ -284,9 +373,12 @@ function runGate(id) {
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
+    update(id, (current) => ({
+        ...(current.outcome === COMMIT_RECOVERY_FAILED ? { outcome: null } : {}),
+        gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
+    }));
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
-    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
 // Poll `gh pr checks --json` until every check (required *and* optional) is
@@ -439,7 +531,7 @@ function ingest(transcript) {
 
 switch (cmd) {
     case 'run': await run(); break;
-    case 'gate': runGate(pos[0]); break;
+    case 'gate': { const result = await runGate(pos[0]); if (result === COMMIT_RECOVERY_FAILED) process.exitCode = 75; else if (result === COMMIT_RECOVERY_IN_PROGRESS) process.exitCode = 76; break; }
     case 'pr': openPr(pos[0]); break;
     case 'outcome': outcome(pos[0]); break;
     case 'note': update(pos[0], (r) => ({ notes: [...(r.notes || []), { at: new Date().toISOString(), text: pos[1] }] })); break;

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -41,6 +41,12 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     const cands = [{ repo: 'vhs', number: 1, labels: [], createdAt: '1' }, { repo: 'fire', number: 2, labels: [], createdAt: '2' }];
     assert.deepEqual(pickIssues({ candidates: cands, repos: {}, ...b }).map((i) => i.repo), ['fire']);
     assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
+
+    const recovery = loopBudget([
+        { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },
+        { id: 'imp_8', repo: 'fire', startedAt: '2026-10-23T10:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },
+    ], now);
+    assert.deepEqual(Object.keys(recovery.cooldown), []);
 });
 
 test('latestDecisiveReviews ignores COMMENTED, like GitHub reviewDecision', () => {
@@ -665,12 +671,48 @@ test('tokenTable estimates killed runs from the median input per turn and totals
     assert.equal(t.totals.wastedInput, 1_200_000);
 });
 
-test('shouldAutoCommit salvages a verified but uncommitted run (#54)', () => {
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 0 }), true);
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: false, testExit: 0 }), false);
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 1 }), false);
-    assert.equal(shouldAutoCommit({ impCommits: 1, dirty: true, testExit: 0 }), false);
-    assert.equal(shouldAutoCommit({}), false);
+test('commit recovery prompts once only when the worktree is dirty', () => {
+    assert.equal(shouldPromptCommitRecovery({ dirty: true }), true);
+    assert.equal(shouldPromptCommitRecovery({ dirty: false }), false);
+    assert.equal(shouldPromptCommitRecovery({ dirty: true, attempted: true }), false);
+    assert.equal(shouldPromptCommitRecovery({}), false);
+});
+
+test('commit recovery requires exactly one non-empty commit, clean status, and the exact trailer', () => {
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true, trailerValid: true }), {
+        pass: true, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, trailerValid: true, reason: null,
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', commitCount: 0, dirty: false, changed: true, trailerValid: true }), {
+        pass: false, newCommit: false, exactlyOneCommit: false, clean: true, hasChanges: true, trailerValid: true, reason: 'no new commit',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 2, dirty: false, changed: true, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: false, clean: true, hasChanges: true, trailerValid: true, reason: 'expected exactly one new commit, found 2',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: true, changed: true, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: false, hasChanges: true, trailerValid: true, reason: 'worktree not clean',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: false, trailerValid: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: false, trailerValid: true, reason: 'new commit has no changes',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true, trailerValid: false }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, trailerValid: false, reason: 'required commit trailer missing or incorrect',
+    });
+});
+
+test('commit-recovery failure blocks stale requeue until a newer claim exists', () => {
+    const oldClaim = {
+        body: claimBody({ machine: 'box', startedAt: '2026-11-03T10:00:00Z', heartbeatAt: '2026-11-03T10:01:00Z' }),
+        createdAt: '2026-11-03T10:00:00Z',
+    };
+    const failure = { body: COMMIT_RECOVERY_FAILED_MARK + '\\nRecovery failed.', createdAt: '2026-11-03T10:02:00Z' };
+    assert.equal(commitRecoveryFailureBlocksReclaim([oldClaim, failure]), true);
+    assert.equal(commitRecoveryFailureBlocksReclaim([failure]), true);
+    const newClaim = {
+        body: claimBody({ machine: 'box', startedAt: '2026-11-03T10:03:00Z', heartbeatAt: '2026-11-03T10:03:00Z' }),
+        createdAt: '2026-11-03T10:03:00Z',
+    };
+    assert.equal(commitRecoveryFailureBlocksReclaim([oldClaim, failure, newClaim]), false);
+    assert.equal(COMMIT_RECOVERY_IN_PROGRESS, 'commit-recovery-in-progress');
 });
 
 test('gate collapses uncommitted edits into one reason (#53)', () => {
@@ -890,6 +932,7 @@ test('issueFailures counts ended runs without a PR since the latest brief', () =
     assert.equal(issueFailures([], 'a', 5), 0);
     // a run that never started (no claude binary) is not the issue's failure
     assert.equal(issueFailures([run('imp_6', '2026-10-23T00:00:00Z', { metrics: { end: 'spawn-failed' } })], 'a', 5), 0);
+    assert.equal(issueFailures([run('imp_7', '2026-10-23T01:00:00Z', { outcome: COMMIT_RECOVERY_FAILED })], 'a', 5), 0);
 });
 
 test('gateShell: Git Bash on Windows (not WSL bash), IMPS_SHELL override, default shell elsewhere', () => {

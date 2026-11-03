@@ -8,7 +8,7 @@ import { join } from 'node:path';
 const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
 const previousHome = process.env.IMPS_HOME;
 process.env.IMPS_HOME = tempHome;
-const { runClaude, resolveMaxTurns } = await import('./runner.mjs');
+const { runClaude, resolveMaxTurns, appendRow, claimCommitRecovery, update, COMMIT_RECOVERY_CLAIM_TTL_MS } = await import('./runner.mjs');
 
 after(() => {
     if (previousHome === undefined) delete process.env.IMPS_HOME;
@@ -122,4 +122,27 @@ test('opt-in stream-json delivers initial prompt and the third-repeat nudge to t
     assert.equal(received[0].message.content, prompt);
     assert.equal(received[1].type, 'user');
     assert.match(received[1].message.content, /^Repeated missing-path:/);
+});
+
+test('commit-recovery claim is atomic, expires, and does not retry a finalized attempt', () => {
+    const id = 'imp_commit_recovery_claim_' + Date.now();
+    const now = Date.parse('2026-11-03T10:00:00Z');
+    appendRow({ id, repo: 'fire', issue: 1, outcome: 'commit-recovery-failed', startedAt: new Date(now).toISOString() });
+
+    const first = claimCommitRecovery(id, now);
+    assert.equal(first.claimed, true);
+    assert.equal(first.row.commitRecovery.inProgress, true);
+    assert.equal(first.row.outcome, null);
+
+    const second = claimCommitRecovery(id, now + 1000);
+    assert.equal(second.claimed, false);
+    assert.equal(second.row.commitRecovery.claimedAt, first.claimedAt);
+
+    const stale = claimCommitRecovery(id, now + COMMIT_RECOVERY_CLAIM_TTL_MS + 1000);
+    assert.equal(stale.claimed, true);
+    assert.notEqual(stale.claimedAt, first.claimedAt);
+
+    update(id, { commitRecovery: { attempted: true, pass: false, inProgress: false, claimedAt: stale.claimedAt, pid: process.pid } });
+    const finalized = claimCommitRecovery(id, now + COMMIT_RECOVERY_CLAIM_TTL_MS + 2000);
+    assert.equal(finalized.claimed, false);
 });

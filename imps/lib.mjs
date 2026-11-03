@@ -301,10 +301,35 @@ const CODE_EXT = /\.(m?[jt]sx?|cjs|py|go|rs|java|rb|php|sh|ps1|cmd|css|scss|html
 const NON_CODE_RE = /(\.(md|mdx|txt|rst|png|jpe?g|gif|webp|svg|ico|pdf)$|(^|\/)(docs?|screenshots?)\/|(^|\/)(TASKS|CHANGELOG|ROADMAP|README)(\.[a-z]+)?$)/i;
 const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 
-// An imp that edited and verified but never committed is salvageable: the
-// runner commits for it rather than failing a run whose work is already done (#54).
-export function shouldAutoCommit({ impCommits, dirty, testExit } = {}) {
-    return impCommits === 0 && !!dirty && testExit === 0;
+// A dirty worktree gets one commit-only recovery prompt. The caller verifies
+// a new HEAD and a clean porcelain status before allowing the normal gate to run.
+export const COMMIT_RECOVERY_FAILED = 'commit-recovery-failed';
+export const COMMIT_RECOVERY_IN_PROGRESS = 'commit-recovery-in-progress';
+export const COMMIT_RECOVERY_FAILED_MARK = '<!-- imp-commit-recovery-failed -->';
+
+export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
+    return !!dirty && !attempted;
+}
+
+export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty, changed, trailerValid } = {}) {
+    const newCommit = !!afterHead && afterHead !== beforeHead;
+    const exactlyOneCommit = commitCount === 1;
+    const clean = !dirty;
+    const hasChanges = !!changed;
+    const exactTrailer = trailerValid === true;
+    const pass = newCommit && exactlyOneCommit && clean && hasChanges && exactTrailer;
+    const reason = pass
+        ? null
+        : !newCommit
+            ? 'no new commit'
+            : !exactlyOneCommit
+                ? `expected exactly one new commit, found ${commitCount}`
+                : !clean
+                    ? 'worktree not clean'
+                    : !hasChanges
+                        ? 'new commit has no changes'
+                        : 'required commit trailer missing or incorrect';
+    return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
 }
 
 // The pre-push gate. Deterministic: numstat lines from
@@ -445,7 +470,8 @@ export function duplicateImpPrs(open = [], merged = []) {
 export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
     const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
-        && r.endedAt && !r.pr && r.outcome !== 'merged' && !r.infra && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
+        && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && !r.infra
+        && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
     // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
     return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
 }
@@ -526,7 +552,7 @@ export function loopBudget(rows, now = Date.now(), { kit } = {}) {
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && r.outcome !== COMMIT_RECOVERY_FAILED && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         const [a, b] = gated.slice(-2);
         if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
     }
@@ -676,6 +702,21 @@ export function claimExpired(claim, now, ttlMs = 90 * 60_000) {
 // in creation order.
 export function latestClaim(comments = []) {
     return [...comments].reverse().find((c) => (c.body || '').trimStart().startsWith(CLAIM_MARK)) || null;
+}
+
+// A failed commit-only recovery must not be automatically requeued by the
+// stale-claim sweep. A later claim comment represents an explicit new attempt.
+export function commitRecoveryFailureBlocksReclaim(comments = []) {
+    const failure = [...comments].reverse().find((c) =>
+        String(c.body || '').trimStart().startsWith(COMMIT_RECOVERY_FAILED_MARK));
+    if (!failure) return false;
+    const claim = latestClaim(comments);
+    if (!claim) return true;
+    const parsed = parseClaim(claim.body || '');
+    const claimAt = Date.parse(parsed?.heartbeatAt || parsed?.startedAt || claim.createdAt || claim.created_at || '');
+    const failureAt = Date.parse(failure.createdAt || failure.created_at || '');
+    if (!Number.isFinite(claimAt) || !Number.isFinite(failureAt)) return true;
+    return claimAt <= failureAt;
 }
 
 // Check if a PID is alive (cross-platform).

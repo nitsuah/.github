@@ -6,15 +6,15 @@
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
-// `imp:working`, then `imp:pr` (PR opened) or `imp:failed` (gate reasons
-// commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
+// `imp:working`, then `imp:pr` (PR opened), `imp:failed` (gate reasons commented),
+// or an unlabelled non-consuming `commit-recovery-failed` outcome. Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -231,6 +231,10 @@ async function releaseStrandedClaims(ledgerRows) {
             continue;
         }
         const row = ledgerRows.filter((r) => `${r.repo}#${r.issue}` === key).at(-1);
+        if (commitRecoveryFailureBlocksReclaim(comments)) {
+            log({ event: 'commit-recovery-reclaim-held', repo, number });
+            continue;
+        }
         const why = staleClaim({ labels, comments, ledgerHasRow: !!row, ledgerRow: row || null, machine: MACHINE });
         if (!why) continue;
         // A heartbeat that stopped is a dead run even before the claim is old:
@@ -407,8 +411,36 @@ async function work(issue) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return;
         }
-        await node(['gate', id]);
+        const gateRun = await node(['gate', id]);
         const row = ledgerRow(id);
+        if (row?.outcome === COMMIT_RECOVERY_FAILED || gateRun.code === 75) {
+            const reason = row?.commitRecovery?.reason || 'new commit and clean status were not verified';
+            if (!dry) {
+                let labelRemoved = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        gh(['issue', 'edit', String(number), '-R', slug, '--remove-label', 'imp:working']);
+                        labelRemoved = true;
+                        break;
+                    } catch (e) {
+                        log({ event: 'commit-recovery-label-error', repo, number, id, attempt, error: String(e.message).slice(0, 200) });
+                        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+                    }
+                }
+                const labelState = labelRemoved
+                    ? 'The imp:working label was removed; the issue is left unlabelled.'
+                    : 'Removal of imp:working was not confirmed after three attempts; the label may remain, but the failure marker prevents automatic requeue until a newer claim is posted.';
+                try {
+                    note(repo, number, COMMIT_RECOVERY_FAILED_MARK + String.fromCharCode(10) + 'Commit recovery for run `' + id + '` failed: ' + reason + '. No normal gate ran. This is the distinct `commit-recovery-failed` outcome and does not consume the issue attempt or repo cooldown. ' + labelState + ' Inspect the worktree and requeue only after a corrected brief/manual recovery.');
+                } catch (e) {
+                    log({ event: 'commit-recovery-note-error', repo, number, id, error: String(e.message).slice(0, 200) });
+                }
+            }
+            return log({ event: 'commit-recovery-failed', repo, number, id, reason });
+        }
+        if (row?.commitRecovery?.inProgress || gateRun.code === 76) {
+            return log({ event: 'commit-recovery-in-progress', repo, number, id });
+        }
         const m = row.metrics || {};
         const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
         if (row.gate?.pass) {
