@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { HOME, LEDGER, rows, kitSha, machineName } from './runner.mjs';
 import { resolveMachine } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
+import { loopBudget, activeCooldowns } from './lib.mjs';
 
 const dry = process.argv.includes('--dry-run');
 const config = (() => {
@@ -50,6 +51,14 @@ const cycle = (() => {
 const today = new Date().toISOString().slice(0, 10);
 const runsToday = rows().filter((r) => (r.startedAt || '').startsWith(today)).length;
 
+// Local cooldowns from this machine's ledger and current kit SHA
+const budget = loopBudget(rows(), Date.now(), { kit: kitSha() });
+const SLUG = /^[A-Za-z0-9._-]+$/;
+const cooldowns = activeCooldowns(budget).filter((c) => SLUG.test(c.repo) && c.repo !== '.' && c.repo !== '..');
+const cooldownLines = cooldowns.length
+    ? cooldowns.map((c) => `| ${c.repo} | \`${c.cooldownUntil}\` |`).join('\n')
+    : '| none | |';
+
 const body = [
     '<!-- imp-heartbeat -->',
     `| field | value |`,
@@ -59,6 +68,11 @@ const body = [
     `| last cycle | ${cycle ? `${cycle.at} (${cycle.event || 'cycle'})` : 'never'} |`,
     `| runs today | ${runsToday} |`,
     `| reported at | ${new Date().toISOString()} |`,
+    '',
+    '### Local cooldowns (this machine\'s ledger — not fleet-wide)',
+    '| repo | cooldownUntil |',
+    '| --- | --- |',
+    cooldownLines,
     '',
     '_Written by `imps/heartbeat.mjs`. A machine whose row has not moved is not running._',
 ].join('\n');
