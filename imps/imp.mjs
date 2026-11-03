@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, shouldAutoCommit, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
@@ -181,7 +181,14 @@ function runGate(id) {
         if (key) {
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
             // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
-            if (p.signal || p.error) ends[key] = { ...(p.signal ? { signal: p.signal } : {}), ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}) };
+            if (p.status !== 0 || p.signal || p.error) {
+                ends[key] = {
+                    ...(p.status !== null && p.status !== undefined ? { exitCode: p.status } : {}),
+                    ...(p.signal ? { signal: p.signal } : {}),
+                    ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}),
+                    diagnostic: extractFailureDiagnostic([p.stdout, p.stderr].filter(Boolean).join('\n'), id, r.worktree),
+                };
+            }
         }
         return p.status;
     };
