@@ -41,6 +41,12 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     const cands = [{ repo: 'vhs', number: 1, labels: [], createdAt: '1' }, { repo: 'fire', number: 2, labels: [], createdAt: '2' }];
     assert.deepEqual(pickIssues({ candidates: cands, repos: {}, ...b }).map((i) => i.repo), ['fire']);
     assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
+
+    const recovery = loopBudget([
+        { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
+        { id: 'imp_8', repo: 'fire', startedAt: '2026-10-23T10:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: null },
+    ], now);
+    assert.deepEqual(Object.keys(recovery.cooldown), []);
 });
 
 test('latestDecisiveReviews ignores COMMENTED, like GitHub reviewDecision', () => {
