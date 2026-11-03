@@ -204,7 +204,7 @@ export async function probeServedModel({ baseUrl, key, configuredModel, fetchImp
     if (!baseUrl || !key || !configured || typeof fetchImpl !== 'function') {
         return { pass: false, configuredModel: configured || null, servedModel: null, reason: 'router-config-missing' };
     }
-    const normalizedBase = String(baseUrl).replace(/\\/+$/, '');
+    const normalizedBase = String(baseUrl).replace(/\/+$/, '');
     const url = normalizedBase.endsWith('/messages') ? normalizedBase : normalizedBase + '/messages';
     let response;
     try {
