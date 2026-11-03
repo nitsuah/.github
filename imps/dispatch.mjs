@@ -6,8 +6,8 @@
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
-// `imp:working`, then `imp:pr` (PR opened) or `imp:failed` (gate reasons
-// commented, needs a new brief). Defaults: imps/defaults.mjs. Contract: STANDARD.md.
+// `imp:working`, then `imp:pr` (PR opened), `imp:failed` (gate reasons commented),
+// or an unlabelled non-consuming `commit-recovery-failed` outcome. Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, hostname, uptime } from 'node:os';
