@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED } from './lib.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -407,8 +407,24 @@ async function work(issue) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return;
         }
-        await node(['gate', id]);
+        const gateRun = await node(['gate', id]);
         const row = ledgerRow(id);
+        if (row?.outcome === COMMIT_RECOVERY_FAILED || gateRun.code === 75) {
+            const reason = row?.commitRecovery?.reason || 'new commit and clean status were not verified';
+            if (!dry) {
+                try {
+                    gh(['issue', 'edit', String(number), '-R', slug, '--remove-label', 'imp:working']);
+                } catch (e) {
+                    log({ event: 'commit-recovery-label-error', repo, number, id, error: String(e.message).slice(0, 200) });
+                }
+                try {
+                    note(repo, number, 'Commit recovery for run `' + id + '` failed: ' + reason + '. No normal gate ran. This is the distinct `commit-recovery-failed` outcome and does not consume the issue attempt or repo cooldown. The issue is left unlabelled; inspect the worktree and requeue only after a corrected brief/manual recovery.');
+                } catch (e) {
+                    log({ event: 'commit-recovery-note-error', repo, number, id, error: String(e.message).slice(0, 200) });
+                }
+            }
+            return log({ event: 'commit-recovery-failed', repo, number, id, reason });
+        }
         const m = row.metrics || {};
         const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;
         if (row.gate?.pass) {
