@@ -203,7 +203,7 @@ test('missing canonical brief requires removing imp:ready', () => {
     assert.equal(missingBriefRequiresUnready(['imp:ready'], null), true);
     assert.equal(missingBriefRequiresUnready([{ name: 'imp:ready' }], null), true);
     assert.equal(missingBriefRequiresUnready(['bug'], null), false);
-    assert.equal(missingBriefRequiresUnready(['imp:ready'], '---\\nrepo: fire\\nissue: 1\\n---\\nbody'), false);
+    assert.equal(missingBriefRequiresUnready(['imp:ready'], 'valid brief'), false);
 });
 
 test('parseBrief reads front matter and leaves the body', () => {
