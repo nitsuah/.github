@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, shouldAutoCommit, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -665,12 +665,23 @@ test('tokenTable estimates killed runs from the median input per turn and totals
     assert.equal(t.totals.wastedInput, 1_200_000);
 });
 
-test('shouldAutoCommit salvages a verified but uncommitted run (#54)', () => {
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 0 }), true);
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: false, testExit: 0 }), false);
-    assert.equal(shouldAutoCommit({ impCommits: 0, dirty: true, testExit: 1 }), false);
-    assert.equal(shouldAutoCommit({ impCommits: 1, dirty: true, testExit: 0 }), false);
-    assert.equal(shouldAutoCommit({}), false);
+test('commit recovery prompts once only when the worktree is dirty', () => {
+    assert.equal(shouldPromptCommitRecovery({ dirty: true }), true);
+    assert.equal(shouldPromptCommitRecovery({ dirty: false }), false);
+    assert.equal(shouldPromptCommitRecovery({ dirty: true, attempted: true }), false);
+    assert.equal(shouldPromptCommitRecovery({}), false);
+});
+
+test('commit recovery requires a new HEAD and clean porcelain status', () => {
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false }), {
+        pass: true, newCommit: true, clean: true, reason: null,
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', dirty: false }), {
+        pass: false, newCommit: false, clean: true, reason: 'no new commit',
+    });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: true }), {
+        pass: false, newCommit: true, clean: false, reason: 'worktree not clean',
+    });
 });
 
 test('gate collapses uncommitted edits into one reason (#53)', () => {
@@ -890,6 +901,7 @@ test('issueFailures counts ended runs without a PR since the latest brief', () =
     assert.equal(issueFailures([], 'a', 5), 0);
     // a run that never started (no claude binary) is not the issue's failure
     assert.equal(issueFailures([run('imp_6', '2026-10-23T00:00:00Z', { metrics: { end: 'spawn-failed' } })], 'a', 5), 0);
+    assert.equal(issueFailures([run('imp_7', '2026-10-23T01:00:00Z', { outcome: COMMIT_RECOVERY_FAILED })], 'a', 5), 0);
 });
 
 test('gateShell: Git Bash on Windows (not WSL bash), IMPS_SHELL override, default shell elsewhere', () => {
