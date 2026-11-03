@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -678,19 +678,38 @@ test('commit recovery prompts once only when the worktree is dirty', () => {
     assert.equal(shouldPromptCommitRecovery({}), false);
 });
 
-test('commit recovery requires a new non-empty commit and clean porcelain status', () => {
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false, changed: true }), {
-        pass: true, newCommit: true, clean: true, hasChanges: true, reason: null,
+test('commit recovery requires exactly one non-empty commit and clean porcelain status', () => {
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true }), {
+        pass: true, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, reason: null,
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', dirty: false, changed: true }), {
-        pass: false, newCommit: false, clean: true, hasChanges: true, reason: 'no new commit',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'same', afterHead: 'same', commitCount: 0, dirty: false, changed: true }), {
+        pass: false, newCommit: false, exactlyOneCommit: false, clean: true, hasChanges: true, reason: 'no new commit',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: true, changed: true }), {
-        pass: false, newCommit: true, clean: false, hasChanges: true, reason: 'worktree not clean',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 2, dirty: false, changed: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: false, clean: true, hasChanges: true, reason: 'expected exactly one new commit, found 2',
     });
-    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', dirty: false, changed: false }), {
-        pass: false, newCommit: true, clean: true, hasChanges: false, reason: 'new commit has no changes',
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: true, changed: true }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: false, hasChanges: true, reason: 'worktree not clean',
     });
+    assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: false }), {
+        pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: false, reason: 'new commit has no changes',
+    });
+});
+
+test('commit-recovery failure blocks stale requeue until a newer claim exists', () => {
+    const oldClaim = {
+        body: claimBody({ machine: 'box', startedAt: '2026-11-03T10:00:00Z', heartbeatAt: '2026-11-03T10:01:00Z' }),
+        createdAt: '2026-11-03T10:00:00Z',
+    };
+    const failure = { body: COMMIT_RECOVERY_FAILED_MARK + '\\nRecovery failed.', createdAt: '2026-11-03T10:02:00Z' };
+    assert.equal(commitRecoveryFailureBlocksReclaim([oldClaim, failure]), true);
+    assert.equal(commitRecoveryFailureBlocksReclaim([failure]), true);
+    const newClaim = {
+        body: claimBody({ machine: 'box', startedAt: '2026-11-03T10:03:00Z', heartbeatAt: '2026-11-03T10:03:00Z' }),
+        createdAt: '2026-11-03T10:03:00Z',
+    };
+    assert.equal(commitRecoveryFailureBlocksReclaim([oldClaim, failure, newClaim]), false);
+    assert.equal(COMMIT_RECOVERY_IN_PROGRESS, 'commit-recovery-in-progress');
 });
 
 test('gate collapses uncommitted edits into one reason (#53)', () => {

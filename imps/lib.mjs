@@ -304,23 +304,29 @@ const NON_CODE = { test: (p) => !CODE_EXT.test(p) && NON_CODE_RE.test(p) };
 // A dirty worktree gets one commit-only recovery prompt. The caller verifies
 // a new HEAD and a clean porcelain status before allowing the normal gate to run.
 export const COMMIT_RECOVERY_FAILED = 'commit-recovery-failed';
+export const COMMIT_RECOVERY_IN_PROGRESS = 'commit-recovery-in-progress';
+export const COMMIT_RECOVERY_FAILED_MARK = '<!-- imp-commit-recovery-failed -->';
 
 export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
     return !!dirty && !attempted;
 }
 
-export function verifyCommitRecovery({ beforeHead, afterHead, dirty, changed } = {}) {
+export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty, changed } = {}) {
     const newCommit = !!afterHead && afterHead !== beforeHead;
+    const exactlyOneCommit = commitCount === 1;
     const clean = !dirty;
     const hasChanges = !!changed;
-    const pass = newCommit && clean && hasChanges;
-    return {
-        pass,
-        newCommit,
-        clean,
-        hasChanges,
-        reason: pass ? null : !newCommit ? 'no new commit' : !clean ? 'worktree not clean' : 'new commit has no changes',
-    };
+    const pass = newCommit && exactlyOneCommit && clean && hasChanges;
+    const reason = pass
+        ? null
+        : !newCommit
+            ? 'no new commit'
+            : !exactlyOneCommit
+                ? `expected exactly one new commit, found ${commitCount}`
+                : !clean
+                    ? 'worktree not clean'
+                    : 'new commit has no changes';
+    return { pass, newCommit, exactlyOneCommit, clean, hasChanges, reason };
 }
 
 // The pre-push gate. Deterministic: numstat lines from
@@ -693,6 +699,21 @@ export function claimExpired(claim, now, ttlMs = 90 * 60_000) {
 // in creation order.
 export function latestClaim(comments = []) {
     return [...comments].reverse().find((c) => (c.body || '').trimStart().startsWith(CLAIM_MARK)) || null;
+}
+
+// A failed commit-only recovery must not be automatically requeued by the
+// stale-claim sweep. A later claim comment represents an explicit new attempt.
+export function commitRecoveryFailureBlocksReclaim(comments = []) {
+    const failure = [...comments].reverse().find((c) =>
+        String(c.body || '').trimStart().startsWith(COMMIT_RECOVERY_FAILED_MARK));
+    if (!failure) return false;
+    const claim = latestClaim(comments);
+    if (!claim) return true;
+    const parsed = parseClaim(claim.body || '');
+    const claimAt = Date.parse(parsed?.heartbeatAt || parsed?.startedAt || claim.createdAt || claim.created_at || '');
+    const failureAt = Date.parse(failure.createdAt || failure.created_at || '');
+    if (!Number.isFinite(claimAt) || !Number.isFinite(failureAt)) return true;
+    return claimAt <= failureAt;
 }
 
 // Check if a PID is alive (cross-platform).

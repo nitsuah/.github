@@ -24,10 +24,10 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,7 +220,26 @@ async function runGate(id) {
     let commitRecovered = false;
     let commitRecovery = r.commitRecovery || null;
     const leftover = git(r.worktree, 'status', '--porcelain').out;
+    if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
+        console.log('commit recovery previously failed; refusing to gate a dirty tree');
+        update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+        return COMMIT_RECOVERY_FAILED;
+    }
     if (shouldPromptCommitRecovery({ dirty: leftover, attempted: Boolean(commitRecovery?.attempted) })) {
+        const claim = claimCommitRecovery(id);
+        if (!claim.claimed) {
+            if (claim.row.commitRecovery?.inProgress) {
+                console.log('commit recovery already in progress');
+                return COMMIT_RECOVERY_IN_PROGRESS;
+            }
+            if (claim.row.commitRecovery?.attempted && !claim.row.commitRecovery.pass && leftover) {
+                update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+                return COMMIT_RECOVERY_FAILED;
+            }
+        } else {
+            commitRecovery = claim.row.commitRecovery;
+        }
+        const claimedAt = claim.claimedAt;
         const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         const recoveryModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
         const recoveryTranscript = join(HOME, 'runs', id + '-commit-recovery.jsonl');
@@ -259,18 +278,23 @@ async function runGate(id) {
         }
         const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
-        const recoveryDiff = git(r.worktree, 'diff', '--stat', beforeHead + '..' + afterHead).out;
+        const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
+        const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
         const changed = Boolean(recoveryDiff.trim());
-        const verified = verifyCommitRecovery({ beforeHead, afterHead, dirty: Boolean(dirtyAfter), changed });
+        const verified = verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty: Boolean(dirtyAfter), changed });
         const pass = !recoveryError && verified.pass;
         const servedModel = Array.isArray(recoveryMetrics?.served) ? (recoveryMetrics.served[0] || null) : (recoveryMetrics?.served || null);
         const recovery = {
             attempted: true,
             pass,
+            inProgress: false,
+            claimedAt,
+            pid: process.pid,
             beforeHead,
             afterHead,
             clean: !dirtyAfter,
             changed,
+            commitCount,
             reason: pass ? null : (recoveryError || verified.reason),
             configuredModel: recoveryModel || null,
             servedModel,
@@ -284,15 +308,21 @@ async function runGate(id) {
             at: new Date().toISOString(),
         };
         if (!pass) {
-            update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null, commitRecovery: recovery });
+            const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+                ? { outcome: COMMIT_RECOVERY_FAILED, gate: null, commitRecovery: recovery }
+                : {});
+            if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
             writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: COMMIT_RECOVERY_FAILED, failureSignatures: ['commit-recovery-failed'] });
             console.log('commit recovery failed: ' + (recovery.reason || 'new commit and clean status were not verified'));
             return COMMIT_RECOVERY_FAILED;
         }
+        const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+            ? { commitRecovery: recovery }
+            : {});
+        if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
         commitRecovered = true;
         commitRecovery = recovery;
         impHead = afterHead;
-        update(id, { commitRecovery: recovery });
         writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'commit-recovery-pass', failureSignatures: [] });
     }
     // A verified recovery commit is formatted as a separate runner commit; the
@@ -491,7 +521,7 @@ function ingest(transcript) {
 
 switch (cmd) {
     case 'run': await run(); break;
-    case 'gate': { const result = await runGate(pos[0]); if (result === COMMIT_RECOVERY_FAILED) process.exitCode = 75; break; }
+    case 'gate': { const result = await runGate(pos[0]); if (result === COMMIT_RECOVERY_FAILED) process.exitCode = 75; else if (result === COMMIT_RECOVERY_IN_PROGRESS) process.exitCode = 76; break; }
     case 'pr': openPr(pos[0]); break;
     case 'outcome': outcome(pos[0]); break;
     case 'note': update(pos[0], (r) => ({ notes: [...(r.notes || []), { at: new Date().toISOString(), text: pos[1] }] })); break;

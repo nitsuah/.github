@@ -8,7 +8,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, effectiveMaxLines, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage } from './lib.mjs';
+import { summarizeRun, effectiveMaxLines, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -152,6 +152,34 @@ export function update(id, patch) {
         save(all);
         return r;
     });
+}
+
+export const COMMIT_RECOVERY_CLAIM_TTL_MS = 10 * 60_000;
+
+// Claim a run's one-shot commit recovery atomically through the ledger lock.
+// A live, fresh claim blocks a second gate process; stale claims may be recovered.
+export function claimCommitRecovery(id, now = Date.now()) {
+    let claimed = false;
+    const claimedAt = new Date(now).toISOString();
+    const row = update(id, (current) => {
+        const existing = current.commitRecovery;
+        const at = Date.parse(existing?.claimedAt || '');
+        const fresh = Number.isFinite(at) && now - at < COMMIT_RECOVERY_CLAIM_TTL_MS;
+        const holderAlive = existing?.pid ? isPidAlive(Number(existing.pid)) : fresh;
+        if (existing?.inProgress && fresh && holderAlive) return {};
+        if (existing?.attempted && !existing.inProgress) return {};
+        claimed = true;
+        return {
+            commitRecovery: {
+                attempted: true,
+                pass: null,
+                inProgress: true,
+                claimedAt,
+                pid: process.pid,
+            },
+        };
+    });
+    return { claimed, row, claimedAt: claimed ? claimedAt : null };
 }
 /** Append one run row under the same lock update() takes. */
 export const appendRow = (row) => withLedgerLock(() => appendFileSync(LEDGER, JSON.stringify(row) + '\n'));
