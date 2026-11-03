@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // imps: headless `claude -p` workers that take one GitHub issue to one PR.
-// The imp edits in its own worktree; if it leaves dirty changes, the gate offers
-// one commit-only recovery prompt before the normal gate. This runner then gates,
+// The imp edits and commits in its own worktree; this runner gates the result,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
@@ -171,11 +170,6 @@ async function run() {
 
 async function runGate(id) {
     const r = rows().find((x) => x.id === id);
-    if (!r) throw new Error('run not found: ' + id);
-    if (r.outcome === COMMIT_RECOVERY_FAILED) {
-        console.log('commit recovery already failed for ' + id + '; no second prompt');
-        return COMMIT_RECOVERY_FAILED;
-    }
     const { meta } = loadBrief(r.brief, r.worktree);
     // Output is echoed as before, and the tail of 'test' and 'lint' runs is kept for the ledger and the issue comment.
     const tails = {};
@@ -184,8 +178,10 @@ async function runGate(id) {
         const p = spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
         process.stdout.write(p.stdout || '');
         process.stderr.write(p.stderr || '');
+        // Each stream keeps its own bounded tail so a noisy stderr cannot push the failure out of stdout.
         if (key) {
             tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
+            // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
             if (p.status !== 0 || p.signal || p.error) {
                 ends[key] = {
                     ...(p.status !== null && p.status !== undefined ? { exitCode: p.status } : {}),
@@ -197,13 +193,18 @@ async function runGate(id) {
         }
         return p.status;
     };
+    // Formatting is mechanical, so the runner does it, not the model: run the
+    // repo's formatter and commit any change as a separate runner commit.
     let formatted = false;
+    // On a re-run the runner's format commit is already there; size is
+    // measured up to the imp's last commit either way.
     const runnerCommit = git(r.worktree, 'log', '-1', '--format=%s').out.includes('(imp runner)');
     let impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
+    // Never format over uncommitted imp work: it would be swept into the runner commit.
     const dirtyBefore = git(r.worktree, 'status', '--porcelain').out;
     const formatCmd = meta.format || deriveFormat(meta.lint);
-    if (formatCmd && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', r.baseSha + '..HEAD').out !== '0') {
-        console.log('format: ' + formatCmd);
+    if (formatCmd && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
+        console.log(`format: ${formatCmd}`);
         shell(formatCmd);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
@@ -211,11 +212,17 @@ async function runGate(id) {
             formatted = true;
         }
     }
-
+    // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
+    // An imp that edits, verifies, and stops should not lose the work over the
+    // one step it forgets (#53/#54). The runner commits instead — only when the
+    // imp made no commits of its own and the brief's test passes on that exact
+    // tree, so a genuinely red run still fails. The runner writes the trailer,
+    // so it cannot be forgotten either.
+    // An uncommitted edit gets one commit-only recovery prompt; never auto-stage it.
     let commitRecovered = false;
     let commitRecovery = r.commitRecovery || null;
-    const dirtyForRecovery = git(r.worktree, 'status', '--porcelain').out;
-    if (shouldPromptCommitRecovery({ dirty: dirtyForRecovery, attempted: Boolean(commitRecovery?.attempted) })) {
+    const leftover = git(r.worktree, 'status', '--porcelain').out;
+    if (shouldPromptCommitRecovery({ dirty: leftover, attempted: Boolean(commitRecovery?.attempted) })) {
         const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         const recoveryModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
         const recoveryTranscript = join(HOME, 'runs', id + '-commit-recovery.jsonl');
@@ -231,6 +238,7 @@ async function runGate(id) {
                 'Allowed paths only: ' + (allow.join(', ') || '(none; do not commit)') + '.',
                 'Inspect git status and diff. If no safe changed path is inside the allowlist, stop without committing.',
                 'Stage only allowlisted changed paths. Do not use git add -A or stage any denied/out-of-scope path.',
+                'Do not stage .github/, imps/defaults.mjs, imps-config.yml, .env files, secrets, or lockfiles.',
                 'Create exactly one new commit with subject: imp: work for #' + r.issue + ' (commit recovery)',
                 'Include this exact trailer: Co-Authored-By: 9router imp <noreply@anthropic.com>',
                 'Do not amend, rebase, push, run tests/lint, or modify source files. Stop after the commit and report its SHA.'
@@ -289,8 +297,7 @@ async function runGate(id) {
         update(id, { commitRecovery: recovery });
         writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'commit-recovery-pass', failureSignatures: [] });
     }
-
-    // A successful recovery commit is formatted as a separate runner commit; the
+    // A verified recovery commit is formatted as a separate runner commit; the
     // normal gate then tests the final, clean tree.
     if (commitRecovered && formatCmd) {
         console.log('format (after commit recovery): ' + formatCmd);
@@ -301,38 +308,45 @@ async function runGate(id) {
             if (!style.code) formatted = true;
         }
     }
-
-    const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', r.baseSha + '..HEAD').out;
-    const diff = git(r.worktree, 'diff', '--no-renames', r.baseSha + '..HEAD').out;
-    const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', r.baseSha + '..HEAD').out;
+    const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
+    const diff = git(r.worktree, 'diff', '--no-renames', `${r.baseSha}..HEAD`).out;
+    // Only the imp's own commits must carry the imp trailer: a human or the
+    // hypervisor may push a fix to the PR branch between rounds.
+    const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
     const dirty = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
     let lintExit = null;
     if (meta.test && commits.length) {
-        console.log('tests: ' + meta.test);
+        console.log(`tests: ${meta.test}`);
         testExit = shell(meta.test, 'test');
     }
     if (meta.lint && commits.length) {
-        console.log('lint: ' + meta.lint);
+        console.log(`lint: ${meta.lint}`);
         lintExit = shell(meta.lint, 'lint');
     }
     const g = gate({
         numstat, commits, testExit, dirty: Boolean(dirty), diff,
-        sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', r.baseSha + '..' + impHead).out,
+        sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
+        // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: effectiveMaxLines(meta.maxLines, o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
     });
     if (meta.lint && commits.length && lintExit !== 0)
-        g.reasons.push(lintExit == null ? 'lint not run' : 'lint exit ' + lintExit), (g.pass = false);
+        g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
+    // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, { gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() } });
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
-    console.log(g.pass ? 'gate passed: ' + g.lines + ' lines in ' + g.files.join(', ') + (commitRecovered ? ' (one-shot commit recovery verified)' : '') : 'gate failed: ' + g.reasons.join('; '));
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
 }
 
+// Poll `gh pr checks --json` until every check (required *and* optional) is
+// finished and green for `DEFAULTS.checkStablePolls` consecutive identical
+// polls. Never returns green on pending, red, or an empty list. Returns
+// { green, reason }. Does not use --required: that was the stash#305 failure mode.
 function waitForChecks(url, tries = DEFAULTS.checkTries) {
     let lastFp = null;
     let stable = 0;
