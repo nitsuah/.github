@@ -309,15 +309,17 @@ export function shouldPromptCommitRecovery({ dirty, attempted = false } = {}) {
     return !!dirty && !attempted;
 }
 
-export function verifyCommitRecovery({ beforeHead, afterHead, dirty } = {}) {
+export function verifyCommitRecovery({ beforeHead, afterHead, dirty, changed } = {}) {
     const newCommit = !!afterHead && afterHead !== beforeHead;
     const clean = !dirty;
-    const pass = newCommit && clean;
+    const hasChanges = !!changed;
+    const pass = newCommit && clean && hasChanges;
     return {
         pass,
         newCommit,
         clean,
-        reason: pass ? null : !newCommit ? 'no new commit' : 'worktree not clean',
+        hasChanges,
+        reason: pass ? null : !newCommit ? 'no new commit' : !clean ? 'worktree not clean' : 'new commit has no changes',
     };
 }
 
