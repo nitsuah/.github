@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // imps: headless `claude -p` workers that take one GitHub issue to one PR.
-// The imp edits and commits in its own worktree; this runner gates the result,
+// The imp edits in its own worktree; if it leaves dirty changes, the gate offers
+// one commit-only recovery prompt before the normal gate. This runner then gates,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
