@@ -430,7 +430,7 @@ function decodeGitQuotedPath(raw) {
 function pathFromPlusHeader(line) {
     const raw = line.slice(4).trimStart();
     if (raw.startsWith('"')) {
-        const match = raw.match(/^("(?:[^"\\\\]|\\\\.)*")/);
+        const match = raw.match(/^("(?:[^"\\]|\\.)*")/);
         return match ? decodeGitQuotedPath(match[1]) : null;
     }
     const tab = raw.indexOf('\t');
