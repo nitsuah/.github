@@ -499,46 +499,35 @@ index 123..456 100644
     assert.equal(g9.pass, true);
 });
 
-test('gate decodes quoted paths and preserves added hunk content', () => {
+test('gate decodes quoted UTF-8 paths and keeps added header-like lines in hunk', () => {
     const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
-    const diff = `diff --git "a/app/./lib/quoted\\303\\251.js" "b/app/./lib/quoted\\303\\251.js"
---- "a/app/./lib/quoted\\303\\251.js"
-+++ "b/app/./lib/quoted\\303\\251.js"
+    const diff = `diff --git "a/app/./lib/naïve-quoted\\303\\251.js" "b/app/./lib/naïve-quoted\\303\\251.js"
+--- "a/app/./lib/naïve-quoted\\303\\251.js"
++++ "b/app/./lib/naïve-quoted\\303\\251.js"
 @@ -1 +1,2 @@
 +<<<<<<< HEAD
 +conflict
 diff --git a/app/lib/active.js b/app/lib/active.js
 --- a/app/lib/active.js
 +++ b/app/lib/active.js
-@@ -1 +1,4 @@
+@@ -1,1 +1,4 @@
 -old
 \\ No newline at end of file
 +--- a/app/lib/not-old.js
 ++++ b/app/lib/not-new.js
-+<<<<<<< HEAD
-+conflict
-diff --git "a/app/lib/naïve.js" "b/app/lib/naïve.js"
---- "a/app/lib/naïve.js"
-+++ "b/app/lib/naïve.js"
-@@ -1 +1,2 @@
 +>>>>>>> branch
 +conflict
 `;
     const g = gate({
-        numstat: '2\t0\tapp/lib/quotedé.js\n4\t1\tapp/lib/active.js\n2\t0\tapp/lib/naïve.js',
+        numstat: '2\t0\tapp/lib/naïve-quotedé.js\n4\t1\tapp/lib/active.js',
         commits: [ok],
         testExit: 0,
         diff,
     });
-    assert.equal(g.pass, false);
-    assert.deepEqual(
-        g.reasons.filter((reason) => reason.startsWith('unresolved conflict marker')),
-        [
-            'unresolved conflict marker in app/lib/active.js',
-            'unresolved conflict marker in app/lib/naïve.js',
-            'unresolved conflict marker in app/lib/quotedé.js',
-        ],
-    );
+    assert.deepEqual(g.reasons, [
+        'unresolved conflict marker in app/lib/active.js',
+        'unresolved conflict marker in app/lib/naïve-quotedé.js',
+    ]);
 });
 
 // Exact-seven-equals separator rule: ======= with optional trailing whitespace matches
