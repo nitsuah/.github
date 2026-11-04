@@ -499,6 +499,66 @@ index 123..456 100644
     assert.equal(g9.pass, true);
 });
 
+test('gate decodes quoted Git paths to normalized UTF-8 repo-relative paths', () => {
+    const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
+    const diff = `diff --git "a/app/./lib/quoted\\303\\251.js" "b/app/./lib/quoted\\303\\251.js"
+index 123..456 100644
+--- "a/app/./lib/quoted\\303\\251.js"
++++ "b/app/./lib/quoted\\303\\251.js"
+@@ -1,1 +1,2 @@
++<<<<<<< HEAD
++conflict
+diff --git "a/app/lib/naïve.js" "b/app/lib/naïve.js"
+index 123..456 100644
+--- "a/app/lib/naïve.js"
++++ "b/app/lib/naïve.js"
+@@ -1,1 +1,2 @@
++>>>>>>> branch
++conflict
+`;
+    const g = gate({
+        numstat: '2\t0\tapp/lib/quotedé.js\n2\t0\tapp/lib/naïve.js',
+        commits: [ok],
+        testExit: 0,
+        diff,
+    });
+    assert.equal(g.pass, false);
+    assert.deepEqual(
+        g.reasons.filter((reason) => reason.startsWith('unresolved conflict marker')),
+        [
+            'unresolved conflict marker in app/lib/naïve.js',
+            'unresolved conflict marker in app/lib/quotedé.js',
+        ],
+    );
+});
+
+test('gate treats header-like added content as hunk lines after no-newline markers', () => {
+    const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
+    const diff = `diff --git a/app/lib/active.js b/app/lib/active.js
+index 123..456 100644
+--- a/app/lib/active.js
++++ b/app/lib/active.js
+@@ -1,1 +1,5 @@
+-old
+\\ No newline at end of file
++--- a/app/lib/not-old.js
+++++ b/app/lib/not-new.js
++<<<<<<< HEAD
++conflict
+`;
+    const g = gate({
+        numstat: '5\t0\tapp/lib/active.js',
+        commits: [ok],
+        testExit: 0,
+        diff,
+    });
+    assert.equal(g.pass, false);
+    assert.deepEqual(
+        g.reasons.filter((reason) => reason.startsWith('unresolved conflict marker')),
+        ['unresolved conflict marker in app/lib/active.js'],
+    );
+});
+
 // Exact-seven-equals separator rule: ======= with optional trailing whitespace matches
 test('gate detects exact-seven-equals conflict separator in added lines', () => {
     const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
