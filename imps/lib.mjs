@@ -1,9 +1,10 @@
 // Pure helpers for imps: brief parsing, run metrics, the pre-push gate and
 // the RSI report. No I/O beyond defaults.mjs. Tested in lib.test.mjs (node --test).
 import { DEFAULTS } from './defaults.mjs';
+import { Buffer } from 'node:buffer';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
+import { basename, isAbsolute, join, posix, relative, resolve, sep, win32 } from 'node:path';
 
 export function resolveImpsCodeRoot({ env = process.env, home = homedir() } = {}) {
     const explicit = typeof env.IMPS_CODE === 'string' && env.IMPS_CODE !== '' ? env.IMPS_CODE : '';
@@ -377,35 +378,129 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
 }
 
-function findConflictMarkers(diff) {
-    const paths = new Set();
-    const lines = diff.split('\n');
-    let currentPath = null;
-    let inHunk = false;
-    for (const line of lines) {
-        if (line.startsWith('+++ ')) {
-            // New file path in diff header
-            const match = line.match(/^\+\+\+\s+(.+)/);
-            if (match) {
-                currentPath = match[1].replace(/^a\//, '').replace(/^b\//, '');
+function decodeGitQuotedPath(raw) {
+    if (!raw.startsWith('"') || !raw.endsWith('"')) return raw;
+    const input = raw.slice(1, -1);
+    const bytes = [];
+    const escapes = {
+        a: 7,
+        b: 8,
+        t: 9,
+        n: 10,
+        v: 11,
+        f: 12,
+        r: 13,
+        '\\': 92,
+        '"': 34,
+    };
+
+    for (let i = 0; i < input.length;) {
+        if (input[i] !== '\\') {
+            const literal = String.fromCodePoint(input.codePointAt(i));
+            bytes.push(...Buffer.from(literal, 'utf8'));
+            i += literal.length;
+            continue;
+        }
+
+        const next = input[i + 1];
+        if (next === undefined) return null;
+        if (Object.hasOwn(escapes, next)) {
+            bytes.push(escapes[next]);
+            i += 2;
+            continue;
+        }
+        if (/[0-7]/.test(next)) {
+            let octal = next;
+            i += 2;
+            while (octal.length < 3 && /[0-7]/.test(input[i] || '')) {
+                octal += input[i];
+                i += 1;
             }
-        } else if (line.startsWith('--- ')) {
-            // Old file path - don't track
-        } else if (line.startsWith('@@ ')) {
-            inHunk = true;
-        } else if (inHunk) {
-            if (line.startsWith('+')) {
-                const content = line.slice(1);
-                const isExactSeparator = content.startsWith('=======') && !content.startsWith('========') && /^=======\s*$/.test(content);
-                if (content.startsWith('<<<<<<< ') || isExactSeparator || content.startsWith('>>>>>>> ')) {
-                    if (currentPath) paths.add(currentPath);
-                }
-            } else if (!line.startsWith(' ') && !line.startsWith('-')) {
-                // Non-diff line ends hunk context
-                inHunk = false;
+            const value = parseInt(octal, 8);
+            if (value > 0xff) return null;
+            bytes.push(value);
+            continue;
+        }
+        return null;
+    }
+
+    return Buffer.from(bytes).toString('utf8');
+}
+
+function pathFromPlusHeader(line) {
+    const raw = line.slice(4).trimStart();
+    if (raw.startsWith('"')) {
+        let escaped = false;
+        for (let i = 1; i < raw.length; i += 1) {
+            if (escaped) {
+                escaped = false;
+            } else if (raw[i] === '\\') {
+                escaped = true;
+            } else if (raw[i] === '"') {
+                return decodeGitQuotedPath(raw.slice(0, i + 1));
             }
         }
+        return null;
     }
+    const tab = raw.indexOf('\t');
+    return (tab < 0 ? raw : raw.slice(0, tab)).trimEnd();
+}
+
+function normalizeDiffPath(raw) {
+    if (!raw || raw === '/dev/null') return null;
+    const withoutPrefix = raw.replace(/^[ab]\//, '');
+    const normalized = posix.normalize(withoutPrefix);
+    if (
+        !normalized ||
+        normalized === '.' ||
+        normalized === '..' ||
+        normalized.startsWith('../') ||
+        normalized.startsWith('/')
+    ) {
+        return null;
+    }
+    return normalized;
+}
+
+function findConflictMarkers(diff) {
+    const paths = new Set();
+    let currentPath = null;
+    let inHunk = false;
+
+    for (const line of diff.split('\n')) {
+        if (line.startsWith('diff --git ')) {
+            currentPath = null;
+            inHunk = false;
+            continue;
+        }
+        if (!inHunk && line.startsWith('+++ ')) {
+            currentPath = normalizeDiffPath(pathFromPlusHeader(line));
+            continue;
+        }
+        if (!inHunk && line.startsWith('--- ')) continue;
+        if (/^@@+ /.test(line)) {
+            inHunk = true;
+            continue;
+        }
+        if (!inHunk || line.startsWith('\\ No newline at end of file')) {
+            continue;
+        }
+
+        if (line.startsWith('+')) {
+            const content = line.slice(1);
+            const isExactSeparator = /^=======(?:\s*)$/.test(content);
+            if (
+                content.startsWith('<<<<<<< ') ||
+                isExactSeparator ||
+                content.startsWith('>>>>>>> ')
+            ) {
+                if (currentPath) paths.add(currentPath);
+            }
+        } else if (!line.startsWith(' ') && !line.startsWith('-')) {
+            inHunk = false;
+        }
+    }
+
     return [...paths].sort();
 }
 
