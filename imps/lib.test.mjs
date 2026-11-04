@@ -529,7 +529,6 @@ diff --git a/app/lib/active.js b/app/lib/active.js
         'unresolved conflict marker in app/lib/naïve-quotedé.js',
     ]);
 });
-
 // Exact-seven-equals separator rule: ======= with optional trailing whitespace matches
 test('gate detects exact-seven-equals conflict separator in added lines', () => {
     const ok = 'fix: test\n\nCo-Authored-By: imp <noreply@anthropic.com>';
