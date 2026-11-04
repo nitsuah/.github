@@ -538,7 +538,7 @@ test('gate treats header-like added content as hunk lines after no-newline marke
 index 123..456 100644
 --- a/app/lib/active.js
 +++ b/app/lib/active.js
-@@ -1,1 +1,5 @@
+@@ -1,1 +1,4 @@
 -old
 \\ No newline at end of file
 +--- a/app/lib/not-old.js
@@ -547,7 +547,7 @@ index 123..456 100644
 +conflict
 `;
     const g = gate({
-        numstat: '5\t0\tapp/lib/active.js',
+        numstat: '4\t1\tapp/lib/active.js',
         commits: [ok],
         testExit: 0,
         diff,
