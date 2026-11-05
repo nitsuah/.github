@@ -74,6 +74,15 @@ test('a raw marker-first comment matches dispatcher extraction', () => {
     assert.equal(r.meta.issue, '1');
 });
 
+test('a raw marker-first brief with an inner triple fence fails closed', () => {
+    const source = brief('', '## Issue o/r#1\n```js\nx\n```\n');
+    const comment = '<!-- imp-brief -->\n' + source.trim() + '\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief');
+    const r = lintBrief(comment);
+    assert.deepEqual(r.problems, [extracted.error]);
+});
+
 test('an unclosed marker-first outer fence gets a precise diagnostic', () => {
     const source = brief('').trim();
     const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source;
