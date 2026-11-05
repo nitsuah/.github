@@ -15,8 +15,8 @@ export const SIZE_FACTOR = 2.5;
 
 /**
  * Accept the standalone brief file or the marker-first comment as posted to GitHub.
- * Match briefFromComments(): the outer Markdown fence is optional; when
- * present it is extracted, and an unclosed opening fence fails closed.
+ * Match the documented optional outer fence, but reject nested or malformed
+ * fences before a truncated brief can pass preflight.
  */
 export function extractBriefInput(text) {
     const input = String(text);
@@ -24,11 +24,19 @@ export function extractBriefInput(text) {
     if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
 
     const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
-    const fenced = commentBody.match(/^\s*```(?:markdown|md)?\n([\s\S]*?)\n```/);
-    if (fenced) return { brief: fenced[1].trim() + '\n', error: null };
-    if (/^\s*```(?:markdown|md)?\n/.test(commentBody)) {
-        return { brief: '', error: 'unclosed outer fence' };
+    const opening = commentBody.match(/^\s*```(?:markdown|md)?\n/);
+    if (opening) {
+        const closingIndex = commentBody.lastIndexOf('\n```');
+        if (closingIndex < opening[0].length) return { brief: '', error: 'unclosed outer fence' };
+        const inner = commentBody.slice(opening[0].length, closingIndex);
+        const trailing = commentBody.slice(closingIndex + 4).trim();
+        if (trailing) return { brief: '', error: 'content after outer fence' };
+        if (/```/.test(inner)) {
+            return { brief: '', error: 'nested triple fence inside outer marker-first fence; use ~~~ for inner code' };
+        }
+        return { brief: inner.trim() + '\n', error: null };
     }
+    if (/^\s*```/.test(commentBody)) return { brief: '', error: 'unsupported or unclosed outer fence' };
     if (/```/.test(commentBody)) {
         return { brief: '', error: 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief' };
     }
