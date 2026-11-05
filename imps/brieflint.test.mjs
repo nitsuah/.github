@@ -83,6 +83,24 @@ test('a raw marker-first brief with an inner triple fence fails closed', () => {
     assert.deepEqual(r.problems, [extracted.error]);
 });
 
+test('a nested triple fence inside a fenced marker-first comment fails closed', () => {
+    const source = brief('', '## Issue o/r#1\n```js\nx\n```\n');
+    const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source.trim() + '\n' + '\x60\x60\x60\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, 'nested triple fence inside outer marker-first fence; use ~~~ for inner code');
+    const r = lintBrief(comment);
+    assert.deepEqual(r.problems, [extracted.error]);
+});
+
+test('content after a fenced marker-first brief is rejected', () => {
+    const source = brief('').trim();
+    const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source + '\n' + '\x60\x60\x60\nextra';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, 'content after outer fence');
+    const r = lintBrief(comment);
+    assert.deepEqual(r.problems, ['content after outer fence']);
+});
+
 test('an unclosed marker-first outer fence gets a precise diagnostic', () => {
     const source = brief('').trim();
     const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source;
