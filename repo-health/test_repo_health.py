@@ -83,3 +83,15 @@ def test_osv_summary_invalid_output_is_operational_error(tmp_path, monkeypatch, 
     monkeypatch.setattr(sys, "argv", ["osv_summary.py", str(result), "fire"])
     assert osv.main() == 2
     assert "ERROR: unable to parse OSV scanner output" in capsys.readouterr().err
+
+
+def test_osv_workflow_excludes_shared_kit_checkout():
+    workflow_path = os.path.join(
+        HERE, "..", ".github", "workflows", "repo-health.yml"
+    )
+    with open(workflow_path, encoding="utf-8") as f:
+        workflow = f.read()
+    assert (
+        "scan source -r --x-exclude=.repo-health-kit "
+        "--format json --allow-no-lockfiles /src"
+    ) in workflow
