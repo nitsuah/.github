@@ -15,8 +15,8 @@ export const SIZE_FACTOR = 2.5;
 
 /**
  * Accept the standalone brief file or the marker-first comment as posted to GitHub.
- * Match briefFromComments()' first-fence contract, but fail closed when the
- * comment wrapper is malformed instead of parsing the marker as front matter.
+ * Match briefFromComments(): the outer Markdown fence is optional; when
+ * present it is extracted, and an unclosed opening fence fails closed.
  */
 export function extractBriefInput(text) {
     const input = String(text);
@@ -25,8 +25,11 @@ export function extractBriefInput(text) {
 
     const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
     const fenced = commentBody.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
-    if (!fenced) return { brief: '', error: 'unclosed or missing outer fence' };
-    return { brief: fenced[1].trim() + '\n', error: null };
+    if (fenced) return { brief: fenced[1].trim() + '\n', error: null };
+    if (/^\s*```(?:markdown|md)?\n/.test(commentBody)) {
+        return { brief: '', error: 'unclosed outer fence' };
+    }
+    return { brief: commentBody.trim() + '\n', error: null };
 }
 
 export function codeLines(body) {
