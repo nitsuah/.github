@@ -24,10 +24,13 @@ export function extractBriefInput(text) {
     if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
 
     const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
-    const fenced = commentBody.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
+    const fenced = commentBody.match(/^\s*```(?:markdown|md)?\n([\s\S]*?)\n```/);
     if (fenced) return { brief: fenced[1].trim() + '\n', error: null };
     if (/^\s*```(?:markdown|md)?\n/.test(commentBody)) {
         return { brief: '', error: 'unclosed outer fence' };
+    }
+    if (/```/.test(commentBody)) {
+        return { brief: '', error: 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief' };
     }
     return { brief: commentBody.trim() + '\n', error: null };
 }
