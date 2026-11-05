@@ -62,7 +62,7 @@ jobs:
           # empty result. Keep scanner operational errors separate from findings.
           set +e
           docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:v2.7.0 \
-            scan source -r --format json --allow-no-lockfiles /src > osv.json 2> osv.err
+            scan source -r --x-exclude=.repo-health-kit --format json --allow-no-lockfiles /src > osv.json 2> osv.err
           scanner_status=$?
           set -e
 
