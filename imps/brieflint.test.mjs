@@ -61,15 +61,34 @@ test('a full marker-first comment extracts and preserves the brief body', () => 
     assert.equal(r.meta.issue, '1');
 });
 
-test('an unclosed or missing marker-first outer fence gets a precise diagnostic', () => {
+test('a raw marker-first comment matches dispatcher extraction', () => {
+    const source = brief('depends: none\n', '## Issue o/r#1\nPreserve this body exactly.\n');
+    const comment = '<!-- imp-brief -->\n' + source.trim() + '\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, null);
+    assert.equal(extracted.brief, source.trim() + '\n');
+
+    const r = lintBrief(comment, { exists: () => true });
+    assert.deepEqual(r.problems, []);
+    assert.equal(r.meta.repo, 'r');
+    assert.equal(r.meta.issue, '1');
+});
+
+test('a raw marker-first brief with an inner triple fence fails closed', () => {
+    const source = brief('', '## Issue o/r#1\n```js\nx\n```\n');
+    const comment = '<!-- imp-brief -->\n' + source.trim() + '\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief');
+    const r = lintBrief(comment);
+    assert.deepEqual(r.problems, [extracted.error]);
+});
+
+test('an unclosed marker-first outer fence gets a precise diagnostic', () => {
     const source = brief('').trim();
-    const malformed = [
-        '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source,
-        '<!-- imp-brief -->\n' + source,
-    ];
-    for (const comment of malformed) {
-        const r = lintBrief(comment);
-        assert.deepEqual(r.problems, ['unclosed or missing outer fence']);
-        assert.equal(r.meta.repo, undefined);
-    }
+    const comment = '<!-- imp-brief -->\n' + '\x60\x60\x60markdown\n' + source;
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, 'unclosed outer fence');
+    const r = lintBrief(comment);
+    assert.deepEqual(r.problems, ['unclosed outer fence']);
+    assert.equal(r.meta.repo, undefined);
 });
