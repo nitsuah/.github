@@ -351,7 +351,7 @@ Latest lifecycle update (2026-11-01 19:52Z): Vigil #415 is complete via [PR #421
 - **Darkmoon #482 lifecycle:** implementation merged in #501 as `7ca67c05595499cfc1da9337f6e926af9f047845`; remaining pointer-lock/non-pointer-lock/mobile playable validation is human-gated. The stale implementation brief is superseded, and #497 aim/fire hit/miss remains blocked under #481.
 - **Dependency blockers:** Darkmoon #518 remains the single maintainer lockfile repair for #516/#521/#523; all three fail at `npm ci` before application tests. Farm-3j #415 remains the maintainer pnpm lockfile repair for #414's PostCSS override mismatch. No lockfile bypass or hand edit was used.
 - **Current Imp labels:** `imp:ready=0`, `imp:working=0`, `imp:claimed=0`, `imp:failed=0`, `imp:pr=0`, `imp:needs-human=14`. Darkmoon #482 is included for genuine manual playable acceptance. Prepared candidates Fire #172/#444 and Vigil #437 remain unlabelled pending local dispatcher preflight; this runtime has no `IMPS_HOME` or `~/.imps`, so kit SHA/cooldown/attempt state cannot be verified.
-- **Open docs PR:** this PR is Ready at its current head and the prior exact-head Imp kit run passed, but the merge connector returned internal errors; no merge is claimed. This commit requires a fresh exact-head Imp kit run before any merge retry.
+- **Docs PR #276:** merged to main as `d7eaa53156ca910db9bfbafe9b884a0c5c55176a`; exact-head Imp kit run [42129899499](https://github.com/nitsuah/.github/actions/runs/42129899499) passed unit tests, documented-default checks, and syntax checks. This supersedes the earlier merge-connector-error note; no #276 merge retry remains.
 
 ## Latest maintenance delta — 2026-11-06
 
