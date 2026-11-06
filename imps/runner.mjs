@@ -274,7 +274,9 @@ function spawnFailed(t0) {
     metrics.toolTurns = 0;
     return metrics;
 }
-export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
+// env: optional environment for the child. Default is cleanEnv() (9router, no tokens). Callers that pass their own env
+// own its contents (it must still carry no GitHub tokens).
+export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits', env = null }) {
     const guardEnabled = process.env.IMPS_REPEAT_FAILURE_GUARD === '1';
     const args = ['-p', '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
@@ -301,7 +303,14 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     const out = createWriteStream(transcript);
     const events = [];
     const stdio = guardEnabled ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'];
-    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio, windowsHide: true });
+    let child;
+    try {
+        child = spawn(bin, args, { cwd, env: env || cleanEnv(), stdio, windowsHide: true });
+    } catch (e) { // e.g. an env value with a NUL byte throws synchronously: close the transcript, report like a failed spawn
+        console.error(`spawn failed: ${e.message}`);
+        await new Promise((done) => out.end(done));
+        return spawnFailed(t0);
+    }
     let buf = '';
     let toolTurns = 0;
     let capped = false;
