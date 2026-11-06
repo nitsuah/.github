@@ -361,3 +361,51 @@ Latest lifecycle update (2026-11-01 19:52Z): Vigil #415 is complete via [PR #421
 - **Verified #399 behavior gap in #447:** the bundled syncChaosProfilePanel() sets visibility from chaosMode.enabled, and the rerollChaos wrapper calls it; reroll therefore reopens a panel the user closed. The profile button also lacks aria-controls="chaos-profile-panel". The canonical #399 brief [comment #6593225953](https://github.com/nitsuah/fire/issues/399#issuecomment-6593225953) already requires preserving the explicit open/closed choice and the ARIA relationship. Review guidance [#6675289144](https://github.com/nitsuah/fire/pull/447#issuecomment-6675289144) asks to remove #399 hunks from #447 rather than broaden the #351/#352 PR; keep #408 as the separate Playwright acceptance child.
 - **Imp dispatch:** fresh open-label searches remain imp:ready=0, imp:working=0, imp:claimed=0, imp:failed=0, imp:pr=0, imp:needs-human=14. Prepared Fire #172/#444 and Vigil #437 remain unlabelled. This runtime has no IMPS_HOME or ~/.imps; current-kit SHA, cooldown, and attempt preflight cannot be verified. Do not promote or reset attempts without the runner ledger.
 - **Fork boundary:** API metadata confirms darkmoon, .github, security-program, fire, motor-pool, and vhs are fork=false; 9router and opencut-classic are fork=true and remain excluded.
+
+## Imp queue restore — 2026-11-06
+
+The queue had sat at `imp:ready=0` because the earlier notes held prepared briefs "pending local preflight". This pass applies the supported reset instead: a fresh trusted `<!-- imp-brief -->` comment restarts the issue attempt count (`issueFailures` since `briefCommentAt`). The dispatcher still enforces cooldown, the per-repo cap, `prGuard` and `depends:` at pick time on GHASTLY, so a ready label never bypasses them. Each brief was linted against kit `a9ec8be` with `brieflint.mjs` plus `briefFromComments`, `validateBriefMeta`, `validateBriefMaxLines` and `parseDepends` in `node:22` Docker. It was linted both before posting and as GitHub stored it.
+
+### Ready (labelled `imp:ready`)
+
+| Issue | Brief | Scope | Recovery cause fixed |
+| --- | --- | --- | --- |
+| [Fire #172](https://github.com/nitsuah/fire/issues/172) | [#6675492934](https://github.com/nitsuah/fire/issues/172#issuecomment-6675492934) | `components.css` and `side-hustle.spec.js`, 180 lines | **Bad brief.** The earlier runs ended with no commits after about 21 turns, and the old `format:` ran `prettier --check` on `components.css`, which already has Prettier differences on main. The new brief scopes the CSS to the three selects and leaves `.form-group select` unchanged. It gives exact tabs, IDs, lines and the `logCalculatorSale` row setup, says to edit first, and formats only the spec. |
+| [Fire #444](https://github.com/nitsuah/fire/issues/444) | [#6675493771](https://github.com/nitsuah/fire/issues/444#issuecomment-6675493771) | new `managers/quick-start.js`, `index.html` script tag and the unit test, 180 lines | **Split.** This is the first half of #440, whose run `imp_2611030543_440` produced 291 lines. The old `format:` checked `index.html`, which also has pre-existing Prettier differences. On main, `npm test -- tests/unit/quick-start.test.mjs` passes (8/8) and ESLint passes. |
+| [Vigil #437](https://github.com/nitsuah/vigil/issues/437) | [#6675494477](https://github.com/nitsuah/vigil/issues/437#issuecomment-6675494477) | `lib/sync.ts`, `sync-repos/route.ts` and the new test, 220 lines | **Bad brief.** The brief lacked `tsc --noEmit` (TypeScript repo checklist), and its `format:` checked two source files with pre-existing Prettier differences. On main, `tsc --noEmit` and ESLint on both source files pass. This child carries the dispatchable part of #305. |
+
+Fire has no open Imp PR; its four open Draft PRs (#443, #447–#449) cover other issues. Vigil has no open PRs.
+
+### Held (`imp:needs-human`, kept)
+
+| Issue | Class | Reason |
+| --- | --- | --- |
+| motor-pool#168 | human decision (security/authz) | TokenEconomizer HTTP route authorization and trusted-proxy decision. PRs #139 and #172 stay unmerged. |
+| security-program#43 | human decision (security) | A local `runs/dispositions.json` hold must be cleared in the security-program checkout. |
+| fire#279 | human decision (security/authz) | Drive backup and restore ownership review. The test-only #426 is merged. |
+| fire#348 | human decision (security) | Stripe webhook signature, replay and event-ID retention decision. No owner answer yet. |
+| ats-fill#176, skyview#213 | human decision (security) | OAuth and session-boundary audits, not code briefs. |
+| fire#341 | human decision (architecture) | Hosted MCP browser-bridge design spike. |
+| fire#139 | human decision (product/privacy) | Broader CoinTracker discovery scope. |
+| fire#436 | human decision (visual) | `open-expenses.png` baseline acceptance. The actual image looks improved, but owner approval is still needed. |
+| fire#262, vigil#311 | human decision (live acceptance) | Parent trackers. All code children are merged; only live-provider or live-count acceptance remains. |
+| vigil#305 | dependency / live evidence | Parent issue. Its deterministic child #437 is now ready; the parent needs a real stuck-run trace. |
+| darkmoon#482 | human decision (manual QA) | The implementation merged in #501. Pointer-lock and mobile playable validation remain. Also, Darkmoon `npm ci` is broken until #518, so nothing in Darkmoon is dispatchable. |
+| vigil#353 | missing capability (deploy config) | **New evidence** ([comment](https://github.com/nitsuah/vigil/issues/353#issuecomment-6675500564)): the published production deploy `6adec656` is a 2026-10-26 API upload with `commit_ref: null`. Git pushes are not publishing, so `/api/version` returns the `'dev'` fallback. This is a Netlify fix for the owner, not code. |
+
+### Prepared briefs checked and not labelled
+
+- **Dependency blocked:**
+  - Fire #440 (needs #444).
+  - Fire #398 (needs #444 and #440).
+  - Fire #408 and #340 (need #399, which PR #448 owns).
+  - VHS #158 (needs maintainer lockfile #160).
+  - VHS #159 (needs #129).
+- **Owned by an open PR:** Fire #335/#336 (#449), #351/#352 (#447), #399 (#448), and Darkmoon #520 (#521).
+- **Not dispatchable as briefed:**
+  - VHS #129 uses host-native `npx` commands and a 300-line, six-file cap that includes a new-markup design choice. Split it and move it to Docker before readying.
+  - Fire #302 and Motor-pool #117 need live acceptance only.
+  - Motor-pool #148–#160 belong to the TokenEconomizer security cluster.
+  - Farm-3j and Darkmoon are blocked on lockfile repairs (#415, #518).
+
+**Readiness after this pass:** `imp:ready=3`, `imp:needs-human=14`, and `working`, `claimed`, `failed` and `pr` all at 0. That's below the 6–10 target because, after this check, no other open issue in the 16 public repos is both unblocked and not human-gated.
