@@ -33,7 +33,7 @@ function fakeCli(toolTurns = 0) {
         "  finish('TOOL_TURNS_COMPLETE');",
         "} else if (!args.includes('--input-format')) {",
         "  const promptIndex = args.indexOf('-p') + 1;",
-        "  finish(JSON.stringify({ args, prompt: args[promptIndex], marker: process.env.IMPS_TEST_MARKER || null }));",
+        "  finish(JSON.stringify({ args, prompt: args[promptIndex], marker: process.env.IMPS_TEST_MARKER || null, parentOnly: process.env.IMPS_TEST_PARENT_ONLY || null }));",
         '} else {',
         '  const received = [];',
         '  const rl = createInterface({ input: process.stdin });',
@@ -72,7 +72,7 @@ async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0, e
             maxTurns,
             noEditByTurn: 0,
             transcript: join(tempHome, name + '.jsonl'),
-            env,
+            ...(env ? { env } : {}),
         });
     } finally {
         if (previousGuard === undefined) delete process.env.IMPS_REPEAT_FAILURE_GUARD;
@@ -150,11 +150,21 @@ test('commit-recovery claim is atomic, expires, and does not retry a finalized a
 
 test('runClaude passes a caller-supplied env to the child; default env does not carry it', { skip: process.platform === 'win32' }, async () => {
     const custom = { PATH: process.env.PATH, HOME: process.env.HOME || tempHome, IMPS_TEST_MARKER: 'custom-env' };
-    const withEnv = JSON.parse((await runWithFake({ guard: false, prompt: 'ENV_PROMPT', name: 'custom-env', env: custom })).finalText);
+    process.env.IMPS_TEST_PARENT_ONLY = 'parent-secret';
+    let withEnv;
+    try {
+        withEnv = JSON.parse((await runWithFake({ guard: false, prompt: 'ENV_PROMPT', name: 'custom-env', env: custom })).finalText);
+    } finally { delete process.env.IMPS_TEST_PARENT_ONLY; }
     assert.equal(withEnv.marker, 'custom-env');
+    assert.equal(withEnv.parentOnly, null, 'a custom env must not inherit parent variables');
     process.env.IMPS_TEST_MARKER = 'leaked';
     try {
         const plain = JSON.parse((await runWithFake({ guard: false, prompt: 'ENV_PROMPT', name: 'default-env' })).finalText);
         assert.equal(plain.marker, null);
     } finally { delete process.env.IMPS_TEST_MARKER; }
+});
+
+test('a spawn that throws synchronously ends as spawn-failed', { skip: process.platform === 'win32' }, async () => {
+    const metrics = await runWithFake({ guard: false, prompt: 'P', name: 'nul-env', env: { PATH: process.env.PATH, BAD: 'a b' } });
+    assert.equal(metrics.end, 'spawn-failed');
 });

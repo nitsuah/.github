@@ -303,7 +303,14 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     const out = createWriteStream(transcript);
     const events = [];
     const stdio = guardEnabled ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'];
-    const child = spawn(bin, args, { cwd, env: env || cleanEnv(), stdio, windowsHide: true });
+    let child;
+    try {
+        child = spawn(bin, args, { cwd, env: env || cleanEnv(), stdio, windowsHide: true });
+    } catch (e) { // e.g. an env value with a NUL byte throws synchronously: close the transcript, report like a failed spawn
+        console.error(`spawn failed: ${e.message}`);
+        await new Promise((done) => out.end(done));
+        return spawnFailed(t0);
+    }
     let buf = '';
     let toolTurns = 0;
     let capped = false;
