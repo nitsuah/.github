@@ -204,7 +204,8 @@ if (process.platform !== 'win32') {
     const groomResult = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', groomPs], { encoding: 'utf8', windowsHide: true });
     const groomTask = (groomResult.stdout || '').trim();
     const groomExists = groomTask === 'imps-groom';
-    check('groomer task registered', groomExists, groomExists ? 'imps-groom' : 'imps-groom not found — run setup.ps1 to register daily groomer');
+    // The groomer is opt-in (setup.ps1 -WithGroomer), so a missing task is not a failure.
+    check('groomer task (opt-in)', true, groomExists ? 'imps-groom registered' : 'not registered (opt-in: setup.ps1 -WithGroomer)');
 }
 
 // ── a cycle that died leaves the lock behind ──────────────────────────────

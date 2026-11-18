@@ -23,6 +23,7 @@ That:
 5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07, plus 2 min after logon) and `imps-label-watch` (every 5 min).
 
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
+The draft-first **groomer** is opt-in: setup registers `imps-groom` only with `-WithGroomer` (see [Groomer (opt-in)](#groomer-opt-in)).
 
 ```powershell
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check (incl. topology)
@@ -133,6 +134,20 @@ node imps/rsi.mjs --dry-run
 ```
 
 `rsi.mjs` turns recurring gate failures, fix-loop `needs-human` spikes, and open `bot:journey` / `bot:review` issues into capped `imp:ready` issues with briefs (including kit briefs against `.github`). Kill switch: `IMPS_RSI=0` or `~/.imps/config.json` → `"rsi": false`. Still inside the normal gate / path deny / caps.
+
+## Groomer (opt-in)
+
+`groom.mjs` drafts briefs for untriaged issues and posts them as public `imp-brief-draft` comments with `imp:needs-brief` for human promotion; it never adds `imp:ready`. Because it writes to GitHub, it is **off by default**:
+
+```powershell
+pwsh -File imps/setup.ps1 -WithGroomer   # registers the daily imps-groom task (06:07)
+$env:IMPS_GROOM = '1'; node imps/groom.mjs --dry-run   # one-off manual run
+```
+
+- `groomEnabled()` is true only when `IMPS_GROOM=1`. The scheduled `groom.cmd` sets it itself, so the task is the opt-in.
+- Without `-WithGroomer`, `setup.ps1` does not register the task (and removes a previously registered one).
+- Kill switches: `IMPS_GROOM=0` / `false` (checked first in the wrapper), `-SkipGroomer` (deprecated; off is the default), or `~/.imps/config.json` `"groom": false`, which wins even when `IMPS_GROOM=1`.
+- `warlock.mjs` reports the task as informational and does not fail when it is absent.
 
 ## Recover a broken runner
 

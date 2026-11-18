@@ -24,10 +24,12 @@ export function loadGroomConfig(path) {
     return parseGroomConfig(readFileSync(path, 'utf8'));
 }
 
+// Opt-in: the groomer posts public draft comments and labels, so it stays off
+// unless IMPS_GROOM=1 is set. config.groom=false is a kill switch that wins
+// even when IMPS_GROOM=1 (the scheduled wrapper sets IMPS_GROOM=1 itself).
 export function groomEnabled(config = {}, env = {}) {
-    if (env.IMPS_GROOM === '0' || env.IMPS_GROOM === 'false') return false;
     if (config.groom === false) return false;
-    return true;
+    return env.IMPS_GROOM === '1';
 }
 
 /** Normalize an issue label array to just names. */

@@ -27,12 +27,20 @@ test('parseGroomConfig returns empty object for invalid JSON', () => {
     assert.deepEqual(cfg, {});
 });
 
-test('groomEnabled respects kill switches', () => {
+test('groomEnabled is opt-in: off by default, on only with IMPS_GROOM=1', () => {
+    assert.equal(groomEnabled(), false);
+    assert.equal(groomEnabled({}, {}), false);
+    assert.equal(groomEnabled({ groom: true }, {}), false);
     assert.equal(groomEnabled({}, { IMPS_GROOM: '0' }), false);
     assert.equal(groomEnabled({}, { IMPS_GROOM: 'false' }), false);
-    assert.equal(groomEnabled({ groom: false }, {}), false);
-    assert.equal(groomEnabled({}, {}), true);
-    assert.equal(groomEnabled({ groom: true }, {}), true);
+    assert.equal(groomEnabled({}, { IMPS_GROOM: 'true' }), false);
+    assert.equal(groomEnabled({}, { IMPS_GROOM: '' }), false);
+    assert.equal(groomEnabled({}, { IMPS_GROOM: '1' }), true);
+    assert.equal(groomEnabled({ groom: true }, { IMPS_GROOM: '1' }), true);
+});
+
+test('groomEnabled: config.groom=false is a kill switch even with IMPS_GROOM=1', () => {
+    assert.equal(groomEnabled({ groom: false }, { IMPS_GROOM: '1' }), false);
 });
 
 test('labelNames extracts names from label objects', () => {
