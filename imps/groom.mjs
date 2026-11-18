@@ -5,7 +5,8 @@
 //
 //   node groom.mjs [--dry-run] [--owner nitsuah] [--json]
 //
-// Kill switch: IMPS_GROOM=0 or ~/.imps/config.json { "groom": false }
+// Opt-in: does nothing unless IMPS_GROOM=1 (setup.ps1 -WithGroomer sets it in the
+// scheduled wrapper). Kill switch: ~/.imps/config.json { "groom": false } always wins.
 // Safety: daily issue cap (like rsiDailyIssueCap), never touches .github/workflows or secrets,
 // dedupes by issue number and brief hash.
 import { spawnSync } from 'node:child_process';
@@ -30,8 +31,8 @@ const { values: o } = parseArgs({
 
 const config = loadGroomConfig(join(HOME, 'config.json'));
 if (!groomEnabled(config, process.env)) {
-    const msg = { event: 'groom-disabled', reason: 'IMPS_GROOM=0 or config.groom=false' };
-    console.log(o.json ? JSON.stringify(msg) : 'groom disabled (kill switch)');
+    const msg = { event: 'groom-disabled', reason: 'groomer is opt-in: set IMPS_GROOM=1 (and not config.groom=false)' };
+    console.log(o.json ? JSON.stringify(msg) : 'groom disabled (opt-in: set IMPS_GROOM=1)');
     process.exit(0);
 }
 
