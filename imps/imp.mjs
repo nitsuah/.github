@@ -24,7 +24,8 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter } from './lib.mjs';
+import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery } from './runner.mjs';
@@ -98,6 +99,20 @@ async function run() {
     if (!resolveClaudeBin()) {
         console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
         process.exit(1);
+    }
+    // Served-model identity guard (#258): when expected model families are configured
+    // (config.expectedModelFamilies or IMPS_EXPECT_MODEL_FAMILY), probe the router once and stop on a
+    // family mismatch. This runs before quota is reserved and before any worktree or ledger row, so
+    // no attempt is consumed; dispatch sees the marker line and puts the issue back on imp:ready.
+    const expected = expectedFamilies(loadHomeConfig(), process.env);
+    if (expected.length) {
+        const router = resolveRouter();
+        const probe = await probeServedModel({ baseUrl: router.baseUrl, key: router.key, model: o.model, expected });
+        if (!probe.ok) {
+            console.error(mismatchLine(probe));
+            process.exit(1);
+        }
+        console.log(`served-model probe: ${probe.verdict}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
     }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
     const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
