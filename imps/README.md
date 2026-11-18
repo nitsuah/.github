@@ -62,6 +62,10 @@ Task Scheduler tasks only see new user variables after you **sign out and back i
 
 macOS / Linux: `export NINEROUTER_KEY=...` (and optionally `NINEROUTER_URL`) in `~/.profile` (login shells; cron does not read it, so prefix the crontab line or use `environment.d`), or for systemd user timers put `NINEROUTER_KEY=...` in `~/.config/environment.d/imps.conf` and re-login. Keep that file `chmod 600`. `setup.sh` reports where it found the URL and key.
 
+### Served-model identity guard
+
+The router answers with the model that actually served a request. Set the family you expect (`~/.imps/config.json` `"expectedModelFamilies": ["nemotron"]`, or `IMPS_EXPECT_MODEL_FAMILY=nemotron`) and `imp.mjs run` makes one minimal probe (`max_tokens: 1`) before it reserves quota or creates a worktree. The served id is read from the response body `model` field, else an `x-served-model` / `x-model` header (both accepted until the real 9router field is confirmed with one local `curl`). If the served model is a different family (for example `glm-4.7-flash` for a Nemotron expectation) the run stops with `served model mismatch`, and dispatch puts the issue back on `imp:ready` without consuming an attempt. A router that is unreachable or returns no model id is reported, not treated as a mismatch. With no expectation configured nothing is probed. Logic and fixtures: `served-model.mjs` / `served-model.test.mjs`.
+
 ## What lives where
 
 | Path | What | Reset by updates? |

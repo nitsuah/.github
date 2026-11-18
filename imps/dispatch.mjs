@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim } from './lib.mjs';
+import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -377,6 +378,12 @@ async function work(issue) {
         if (!id && /claude binary not found/.test(run.out)) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return log({ event: 'infra-fail', repo, number, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
+        }
+        if (!id && run.out.includes(MODEL_MISMATCH_MARK)) {
+            // The router served a different model family than expected (#258). The run stopped before
+            // quota, worktree or ledger row, so no attempt was consumed: put the issue back.
+            relabel(repo, number, 'imp:ready', ['imp:working']);
+            return log({ event: 'infra-fail', repo, number, reason: 'model-mismatch', out: run.out.slice(-300) });
         }
         if (!id && isTransientNetworkError(run.out)) {
             // GitHub or the network was unreachable before the imp started: nothing was tried on the issue.
