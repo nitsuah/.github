@@ -281,10 +281,11 @@ async function clearStaleLabels() {
         const repo = issue.repository.name;
         const stale = staleImpLabels(issue.labels);
         if (!stale.length) continue;
-        log({ event: 'label-cleanup', repo, number: issue.number, removed: stale });
-        if (dry) continue;
+        // Log only what happened: a dry run names what it would remove, and a failed edit is not logged as a removal (friction #8).
+        if (dry) { log({ event: 'label-cleanup', dry: true, repo, number: issue.number, removed: stale }); continue; }
         try {
             gh(['issue', 'edit', String(issue.number), '-R', `${o.owner}/${repo}`, ...stale.flatMap((l) => ['--remove-label', l])]);
+            log({ event: 'label-cleanup', dry: false, repo, number: issue.number, removed: stale });
             cleared.push(`${repo}#${issue.number}`);
         } catch (e) {
             log({ event: 'label-cleanup-error', repo, number: issue.number, out: String(e.message).slice(-300) });
@@ -521,26 +522,6 @@ if (!router.up) {
     process.exit(0);
 }
 if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, waitedMs: router.waitedMs });
-
-// Strip stale imp state labels from closed issues (stash#289, stash#290, vigil#313).
-try {
-    const seen = new Set();
-    for (const l of STALE_ON_CLOSE) {
-        const res = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'closed', '--label', l, '--limit', '100', '--json', 'repository,number,labels']);
-        for (const i of res) {
-            const key = `${i.repository.name}#${i.number}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const rm = staleImpLabels(i.labels);
-            if (rm.length && !dry) {
-                gh(['issue', 'edit', String(i.number), '-R', `${o.owner}/${i.repository.name}`, ...rm.flatMap((x) => ['--remove-label', x])]);
-            }
-            log({ event: 'label-cleanup', repo: i.repository.name, number: i.number, removed: rm });
-        }
-    }
-} catch (e) {
-    log({ event: 'label-cleanup-error', error: e.message });
-}
 
 // Release claims left behind by a machine that stopped mid-run, before picking
 // anything: otherwise the queue looks emptier than it is (#60).

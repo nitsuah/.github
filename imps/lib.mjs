@@ -291,6 +291,11 @@ const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
     /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|mix\.lock|pubspec\.lock|podfile\.lock|gradle\.lockfile|packages\.lock\.json|package\.resolved|flake\.lock|deno\.lock)$/i,
     /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/, /(^|\/)CODEOWNERS$/];
 
+/** True when the gate rejects this path for every brief, however `allow:` is written (so an allowlist entry that reaches it can never pass). */
+export function isDeniedPath(path) {
+    return DENY.some((re) => re.test(path));
+}
+
 // An unscoped brief (no `allow:`) must not reach the kit itself. Kit self-work
 // briefs name the imps/ files they may touch in `allow:`, which opts them in.
 const KIT = /^imps\//;
@@ -1471,3 +1476,14 @@ export function failureDiagnosticSummary(gate) {
     return '\n\n**Diagnostic summary (untrusted command output):**\n' + parts.map((part) => '- ' + part).join('\n');
 }
 
+
+/** One-line reading of a test/lint exit the imp would otherwise guess at (friction #20-#28: exit-only failures with no first diagnostic). */
+export function exitHint(status, error) {
+    if (error) return `could not start the command: ${error.code || ''} ${error.message}`.replace(/\s+/g, ' ').trim();
+    if (status == null) return 'the command was killed by a signal or timeout; no exit code';
+    if (status === 127) return 'exit 127 = command not found: check the executable name and that the tool/image exists; this is not a test assertion';
+    if (status === 126) return 'exit 126 = command found but not executable (permissions or wrong platform)';
+    if (status === 125) return 'exit 125 = docker itself failed (daemon down, bad flag or mount), not the tests';
+    if (status === 137) return 'exit 137 = killed (out of memory or docker stop)';
+    return null;
+}
