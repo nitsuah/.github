@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolve } from 'node:path';
 import { rows, loadBrief, gateShell } from './runner.mjs';
-import { lastLines } from './lib.mjs';
+import { lastLines, exitHint } from './lib.mjs';
 
 // The last 256 KiB of a file (enough for 60 lines of any normal log), without reading the whole thing.
 function readTail(path, bytes = 256 * 1024) {
@@ -45,17 +45,21 @@ for (const [name, cmd] of [['test', meta.test], ['lint', meta.lint]]) {
     const outPath = join(dir, `${name}.log`);
     let tail = '';
     let status;
+    let spawnError;
     try {
         const fd = openSync(outPath, 'wx', 0o600);
         const r = spawnSync(cmd, { cwd: run.worktree, shell: gateShell(), stdio: ['ignore', fd, fd], windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
         closeSync(fd);
         status = r.status;
+        spawnError = r.error;
         tail = readTail(outPath);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
     console.log(lastLines(tail));
     console.log(`── ${name} exit ${status}`);
+    const hint = status !== 0 ? exitHint(status, spawnError) : null;
+    if (hint) console.log(`── ${name} hint: ${hint}`);
     if (status !== 0) code = status ?? 1;
 }
 if (!meta.test && !meta.lint) console.log('runtest: this brief has no test or lint command');

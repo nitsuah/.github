@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BRIEF_MARK, briefFromComments, parseBrief } from './lib.mjs';
+import { BRIEF_MARK, briefFromComments, parseBrief, parseDepends, isDeniedPath } from './lib.mjs';
 
 // A brief that spells out N lines of code leads to a diff of about 2.5x that once the tests and
 // wiring are written (vigil#359: 56 inline lines, 136-line diff; fire#335: 107 lines, 160-line diff).
@@ -70,6 +70,14 @@ export function lintBrief(text, { exists } = {}) {
     if (!meta.depends && /depends on|has not merged|not merged yet|must be merged|after #\d+ (?:is )?merged|child \d of \d/i.test(body)) {
         warnings.push('the body mentions a dependency but the front matter has no `depends:` line (e.g. `depends: #318`); without it the dispatcher can run this issue before its dependency has merged');
     }
+    // The gate matches `allow` with startsWith on repo-relative paths and always denies some paths (friction #29: a brief that
+    // named .env.example could never pass). Catch both before an attempt is spent.
+    for (const p of (meta.allow || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+        if (/^\.\/|^\/|^[A-Za-z]:|\\/.test(p)) problems.push(`allow entry must be a repo-relative POSIX prefix without ./, a leading / or backslashes: ${p}`);
+        else if (/[*?{}[\]]/.test(p)) problems.push(`allow entry is a glob but the gate matches plain path prefixes (use a directory prefix or exact file): ${p}`);
+        else if (isDeniedPath(p)) problems.push(`allow entry is always denied by the gate (.github/, .env*, secrets/, lockfiles, CODEOWNERS, imps/defaults.mjs): ${p}`);
+    }
+    if (meta.depends && !/^(none|n\/a|-)\s*(;|$)/i.test(meta.depends.trim()) && !parseDepends(meta.depends, meta.repo || '').length) problems.push(`depends: has no parseable reference (start with #N or repo#N, no quotes; notes go after a ;): ${meta.depends}`);
     const code = codeLines(body);
     if (max >= 20 && code * SIZE_FACTOR > max) warnings.push(`${code} inline code lines but maxLines ${max}; expect a diff near ${Math.round(code * SIZE_FACTOR)}. Suggest maxLines: ${Math.ceil((code * SIZE_FACTOR) / 10) * 10}, or split the issue`);
     if (exists) {

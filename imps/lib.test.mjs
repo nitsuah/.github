@@ -1833,3 +1833,12 @@ test('failureDiagnosticSummary includes recognized diagnostics for abnormal comm
     assert.match(unrun, /Diagnostic summary unavailable/);
     assert.doesNotMatch(unrun, /stale output/);
 });
+
+test('exitHint names the command-not-found / docker-failure classes and nothing for an ordinary failure', async () => {
+    const { exitHint } = await import('./lib.mjs');
+    assert.match(exitHint(127), /command not found/);
+    assert.match(exitHint(125), /docker itself/);
+    assert.match(exitHint(null), /signal or timeout/);
+    assert.match(exitHint(null, Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })), /could not start.*ENOENT/);
+    assert.equal(exitHint(1), null);
+});

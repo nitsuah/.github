@@ -110,3 +110,19 @@ test('an unclosed marker-first outer fence gets a precise diagnostic', () => {
     assert.deepEqual(r.problems, ['unclosed outer fence']);
     assert.equal(r.meta.repo, undefined);
 });
+
+test('allow entries the gate always denies or can never match are problems (motor-pool#148 .env.example)', () => {
+    const mk = (allow) => lintBrief(brief('').replace('allow: a.js, a.test.js', `allow: ${allow}`)).problems.join('|');
+    assert.match(mk('a.js, .env.example'), /always denied.*\.env\.example/);
+    assert.match(mk('package-lock.json'), /always denied/);
+    assert.match(mk('.github/workflows/x.yml'), /always denied/);
+    assert.match(mk('./src/'), /repo-relative/);
+    assert.match(mk('src\\\\a.js'), /repo-relative/);
+    assert.match(mk('src/**/*.js'), /glob/);
+    assert.equal(mk('src/, docs/CHANGELOG.md'), '');
+});
+
+test('an unparseable depends: is a problem, a note after ; is fine', () => {
+    assert.match(lintBrief(brief('depends: "fire#444"\n')).problems.join(), /no parseable reference/);
+    assert.deepEqual(lintBrief(brief('depends: #444; must merge first\n')).problems, []);
+});
