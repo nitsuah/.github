@@ -170,7 +170,22 @@ export function dockerGitProblem(meta = {}) {
     for (const key of ['test', 'lint', 'format']) {
         const cmd = String(meta[key] || '');
         const at = cmd.search(/\bdocker\s+run\b/);
-        if (at >= 0 && /(^|[\s;&|('"])git\s/.test(cmd.slice(at))) {
+        if (at < 0) continue;
+        // Stop at an unquoted shell operator: host-side && git is not in Docker,
+        // while quoted shell scripts passed to the container remain in scope.
+        const dockerCommand = cmd.slice(at);
+        let quote = null;
+        let end = dockerCommand.length;
+        for (let i = 0; i < dockerCommand.length - 1; i++) {
+            const ch = dockerCommand[i];
+            if (quote) {
+                if (ch === quote && dockerCommand[i - 1] !== '\\') quote = null;
+            } else if (ch === "'" || ch === '"') quote = ch;
+            else if ((ch === '&' && dockerCommand[i + 1] === '&') || ch === ';' || ch === '|') {
+                end = i; break;
+            }
+        }
+        if (/(^|[\s;&|('"])git\s/.test(dockerCommand.slice(0, end))) {
             return `Brief \`${key}:\` runs git inside \`docker run\`; a worktree's .git points at a host path the container cannot see, so it exits 128. Move git checks (e.g. \`git diff --check\`) to a host-side \`format:\` line.`;
         }
     }
@@ -380,7 +395,7 @@ export function effectiveMaxLines(metaMax, slack = 0) {
 }
 
 /** Test files: a `tests/`-style directory or a `.test.`/`.spec.` file name. */
-export const TEST_PATH = /(^|\/)(tests?|__tests__|tests_playwright|e2e|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+export const TEST_PATH = /(^|\/)(tests?|__tests__|tests_playwright|e2e|spec)\/|\.(test|spec)\.[^/]+$/i;
 
 /**
  * The test-file budget. Tests get their own allowance (default twice the code
@@ -453,9 +468,11 @@ export function outOfScopeTracked(porcelain = '', allow = []) {
     return String(porcelain)
         .split('\n')
         .filter((l) => l.length > 3 && !l.startsWith('?? ') && !l.startsWith('!! '))
-        .map((l) => l.slice(3).trim())
-        .map((p) => (p.includes(' -> ') ? p.split(' -> ').pop() : p))
-        .map((p) => decodeGitQuotedPath(p))
+        .flatMap((l) => {
+            const raw = l.slice(3).trim();
+            const paths = raw.includes(' -> ') ? raw.split(' -> ') : [raw];
+            return paths.map(decodeGitQuotedPath);
+        })
         .filter((p) => p && !allow.some((a) => p.startsWith(a)));
 }
 
