@@ -19,6 +19,7 @@ import { BRIEF_MARK, report } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { proposeRsiIssues, loadRsiConfig, rsiEnabled } from './rsi-lib.mjs';
 import { rows, resolveVaultPrompt } from './runner.mjs';
+import { strugglingRepos } from './memory.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
 mkdirSync(HOME, { recursive: true });
@@ -108,6 +109,7 @@ const proposals = proposeRsiIssues({
     minRecurrence: config.rsiMinRecurrence ?? DEFAULTS.rsiMinRecurrence,
     dailyCap: remaining,
     testsByRepo: config.testsByRepo || {},
+    struggling: strugglingRepos(ledger),
 });
 
 const vault = resolveVaultPrompt(config);

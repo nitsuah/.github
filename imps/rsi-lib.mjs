@@ -27,6 +27,27 @@ export function rsiEnabled(config = {}, env = {}) {
     return true;
 }
 
+/**
+ * Whether the dispatcher should run the RSI pass at the end of this cycle:
+ * always with --rsi or IMPS_RSI=1, never with IMPS_RSI=0, and otherwise once a
+ * UTC day when config.json says `"rsi": true` (no `rsi` event yet today in the
+ * dispatch log lines given).
+ */
+export function rsiDue({ flag = false, env = {}, config = {}, dispatchLines = [], now = Date.now() } = {}) {
+    if (env.IMPS_RSI === '0' || env.IMPS_RSI === 'false') return false;
+    if (flag || env.IMPS_RSI === '1') return true;
+    if (config.rsi !== true) return false;
+    const today = new Date(now).toISOString().slice(0, 10);
+    for (const line of dispatchLines) {
+        if (!line.includes('"event":"rsi"')) continue;
+        try {
+            const e = JSON.parse(line);
+            if (e.event === 'rsi' && String(e.at || '').startsWith(today)) return false;
+        } catch { /* a cut line */ }
+    }
+    return true;
+}
+
 /** Normalize a gate reason into a recurrence key. */
 export function gateSignature(reason = '') {
     return String(reason)
@@ -65,6 +86,7 @@ export function proposeRsiIssues({
     minRecurrence = DEFAULTS.rsiMinRecurrence,
     dailyCap = DEFAULTS.rsiDailyIssueCap,
     testsByRepo = {},
+    struggling = [],
 } = {}) {
     const openTitles = new Set(openRsi.map((i) => i.title));
     const used = new Set(filedKeys);
@@ -125,6 +147,46 @@ export function proposeRsiIssues({
             body: `Recurring gate failure \`${sig}\` appeared **${v.count}** times.\n\nSamples: ${v.samples.join(', ')}.`,
             brief,
             kind: 'gate',
+        });
+    }
+
+    // ── 1b. Repos where imps keep failing → curated per-repo memory ────────
+    // `struggling` comes from memory.mjs strugglingRepos(): repo, stats and the
+    // ledger notes. The brief asks an imp to turn them into imps/memory/<repo>.md,
+    // which every later imp prompt for that repo includes (runner.loadBrief).
+    for (const st of struggling) {
+        const key = `struggle:${st.repo}:${st.week}`;
+        // Stable title: the open-issue dedupe matches on it, so counts stay in the body.
+        const title = `imps RSI: imps keep failing in ${st.repo}`;
+        const brief = [
+            '---',
+            `repo: ${targetKit}`,
+            'issue: (set after create)',
+            'maxLines: 60',
+            `allow: imps/memory/${st.repo}.md`,
+            `test: ${KIT_TEST}`,
+            '---',
+            `## Imps keep failing in ${st.repo}`,
+            '',
+            `Last ${st.runs} runs: ${st.merged} merged, ${st.passed}/${st.gated} passed the gate. Samples: ${st.samples.join(', ')}.`,
+            '',
+            'What the ledger says:',
+            ...st.notes.map((n) => `- ${n}`),
+            '',
+            '### The fix',
+            `Create or update \`imps/memory/${st.repo}.md\`: 3 to 6 bullet lines, each naming one trap specific to this repo (a file layout, a test quirk, a command that fails, a convention imps keep breaking) and the rule that avoids it. Use the notes above and the sample issues' gate reasons; do not restate the general PREAMBLE rules.`,
+            '',
+            '### Done when',
+            `- \`imps/memory/${st.repo}.md\` exists with 3 to 6 repo-specific lessons.`,
+            `- \`${KIT_TEST}\` still passes.`,
+        ].join('\n');
+        take({
+            key,
+            title,
+            repo: targetKit,
+            body: `Imps merged ${st.merged} of the last ${st.runs} runs in ${st.repo}.\n\n${st.notes.map((n) => `- ${n}`).join('\n')}`,
+            brief,
+            kind: 'struggle',
         });
     }
 

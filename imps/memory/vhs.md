@@ -1,0 +1,2 @@
+- Playwright specs in `tests_playwright/` mock `/api/*` with `page.route` and serve the app with `tests/journeys/serve.js`. A tape fixture with `photo_face` or `photo_spine` set pins that photo and hides its "Find artwork" button (vhs#169 spent turns on this).
+- Journey screenshot baselines are not imp work: never regenerate or edit `*.png` snapshots.
