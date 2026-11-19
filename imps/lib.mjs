@@ -123,6 +123,18 @@ export function parseBrief(text) {
 }
 
 /**
+ * A brief's `repo:` as a bare repo name. Brief writers often put the full slug
+ * (`nitsuah/fire`); that names the same repo, so it is accepted instead of
+ * failing the issue (vhs#180, fire#483 on 2026-11-19). Any other owner stays
+ * as written, so it still fails the match.
+ */
+export function briefRepoName(repo, owner = DEFAULTS.owner) {
+    const s = String(repo ?? '').trim();
+    const i = s.indexOf('/');
+    return i > 0 && s.slice(0, i).toLowerCase() === String(owner).toLowerCase() ? s.slice(i + 1) : s;
+}
+
+/**
  * Validates that a brief's front matter has required `repo` and `issue`
  * fields matching the expected repository and issue number.
  * Returns an error string or null if valid.
@@ -139,7 +151,7 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     if (!meta.issue || String(meta.issue).trim() === '') {
         return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
     }
-    if (String(meta.repo).trim() !== String(expectedRepo).trim()) {
+    if (briefRepoName(meta.repo) !== String(expectedRepo).trim()) {
         return `Brief \`repo\` (${meta.repo}) does not match the target repository (${expectedRepo})`;
     }
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
@@ -350,7 +362,21 @@ export function effectiveMaxLines(metaMax, slack = 0) {
     return (Number.isNaN(n) ? n : Math.max(n, DEFAULTS.maxLines)) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
+/** Test files: a `tests/`-style directory or a `.test.`/`.spec.` file name. */
+export const TEST_PATH = /(^|\/)(tests?|__tests__|tests_playwright|e2e|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
+
+/**
+ * The test-file budget. Tests get their own allowance (default twice the code
+ * cap) so a brief that asks for several test scenarios is not rejected for
+ * size: vhs#169 wrote 125 code lines and a 224-line spec and failed a 180
+ * cap that review would have accepted.
+ */
+export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
+    if (metaMaxTest) return Number(metaMaxTest) + Number(slack);
+    return 2 * effectiveMaxLines(metaMax) + Number(slack);
+}
+
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -360,6 +386,11 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
         });
     const files = parse(numstat);
     const lines = parse(numstat).reduce((n, f) => n + f.lines, 0);
+    // With a test budget, test files are measured on their own and the code cap
+    // applies to the rest. Without one, everything counts against maxLines.
+    const split = maxTestLines != null;
+    const testLines = split ? files.filter((f) => TEST_PATH.test(f.path)).reduce((n, f) => n + f.lines, 0) : 0;
+    const codeLines = lines - testLines;
     const reasons = [];
     if (dirty) reasons.push('edits left uncommitted');
     else if (!commits.length) reasons.push('no commits');
@@ -369,7 +400,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
-    if (!(lines <= maxLines)) reasons.push(`diff ${lines} lines > ${maxLines}`);
+    if (!(codeLines <= maxLines)) reasons.push(`diff ${codeLines} lines > ${maxLines}`);
+    if (split && !(testLines <= maxTestLines)) reasons.push(`diff ${testLines} lines > ${maxTestLines} (tests)`);
     if (commits.length && !commits.every((c) => /Co-Authored-By: .*imp/i.test(c))) reasons.push('commit missing imp trailer');
     // "tests not run" is not a second fact when there was nothing to run them
     // on: it is the same uncommitted-edit cause wearing another name (#53).
@@ -380,7 +412,24 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
         const markerPaths = findConflictMarkers(diff);
         for (const path of markerPaths) reasons.push(`unresolved conflict marker in ${path}`);
     }
-    return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
+    return { pass: reasons.length === 0, reasons, lines, ...(split ? { codeLines, testLines } : {}), files: files.map((f) => f.path) };
+}
+
+/**
+ * Untracked files outside the brief's `allow:` list, from
+ * `git status --porcelain --untracked-files=all`. These are never part of the
+ * fix (stray scratch output, a test log written under a mangled Windows path)
+ * and nothing but a clean tree may be gated, so the runner deletes them before
+ * commit recovery instead of failing the run (vhs#169, 2026-11-19). Tracked
+ * files are never touched, and with no allow list nothing is called stray.
+ */
+export function strayUntracked(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.startsWith('?? '))
+        .map((l) => decodeGitQuotedPath(l.slice(3).trim()))
+        .filter((p) => p && !allow.some((a) => p.startsWith(a)));
 }
 
 function decodeGitQuotedPath(raw) {

@@ -1,0 +1,57 @@
+# Off-machine alarm for the imps loop. Each machine that runs dispatch keeps one
+# open issue here titled `imps heartbeat: <machine>` (imps/heartbeat.mjs, rewritten
+# at the end of every cycle). A machine whose task was disabled, whose 9router is
+# down, or that is simply off stops rewriting it. On 2026-10-28 that went unnoticed
+# for 21 days. This job labels a stale heartbeat `imps:down` and mentions the owner
+# once; a fresh one clears the label. Retire a machine with the `imps:retired` label.
+name: imps watchdog
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: imps-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check heartbeats
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          STALE_HOURS: '4'
+        run: |
+          set -euo pipefail
+          gh label create 'imps:down' -R "$REPO" -c B60205 -d 'imps heartbeat is stale (watchdog)' --force >/dev/null
+          now=$(date -u +%s)
+          gh issue list -R "$REPO" --state open --search '"imps heartbeat:" in:title' --limit 50 \
+            --json number,title,body,labels > beats.json
+          jq -c '.[] | select(.title | startswith("imps heartbeat: "))' beats.json | while read -r row; do
+            n=$(jq -r '.number' <<<"$row")
+            machine=$(jq -r '.title | sub("^imps heartbeat: "; "")' <<<"$row")
+            labels=$(jq -r '[.labels[].name] | join(",")' <<<"$row")
+            case ",$labels," in *,imps:retired,*) continue ;; esac
+            at=$(jq -r '.body' <<<"$row" | sed -n 's/^| reported at | \([0-9T:.Z-]*\) |.*/\1/p' | head -1)
+            if [ -z "$at" ]; then echo "#$n $machine: no timestamp"; continue; fi
+            age_h=$(( (now - $(date -u -d "$at" +%s)) / 3600 ))
+            down=no; case ",$labels," in *,imps:down,*) down=yes ;; esac
+            echo "#$n $machine: last report $at (${age_h}h ago, down=$down)"
+            if [ "$age_h" -ge "$STALE_HOURS" ] && [ "$down" = no ]; then
+              gh issue edit "$n" -R "$REPO" --add-label 'imps:down'
+              gh issue comment "$n" -R "$REPO" --body "<!-- imps-watchdog -->
+          @$OWNER the imps loop on \`$machine\` has not reported since $at (${age_h} h). Check that the \`imps-dispatch\` task is enabled and 9router is up (\`/imp status\`). Label \`imps:retired\` if this machine no longer runs imps."
+            elif [ "$age_h" -lt "$STALE_HOURS" ] && [ "$down" = yes ]; then
+              gh issue edit "$n" -R "$REPO" --remove-label 'imps:down'
+              gh issue comment "$n" -R "$REPO" --body "<!-- imps-watchdog -->
+          Recovered: \`$machine\` reported at $at."
+            fi
+          done

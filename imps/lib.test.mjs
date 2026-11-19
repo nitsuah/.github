@@ -1842,3 +1842,44 @@ test('exitHint names the command-not-found / docker-failure classes and nothing 
     assert.match(exitHint(null, Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })), /could not start.*ENOENT/);
     assert.equal(exitHint(1), null);
 });
+
+test('validateBriefMeta accepts the owner/repo slug for the same repo, not another owner', async () => {
+    const { briefRepoName } = await import('./lib.mjs');
+    assert.equal(briefRepoName('nitsuah/fire'), 'fire');
+    assert.equal(briefRepoName('fire'), 'fire');
+    assert.equal(briefRepoName('someone/fire'), 'someone/fire');
+    assert.equal(validateBriefMeta('---\nrepo: nitsuah/vhs\nissue: 180\n---\nx', 'vhs', 180), null);
+    assert.match(validateBriefMeta('---\nrepo: someone/vhs\nissue: 180\n---\nx', 'vhs', 180), /does not match/);
+});
+
+test('gate measures test files against their own budget when one is given', () => {
+    // vhs#169: 125 code lines + a 224-line spec failed a 180 cap as one 349-line diff.
+    const numstat = '123\t2\tpublic/js/modules/detail-modal.js\n224\t0\ttests_playwright/artwork-link.spec.js';
+    const legacy = gate({ numstat, commits: [ok], testExit: 0, maxLines: 180, allow: ['public/', 'tests_playwright/'] });
+    assert.equal(legacy.pass, false);
+    assert.ok(legacy.reasons.includes('diff 349 lines > 180'));
+    const split = gate({ numstat, commits: [ok], testExit: 0, maxLines: 180, maxTestLines: 360, allow: ['public/', 'tests_playwright/'] });
+    assert.equal(split.pass, true, split.reasons.join());
+    assert.equal(split.codeLines, 125);
+    assert.equal(split.testLines, 224);
+    const tight = gate({ numstat, commits: [ok], testExit: 0, maxLines: 100, maxTestLines: 200, allow: ['public/', 'tests_playwright/'] });
+    assert.deepEqual(tight.reasons, ['diff 125 lines > 100', 'diff 224 lines > 200 (tests)']);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: tight.reasons }), true);
+});
+
+test('effectiveMaxTestLines defaults to twice the code cap and honours a brief value', async () => {
+    const { effectiveMaxTestLines } = await import('./lib.mjs');
+    assert.equal(effectiveMaxTestLines(undefined, 180), 360);
+    assert.equal(effectiveMaxTestLines('90', 180), 90);
+    assert.equal(effectiveMaxTestLines(undefined, 180, 20), 380);
+});
+
+test('strayUntracked lists only untracked paths outside allow', async () => {
+    const { strayUntracked } = await import('./lib.mjs');
+    // git quotes the mangled name vhs#169 left behind (U+F03A in place of the colon).
+    const bs = String.fromCharCode(92);
+    const quoted = `?? "C${bs}357${bs}200${bs}272Usersajhartest_full_output.txt"`;
+    const porcelain = [' M public/js/a.js', '?? tests_playwright/new.spec.js', quoted, '?? notes.log'].join('\n');
+    assert.deepEqual(strayUntracked(porcelain, ['public/', 'tests_playwright/']), [`C${String.fromCharCode(0xf03a)}Usersajhartest_full_output.txt`, 'notes.log']);
+    assert.deepEqual(strayUntracked(porcelain, []), []);
+});
