@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -1887,7 +1887,7 @@ test('strayUntracked lists only untracked paths outside allow', async () => {
 test('outOfScopeTracked lists tracked edits outside allow, never untracked or with no allow list', async () => {
     const { outOfScopeTracked } = await import('./lib.mjs');
     const porcelain = [' M config/eslint.config.mjs', 'M  app/lib/stripe-status.js', '?? test-output.txt', 'R  old.js -> docs/new.js', ' D scripts/x.sh'].join(String.fromCharCode(10));
-    assert.deepEqual(outOfScopeTracked(porcelain, ['app/lib/', 'tests/unit/']), ['config/eslint.config.mjs', 'docs/new.js', 'scripts/x.sh']);
+    assert.deepEqual(outOfScopeTracked(porcelain, ['app/lib/', 'tests/unit/']), ['config/eslint.config.mjs', 'old.js', 'docs/new.js', 'scripts/x.sh']);
     assert.deepEqual(outOfScopeTracked(porcelain, []), []);
 });
 
@@ -1896,6 +1896,21 @@ test('validateBriefMeta rejects git inside docker run, allows host-side git chec
     const nl = String.fromCharCode(10);
     const bad = ['---', 'repo: fire', 'issue: 483', "lint: docker run --rm -v {wt}:/app -w /app node:22 sh -lc 'npx eslint a.js; git diff --check'", '---', 'x'].join(nl);
     assert.match(validateBriefMeta(bad, 'fire', 483), /runs git inside `docker run`/);
-    assert.equal(dockerGitProblem({ format: 'git diff --check', test: 'docker run --rm node:22 sh -c "npm test"' }), null);
+    assert.equal(dockerGitProblem({ format: 'git diff --check', test: 'docker run --rm node:22 sh -c "npm test"' }), null);\n    assert.equal(dockerGitProblem({ test: 'docker run --rm node:22 npm test && git diff --check' }), null);
     assert.equal(dockerGitProblem({ test: 'docker run --rm -e GIT_SHA=1 node:22 sh -c "npm test"' }), null);
+});
+
+test('TEST_PATH recognizes test/spec files across languages but not ordinary source files', () => {
+    for (const path of ['app/main.test.py', 'src/foo.spec.rb', 'lib/a.test.ts', 'tests/unit/thing.go']) assert.equal(TEST_PATH.test(path), true, path);
+    for (const path of ['app/main.py', 'src/foo.js', 'lib/test-helper.ts']) assert.equal(TEST_PATH.test(path), false, path);
+});
+
+test('summarizeRun retains streamed assistant notes when no result event arrives', () => {
+    const summary = summarizeRun([
+        { type: 'assistant', message: { model: 'model-a', content: [{ type: 'text', text: 'Initial analysis' }] } },
+        { type: 'assistant', message: { model: 'model-a', content: [{ type: 'text', text: 'Final findings at the end' }] } },
+    ]);
+    assert.equal(summary.end, 'no-result');
+    assert.match(summary.finalText, /Initial analysis/);
+    assert.match(summary.finalText, /Final findings at the end/);
 });
