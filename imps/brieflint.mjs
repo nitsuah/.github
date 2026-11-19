@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BRIEF_MARK, briefFromComments, parseBrief, parseDepends, isDeniedPath, dockerGitProblem } from './lib.mjs';
+import { BRIEF_MARK, briefFromComments, parseBrief, parseDepends, isDeniedPath, dockerGitProblem, briefProblem } from './lib.mjs';
 
 // A brief that spells out N lines of code leads to a diff of about 2.5x that once the tests and
 // wiring are written (vigil#359: 56 inline lines, 136-line diff; fire#335: 107 lines, 160-line diff).
@@ -64,6 +64,9 @@ export function lintBrief(text, { exists } = {}) {
     for (const k of ['allow', 'maxLines', 'repo', 'issue']) if (/\s#\s/.test(meta[k] || '')) problems.push(`trailing # comment in ${k}`);
     const dockerGit = dockerGitProblem(meta);
     if (dockerGit) problems.push(dockerGit);
+    // The dispatcher's own structural check (no test, bad mode, no named file): fail here, before an attempt is spent.
+    const structural = meta.test ? briefProblem(extracted.brief) : null;
+    if (structural) problems.push(structural);
     const max = Number(meta.maxLines);
     if (meta.maxLines && !(max >= 20)) problems.push(`maxLines ${meta.maxLines} is not a number >= 20`);
     if (/^```/m.test(body)) problems.push('nested ``` fence in the body (use ~~~)');

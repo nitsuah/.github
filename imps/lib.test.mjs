@@ -220,7 +220,7 @@ test('parseBrief reads front matter and leaves the body', () => {
 });
 
 test('validateBriefMeta: valid brief with matching repo/issue', () => {
-    const brief = '---\nrepo: fire\nissue: 166\n---\nbody';
+    const brief = '---\nrepo: fire\nissue: 166\ntest: npm test\n---\nFix src/a.js';
     assert.equal(validateBriefMeta(brief, 'fire', 166), null);
     assert.equal(validateBriefMeta(brief, 'fire', '166'), null);
     assert.equal(validateBriefMeta(brief, '  fire  ', '  166  '), null); // trimming works
@@ -1848,7 +1848,7 @@ test('validateBriefMeta accepts the owner/repo slug for the same repo, not anoth
     assert.equal(briefRepoName('nitsuah/fire'), 'fire');
     assert.equal(briefRepoName('fire'), 'fire');
     assert.equal(briefRepoName('someone/fire'), 'someone/fire');
-    assert.equal(validateBriefMeta('---\nrepo: nitsuah/vhs\nissue: 180\n---\nx', 'vhs', 180), null);
+    assert.equal(validateBriefMeta('---\nrepo: nitsuah/vhs\nissue: 180\ntest: npm test\nallow: src/\n---\nx', 'vhs', 180), null);
     assert.match(validateBriefMeta('---\nrepo: someone/vhs\nissue: 180\n---\nx', 'vhs', 180), /does not match/);
 });
 

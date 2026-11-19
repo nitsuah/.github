@@ -56,7 +56,7 @@ Before applying `imp:ready`, verify the current default-branch code/tests, canon
 **The brief** is an issue comment whose first line is `<!-- imp-brief -->`, followed by the brief (front matter + body, optionally in a ```` ```markdown ```` fence). The newest such comment wins. Writing it on the issue keeps every brief reviewable, and the dispatcher needs no local state.
 
 **`dispatch.mjs`** runs hourly with no LLM of its own:
-1. It skips the cycle if the previous one is still running (`dispatch.lock` &lt; 3h), or if 9router doesn't answer a `MAX` probe.
+1. It skips the cycle if the previous one is still running (`dispatch.lock` &lt; 3h), or if 9router doesn't answer a `MAX` probe. **Overflow:** once the running cycle has held the lock for `overflowAfterMs` (15 min), a tick starts one pick-only cycle instead (`dispatch-overflow.lock`). It skips steps 2 and 6 and all housekeeping, and never picks a repo the other cycle lists as `busy` in its lock, so same-repo imps still never overlap. A single slow run used to hold every tick for hours (2026-11-19: 2.5 h of skipped ticks). Kill switch: `IMPS_OVERFLOW=0`. A cycle that picks nothing still runs RSI and the heartbeat (it used to exit first, so an idle machine never beat).
 2. It sweeps open `imp` PRs with `fix.mjs` first (skip `imp:needs-human`).
 3. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 6` per repo (counting its open imp PRs)**, and never past `--wip 12` open imp PRs in total. Review + CI are the bottleneck, so the dispatcher stops when the pile is full.
 4. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
@@ -99,7 +99,8 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Limit | Value | Where |
 | --- | --- | --- |
 | Turn cap per model run | imp 60 (0 disables), fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
-| Wall clock per run | imp 25 min, fix 20, review 12 | `--minutes` |
+| Wall clock per run | imp 15 min (`defaults.runMinutes`), fix 20, review 12 | `--minutes` |
+| Overflow cycle | after the main cycle has held the lock 15 min (`defaults.overflowAfterMs`), one pick-only cycle on repos it isn't touching | `config.json` `overflowAfterMs`, `IMPS_OVERFLOW=0` |
 | Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
 | Imp runs per 24 h / `--daily-cap` | 100 | `loopBudget` |
@@ -213,7 +214,7 @@ Repos such as `nitsuah/stash` may call this kit through:
 
 After the dispatcher opens a PR, **`review.mjs`** runs one read-only pass through 9router in the imp's worktree and posts the result as a single GitHub **COMMENT** review. It never posts a GitHub APPROVE event and never merges by itself — `imp.mjs pr` owns the merge decision.
 
-- **Inputs:** the issue, the brief, and the diff (capped at 60 KB; the reviewer can Read the rest).
+- **Inputs:** the brief (first, labelled as the scope), the issue (as background), and the diff (capped at 60 KB; the reviewer can Read the rest). Where the issue body and the brief disagree, the brief wins: issue bodies often hold an older brief, and vhs#192 was blocked for following its corrected one (2026-11-19).
 - **Order (cheapest first):** one tool-less completion (`--mode chat`, the default). If it has no JSON block, one more completion with 16k output tokens and an "only the block" ask. Only then one read-only agent session (25 turns). If that also ends without the block, its notes go to one tool-less completion that only writes the verdict. The second 25-turn agent session is gone: on vhs#181 both sessions explored the same files and ran out of turns (2026-11-19).
 - **Tools:** Read, Grep, Glob, plus the read-only git commands Claude Code allows by default. Edit and Write are denied, and so are PowerShell, web access and subagents (`runner.mjs` ALWAYS_DENY). Running tests or builds is denied.
 - **Prompt:** `REVIEW.md`, maintained by RSI like `PREAMBLE.md`. It has required steps (read around each hunk, Grep every changed identifier, check TASKS.md) and severities, and it ends in a JSON block.
@@ -253,7 +254,7 @@ First live round (vigil#320, 2026-10-22): one CodeRabbit finding (the priority r
 
 - **TypeScript repos:** include `tsc --noEmit` in the brief's `test:`. vitest doesn't type-check, so vigil#320 passed the gate and then failed CI's `test` and `docker-smoke`.
 - **Node/Docker diagnostics:** keep `npm ci` stdout/stderr visible in test commands; redirecting both streams to `/dev/null` can hide install failures that surface only as a later `test exit 1/2`. For focused Vitest runs, use `--reporter=verbose` and capture the first failing test name, assertion, and output; do not report only an exit code. Evidence: Fire #321/#326 and Vigil #368 (2026-10-31).
-- **UI changes in a repo with journeys:** a visual change moves the screenshot baselines (vhs#87: the phone shelf shifted ~45 px, a 15% diff). Regenerate the affected baselines in the caller's Playwright image (`npx playwright test --update-snapshots <spec>`), look at the image, and commit them as a runner commit. Until the runner does this itself, the reviewer does it before marking the PR ready.
+- **UI changes in a repo with journeys:** a visual change moves the screenshot baselines (vhs#87: the phone shelf shifted ~45 px, a 15% diff). Refresh them with a `mode: script` brief (see "Brief preflight and script briefs") whose test runs `--update-snapshots=changed` in the caller's Playwright image and then a no-update soak. Write the `=`: a bare `--update-snapshots <spec>` makes Playwright read the spec path as the mode and reject it (vhs#178). Look at the old and new images before queueing, and list every regenerated PNG in `allow:` (Playwright stops a journey at its first failed screenshot, so later steps are often stale too).
 
 - **Behaviour or data changes ripple into tests and journeys.** Before briefing, grep `tests/` and `tests/journeys/` for the text, ids, selectors and numbers the fix changes (fire#236 stopped the demo seed triggering "Equity Concentration Risk"; the insights journey kept asserting it and went red on main). Put those files in `allow:`, name them in "The fix" and raise `maxLines`. If a journey screenshot moves, say the baselines are regenerated by the runner or the caller, not the imp. Triage also checks the nightly journeys after a merge: a new red journey on a repo with a recent imp merge is the imp's cost to fix, so file or brief it the same day.
 - **No nested code fences in a brief.** `briefFromComments` takes everything up to the first closing fence, so an inner ```` ```js ```` block silently truncates the brief (vhs#77: the imp saw half the instructions and spent 40 turns exploring). Write inner code blocks with `~~~` fences. A brief missing its closing fence is not parsed at all (vigil#315: "front matter needs repo and issue"). After posting, check with `briefFromComments` + `parseBrief`, or look at the dispatcher's first run for the brief length.
@@ -279,6 +280,28 @@ What 9router offers that we are not using yet (from its source, v0.5.104):
 - **`MAX` is a reasoning model** and may put its reasoning in `content`. Keep `max_tokens` generous for chat calls and parse for the `json` block rather than expecting only JSON.
 - **Baseline cost per call**: a one-line prompt cost 2.8k prompt tokens on `/v1/chat/completions`, so some system text is injected upstream.
 - Other endpoints (`/v1/messages/count_tokens`, `/v1/embeddings`, `/v1/search`, `/v1/web/fetch`, `/v1/models`) are available for cheap pre-checks, issue dedupe and the model probe.
+
+## Brief preflight and script briefs
+
+Half of 2026-11-19's failed runs could never have passed, whatever the model did. Three checks now run before any model time:
+
+- **Structure, at dispatch** (`briefProblem`, also in `brieflint.mjs`): a brief needs a `test:` command (vhs#180 had none and ended "tests not run"). It must name something to change, either an `allow:` list or a file path in the body; reviews, audits and epics are not imp work (ats-fill#176). And `mode:` must be `agent` or `script`. A failing brief is labelled `imp:failed` with the reason, and no run starts.
+- **Base preflight, in `imp.mjs run`:** the brief's `test:` runs once on the unchanged base before the model starts. A command that cannot run at all ends the run as `brief-broken` within seconds, and the dispatcher labels the issue `imp:failed` with the reason (`brokenCommandSignature`: exit 125/126/127, an invalid or unknown option, a missing npm script, a failing docker build). An ordinary failing or missing test is expected on a bug's base and is only recorded (`baseTest` on the run row). The worktree is reset afterwards. Kill switch: `IMPS_BASE_PREFLIGHT=0`.
+- **`mode: script`:** for mechanical changes that a command makes (screenshot baselines, generated files), the runner runs the brief's `test:` and commits the changed files inside `allow:` itself. Everything outside `allow:` is restored or deleted. There is no model run and no quota, and the commit subject comes from `commit:` in the front matter. The gate then runs as usual: it re-runs the command, so the command must be reproducible, and output it leaves outside `allow:` is cleaned before the dirty check. The PR still gets a review, and auto-merge still needs earned trust.
+
+```markdown
+---
+repo: vhs
+issue: 178
+mode: script
+test: docker build -f {wt}/config/Dockerfile.playwright -t vhs-journeys {wt} && docker run --rm -e CI=true -v {wt}/tests/journeys:/work/tests/journeys vhs-journeys npm run test:journeys -- --update-snapshots=changed tests/journeys/collection.spec.js && docker run --rm -e CI=true -v {wt}/tests/journeys:/work/tests/journeys vhs-journeys npm run test:journeys -- --retries 0 --repeat-each 3 tests/journeys/collection.spec.js
+lint: echo "PNG-only change"
+maxLines: 20
+allow: tests/journeys/__screenshots__/collection.spec.js/
+commit: test(journeys): refresh collection baselines
+---
+Refresh the collection baselines after #174's stats-chip row (old and new images compared on main).
+```
 
 ## Per-repo memory
 

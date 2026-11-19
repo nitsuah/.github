@@ -40,6 +40,16 @@ export const DEFAULTS = {
     // Dispatch lock freshness (ms): skip if a previous cycle still holds it
     lockMaxAgeMs: 3 * 3600_000,
 
+    // Wall-clock cap on one model run (minutes). Was 25: skyview#234 timed out
+    // twice at 25 and held the cycle for 50 min (2026-11-19). imp.mjs --minutes overrides.
+    runMinutes: 15,
+
+    // Overflow cycle: once the running cycle has held the lock this long, the
+    // next tick may start a pick-only cycle on repos the running one is not
+    // touching, so a slow run no longer starves new work (2026-11-19: 2.5 h of
+    // skipped ticks). At most one overflow cycle runs at a time.
+    overflowAfterMs: 15 * 60_000,
+
     // Model quota: runs allowed per model per window, per machine. Lives in
     // IMPS_HOME (not the runner checkout) and refills every window, so a
     // counter that can finally persist cannot stop the fleet for good (#59).

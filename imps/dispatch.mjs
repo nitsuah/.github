@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -87,26 +87,54 @@ const alive = (pid) => {
         return e.code === 'EPERM'; // exists, owned by someone else
     }
 };
+const OVERFLOW_LOCK = join(HOME, 'dispatch-overflow.lock');
+const staleness = (file) => lockIsStale({
+    text: readFileSync(file, 'utf8'),
+    mtimeMs: statSync(file).mtimeMs,
+    now: Date.now(),
+    bootTimeMs: Date.now() - uptime() * 1000,
+    host: hostname(),
+    alive,
+    maxAgeMs: DEFAULTS.lockMaxAgeMs,
+});
+// An overflow cycle only picks and runs new issues, in repos the main cycle is not touching. It skips the
+// sweeps, hygiene, RSI and heartbeat: the main cycle owns those, and running them twice at once would race.
+let overflow = false;
 if (existsSync(LOCK)) {
-    const why = lockIsStale({
-        text: readFileSync(LOCK, 'utf8'),
-        mtimeMs: statSync(LOCK).mtimeMs,
-        now: Date.now(),
-        bootTimeMs: Date.now() - uptime() * 1000,
-        host: hostname(),
-        alive,
-        maxAgeMs: DEFAULTS.lockMaxAgeMs,
-    });
+    const why = staleness(LOCK);
     if (!why) {
-        log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
-        process.exit(0);
+        const overflowAfterMs = Number(loadHomeConfig().overflowAfterMs ?? DEFAULTS.overflowAfterMs);
+        const ok = process.env.IMPS_OVERFLOW !== '0' && !o.only && mayOverflow({
+            mainText: readFileSync(LOCK, 'utf8'),
+            mainMtimeMs: statSync(LOCK).mtimeMs,
+            overflow: existsSync(OVERFLOW_LOCK) ? OVERFLOW_LOCK : null,
+            now: Date.now(),
+            overflowAfterMs,
+            staleCheck: (file) => { try { return staleness(file); } catch { return 'unreadable'; } },
+        });
+        if (!ok) {
+            log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
+            process.exit(0);
+        }
+        overflow = true;
+    } else {
+        log({ event: 'lock-cleared', reason: why, lock: readFileSync(LOCK, 'utf8').slice(0, 200) });
+        if (!dry) rmSync(LOCK, { force: true });
     }
-    log({ event: 'lock-cleared', reason: why, lock: readFileSync(LOCK, 'utf8').slice(0, 200) });
-    if (!dry) rmSync(LOCK, { force: true });
 }
-if (!dry) writeFileSync(LOCK, JSON.stringify({ pid: process.pid, host: hostname(), startedAt: new Date().toISOString() }));
-const unlock = () => { if (!dry) rmSync(LOCK, { force: true }); };
+const MY_LOCK = overflow ? OVERFLOW_LOCK : LOCK;
+const lockInfo = { pid: process.pid, host: hostname(), startedAt: new Date().toISOString(), ...(overflow ? { overflow: true } : {}) };
+if (!dry) writeFileSync(MY_LOCK, JSON.stringify(lockInfo));
+const unlock = () => { if (!dry) rmSync(MY_LOCK, { force: true }); };
 process.on('exit', unlock);
+if (overflow) log({ event: 'overflow-start', mainBusy: lockBusyRepos(readFileSync(LOCK, 'utf8')) });
+/** Record which repos this cycle runs imps in, so the other cycle leaves them alone. */
+const markBusy = (repos) => { if (!dry) writeFileSync(MY_LOCK, JSON.stringify({ ...lockInfo, busy: repos })); };
+/** Repos the other cycle (main or overflow) is running imps in right now. */
+const otherBusy = () => {
+    const other = overflow ? LOCK : OVERFLOW_LOCK;
+    try { return existsSync(other) && !staleness(other) ? lockBusyRepos(readFileSync(other, 'utf8')) : []; } catch { return []; }
+};
 
 // ── 9router must be up ────────────────────────────────────────────────────
 async function routerUp() {
@@ -420,6 +448,14 @@ async function work(issue) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return;
         }
+        if (ledgerRow(id)?.metrics?.end === 'brief-broken') {
+            // The brief's own test command could not run on the unchanged base (see imp.mjs base preflight):
+            // no model ran, and rerunning the same brief cannot help, so it goes straight back to its author.
+            const why = String(ledgerRow(id)?.metrics?.finalText || 'test command broken').slice(0, 300);
+            relabel(repo, number, 'imp:failed', ['imp:working']);
+            note(repo, number, `<!-- imp-brief-broken -->\nNo model ran: the brief's \`test:\` command fails on the unchanged base before any change (run \`${id}\`).\n\n- ${why}\n\nFix the command in the \`<!-- imp-brief -->\` comment (try it on main first) and re-add \`imp:ready\`.`);
+            return log({ event: 'brief-broken', repo, number, id, reason: why });
+        }
         const gateRun = await node(['gate', id]);
         const row = ledgerRow(id);
         if (row?.outcome === COMMIT_RECOVERY_FAILED || gateRun.code === 75) {
@@ -531,108 +567,113 @@ if (!router.up) {
 }
 if (router.attempts > 1) log({ event: 'router-up', attempts: router.attempts, waitedMs: router.waitedMs });
 
-// Release claims left behind by a machine that stopped mid-run, before picking
-// anything: otherwise the queue looks emptier than it is (#60).
-let ledger = readLedger();
-const reclaimed = await releaseStrandedClaims(ledger);
-if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
+// Housekeeping and the PR sweeps belong to the main cycle only (see the overflow note at the lock).
+if (!overflow) {
+    // Release claims left behind by a machine that stopped mid-run, before picking
+    // anything: otherwise the queue looks emptier than it is (#60).
+    let ledger = readLedger();
+    const reclaimed = await releaseStrandedClaims(ledger);
+    if (reclaimed.length) console.log(`reclaimed ${reclaimed.length}: ${reclaimed.join(', ')}`);
 
-const labelCleared = await clearStaleLabels();
-if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelCleared.length}: ${labelCleared.join(', ')}`);
+    const labelCleared = await clearStaleLabels();
+    if (labelCleared.length) console.log(`cleared stale imp:* labels on ${labelCleared.length}: ${labelCleared.join(', ')}`);
 
-// Sweep the open imp PRs first (owner-approved 2026-10-22): answer review
-// feedback and red CI with a 9router fix round. fix.mjs pushes only to the
-// imp's own PR branch, stops after 2 rounds or on a conflict, and labels
-// imp:needs-human. A PR with nothing to act on costs only gh calls.
-const openImpAll = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository'])
-    .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
-
-// One PR per issue: close open imp PRs whose issue a merged imp PR already fixed.
-try {
-    const mergedImp = ghJson(['search', 'prs', '--owner', o.owner, '--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository'])
+    // Sweep the open imp PRs first (owner-approved 2026-10-22): answer review
+    // feedback and red CI with a 9router fix round. fix.mjs pushes only to the
+    // imp's own PR branch, stops after 2 rounds or on a conflict, and labels
+    // imp:needs-human. A PR with nothing to act on costs only gh calls.
+    const openImpAll = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository'])
         .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
+
+    // One PR per issue: close open imp PRs whose issue a merged imp PR already fixed.
+    try {
+        const mergedImp = ghJson(['search', 'prs', '--owner', o.owner, '--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository'])
+            .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
+        ledger = readLedger();
+        for (const d of duplicateImpPrs(openImpAll, mergedImp)) {
+            log({ event: 'duplicate-closed', pr: d.pr.url, mergedPr: d.mergedPr.url, issue: d.key });
+            if (dry) continue;
+            const slug = `${o.owner}/${d.pr.repo}`;
+            gh(['pr', 'close', String(d.pr.number), '-R', slug, '--comment', `<!-- imp-duplicate -->
+    Closing: ${d.key} was already fixed by merged PR ${d.mergedPr.url}. One PR per issue.`]);
+            const row = ledger.find((r) => r.pr === d.pr.url);
+            if (row) updateRun(row.id, { outcome: 'closed-duplicate' });
+            d.pr.closed = true;
+        }
+    } catch (e) {
+        log({ event: 'duplicate-sweep-error', error: e.message });
+    }
+
+    // Ledger hygiene: fill in `outcome` for runs whose PR has since merged or closed
+    // (a human merge, a closed PR). At most 40 gh calls a cycle, oldest first.
     ledger = readLedger();
-    for (const d of duplicateImpPrs(openImpAll, mergedImp)) {
-        log({ event: 'duplicate-closed', pr: d.pr.url, mergedPr: d.mergedPr.url, issue: d.key });
-        if (dry) continue;
-        const slug = `${o.owner}/${d.pr.repo}`;
-        gh(['pr', 'close', String(d.pr.number), '-R', slug, '--comment', `<!-- imp-duplicate -->
-Closing: ${d.key} was already fixed by merged PR ${d.mergedPr.url}. One PR per issue.`]);
-        const row = ledger.find((r) => r.pr === d.pr.url);
-        if (row) updateRun(row.id, { outcome: 'closed-duplicate' });
-        d.pr.closed = true;
+    for (const r of ledger.filter((x) => x.pr && (!x.outcome || x.outcome === 'open')).slice(0, 40)) {
+        try {
+            const v = ghJson(['pr', 'view', r.pr, '--json', 'state,mergedAt']);
+            const outcome = outcomeFromPr(v);
+            if (outcome === 'open' || dry) continue;
+            updateRun(r.id, { outcome, ...(v.mergedAt ? { mergedAt: v.mergedAt } : {}) });
+            log({ event: 'outcome', id: r.id, outcome });
+        } catch (e) {
+            log({ event: 'outcome-error', id: r.id, error: e.message });
+        }
     }
-} catch (e) {
-    log({ event: 'duplicate-sweep-error', error: e.message });
-}
 
-// Ledger hygiene: fill in `outcome` for runs whose PR has since merged or closed
-// (a human merge, a closed PR). At most 40 gh calls a cycle, oldest first.
-ledger = readLedger();
-for (const r of ledger.filter((x) => x.pr && (!x.outcome || x.outcome === 'open')).slice(0, 40)) {
-    try {
-        const v = ghJson(['pr', 'view', r.pr, '--json', 'state,mergedAt']);
-        const outcome = outcomeFromPr(v);
-        if (outcome === 'open' || dry) continue;
-        updateRun(r.id, { outcome, ...(v.mergedAt ? { mergedAt: v.mergedAt } : {}) });
-        log({ event: 'outcome', id: r.id, outcome });
-    } catch (e) {
-        log({ event: 'outcome-error', id: r.id, error: e.message });
+    const openImp = openImpAll.filter((p) => !p.closed && !p.labels.some((l) => l.name === 'imp:needs-human'));
+    ledger = readLedger();
+    const recentEvents = (() => {
+        try {
+            return readFileSync(LOG, 'utf8').trim().split('\n').filter((x) => x.includes('"event":"fix-sweep"')).map((x) => {
+                try {
+                    return JSON.parse(x);
+                } catch {
+                    return null;
+                }
+            });
+        } catch {
+            return [];
+        }
+    })();
+    for (const p of openImp) {
+        const row = ledger.find((r) => r.pr === p.url);
+        if (!row) continue; // opened from another machine's ledger
+        const f = await node(['fix', row.id, ...(dry ? ['--dry-run'] : [])], 'fix.mjs');
+        const last = f.out.trim().split('\n').reverse().find((l) => l.startsWith('{"id"'));
+        const result = last ? JSON.parse(last).event : `exit ${f.code}`;
+        if (!sweepIsRepeat(recentEvents, p.url, result)) log({ event: 'fix-sweep', pr: p.url, id: row.id, result });
     }
-}
 
-const openImp = openImpAll.filter((p) => !p.closed && !p.labels.some((l) => l.name === 'imp:needs-human'));
-ledger = readLedger();
-const recentEvents = (() => {
-    try {
-        return readFileSync(LOG, 'utf8').trim().split('\n').filter((x) => x.includes('"event":"fix-sweep"')).map((x) => {
-            try {
-                return JSON.parse(x);
-            } catch {
-                return null;
-            }
-        });
-    } catch {
-        return [];
+    // demonguard: the deterministic watch over imp PRs that linger. imp.mjs decides about auto-merge once, when it
+    // opens a PR, so anything not ready then sat open and ate the open-PR cap. Kill switch: IMPS_DEMONGUARD=0.
+    if (process.env.IMPS_DEMONGUARD !== '0' && !dry) {
+        try {
+            // node() resolves { code, out } and never rejects, so a crash only shows in code.
+            const dg = await node(['demonguard'], 'demonguard.mjs');
+            if (dg.code) log({ event: 'demonguard-error', code: dg.code, out: String(dg.out || '').slice(-300) });
+        } catch (e) {
+            log({ event: 'demonguard-error', error: String(e.message).slice(0, 200) });
+        }
     }
-})();
-for (const p of openImp) {
-    const row = ledger.find((r) => r.pr === p.url);
-    if (!row) continue; // opened from another machine's ledger
-    const f = await node(['fix', row.id, ...(dry ? ['--dry-run'] : [])], 'fix.mjs');
-    const last = f.out.trim().split('\n').reverse().find((l) => l.startsWith('{"id"'));
-    const result = last ? JSON.parse(last).event : `exit ${f.code}`;
-    if (!sweepIsRepeat(recentEvents, p.url, result)) log({ event: 'fix-sweep', pr: p.url, id: row.id, result });
-}
 
-// demonguard: the deterministic watch over imp PRs that linger. imp.mjs decides about auto-merge once, when it
-// opens a PR, so anything not ready then sat open and ate the open-PR cap. Kill switch: IMPS_DEMONGUARD=0.
-if (process.env.IMPS_DEMONGUARD !== '0' && !dry) {
-    try {
-        // node() resolves { code, out } and never rejects, so a crash only shows in code.
-        const dg = await node(['demonguard'], 'demonguard.mjs');
-        if (dg.code) log({ event: 'demonguard-error', code: dg.code, out: String(dg.out || '').slice(-300) });
-    } catch (e) {
-        log({ event: 'demonguard-error', error: String(e.message).slice(0, 200) });
+    // Release stale imp:working claims whose heartbeat is older than 90 min (#69).
+    for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
+        const slug = `${o.owner}/${w.repository.name}`;
+        const comments = ghJson(['issue', 'view', String(w.number), '-R', slug, '--json', 'comments']).comments;
+        const c = comments.map((x) => parseClaim(x.body)).filter(Boolean).pop();
+        if (!claimExpired(c, Date.now())) continue;
+        relabel(w.repository.name, w.number, 'imp:ready', ['imp:working']);
+        comment(w.repository.name, w.number, `Released: ${c.machine}'s claim had no heartbeat since ${c.heartbeatAt} (TTL 90 min). Back to imp:ready.`);
+        log({ event: 'claim-released', repo: w.repository.name, number: w.number, machine: c.machine });
     }
-}
-
-// Release stale imp:working claims whose heartbeat is older than 90 min (#69).
-for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
-    const slug = `${o.owner}/${w.repository.name}`;
-    const comments = ghJson(['issue', 'view', String(w.number), '-R', slug, '--json', 'comments']).comments;
-    const c = comments.map((x) => parseClaim(x.body)).filter(Boolean).pop();
-    if (!claimExpired(c, Date.now())) continue;
-    relabel(w.repository.name, w.number, 'imp:ready', ['imp:working']);
-    comment(w.repository.name, w.number, `Released: ${c.machine}'s claim had no heartbeat since ${c.heartbeatAt} (TTL 90 min). Back to imp:ready.`);
-    log({ event: 'claim-released', repo: w.repository.name, number: w.number, machine: c.machine });
 }
 
 const queuedRaw = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
     .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)))
-    .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`));
+    .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`))
+    // Never two cycles in one repo: same-repo imps share a node_modules volume and would race.
+    .filter((i) => !otherBusy().includes(i.repo));
 
 // Preflight target checkouts before pickIssues so a missing repo neither consumes
 // a --max slot nor gets claimed/relabeled. `.git` may be a directory or worktree file.
@@ -774,26 +815,33 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
     writeFileSync(i.briefPath, briefText);
     picked.push(i);
 }
-log({ event: 'cycle', queued: queued.length, queuedBeforePreflight: queuedRaw.length, skippedMissingCheckout: missingCheckoutRepos.size, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
-if (dry || !picked.length) process.exit(0);
+log({ event: 'cycle', ...(overflow ? { overflow: true } : {}), queued: queued.length, queuedBeforePreflight: queuedRaw.length, skippedMissingCheckout: missingCheckoutRepos.size, openImpPRs: impPRs.length, runsLast24h: budget.runsLast24h, cooldown: budget.cooldown, repos, picked: picked.map((i) => `${i.repo}#${i.number}`) });
+if (dry) process.exit(0);
 
 // Run up to `concurrency` repos at once. Imps for the same repo run one after another:
 // they share the repo's `imp-nm-<repo>` node_modules volume, and two `npm ci` runs on it would race.
-const byRepo = new Map();
-for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
-const pool = [...byRepo.values()];
-await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
-    while (pool.length) {
-        for (const i of pool.shift()) {
-            try {
-                await work(i);
-            } catch (e) {
-                log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+// A cycle that picks nothing still goes on to RSI and the heartbeat below: it used to exit here, so an
+// idle machine never beat and the watchdog would have called it down after 4 quiet hours.
+if (picked.length) {
+    markBusy([...new Set(picked.map((i) => i.repo))]);
+    const byRepo = new Map();
+    for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
+    const pool = [...byRepo.values()];
+    await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
+        while (pool.length) {
+            for (const i of pool.shift()) {
+                try {
+                    await work(i);
+                } catch (e) {
+                    log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
+                }
             }
         }
-    }
-}));
-log({ event: 'done' });
+    }));
+    log({ event: 'done', ...(overflow ? { overflow: true } : {}) });
+}
+// An overflow cycle stops here: RSI and the heartbeat belong to the main cycle.
+if (overflow) process.exit(0);
 
 // RSI pass (also runnable via `node rsi.mjs`). Runs with --rsi or IMPS_RSI=1,
 // and once a UTC day when config.json has `"rsi": true`: that setting existed

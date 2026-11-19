@@ -157,7 +157,79 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
         return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
     }
-    return dockerGitProblem(meta);
+    return dockerGitProblem(meta) || briefProblem(brief);
+}
+
+// A concrete file the brief points at: a path with a directory, or a bare file name with a code/asset extension.
+const NAMED_FILE = /[\w.@-]+\/[\w./@-]*\.\w{1,6}\b|\b[\w.-]+\.(?:m?[jt]sx?|cjs|py|go|rs|rb|java|kt|cs|php|css|scss|html|vue|svelte|sql|sh|ps1|md|json|ya?ml|toml|png|svg)\b/;
+
+/**
+ * Structural problems that make a brief unrunnable, whatever the model does.
+ * Half of 2026-11-19's failures were briefs like these (vhs#180 had no
+ * `test:`, ats-fill#176 was a review epic naming no file), and each burned a
+ * model run to learn it. Returns an error string or null.
+ */
+export function briefProblem(brief) {
+    const { meta, body } = parseBrief(String(brief || ''));
+    if (!String(meta.test || '').trim()) {
+        return 'Brief has no `test:` command. Every brief needs one: the gate runs it, and without it the run ends "tests not run".';
+    }
+    if (meta.mode && !['agent', 'script'].includes(String(meta.mode).trim())) {
+        return `Brief \`mode:\` must be \`agent\` (default) or \`script\`, not \`${meta.mode}\`.`;
+    }
+    if (String(meta.mode).trim() === 'script' && !String(meta.allow || '').trim()) {
+        return 'A `mode: script` brief needs an `allow:` list: the runner commits only changed files inside it.';
+    }
+    if (!String(meta.allow || '').trim() && !NAMED_FILE.test(body)) {
+        return 'Brief names no file to change (no `allow:` and no file path in the body). Reviews, audits and epics are not imp work: split out a concrete fix first.';
+    }
+    return null;
+}
+
+/**
+ * A test command that cannot run at all, read from one run on the unchanged
+ * base before any model is spent (vhs#178's `--update-snapshots <spec>` was
+ * rejected by Playwright's argument parser; 2026-11-19). Only signatures that
+ * mean "the command itself is wrong" count: an ordinary failing or missing
+ * test is expected on a bug's base. Returns a short reason or null.
+ */
+export function brokenCommandSignature(status, output = '') {
+    if (status === 0) return null;
+    if (status === 127 || status === 126 || status === 125) return exitHint(status);
+    const text = String(output || '');
+    const patterns = [
+        [/error: option '[^']*' argument '[^']*' is invalid[^\n]*/i, 'the test command passes an invalid option argument'],
+        [/error: (?:unknown|invalid) option[^\n]*/i, 'the test command uses an unknown option'],
+        [/\bunrecognized (?:option|arguments?)\b[^\n]*/i, 'the test command uses an unrecognized option'],
+        [/npm (?:ERR!|error) Missing script:[^\n]*/i, 'the test command names an npm script that does not exist'],
+        [/is not recognized as an internal or external command[^\n]*/i, 'the test command names a program that does not exist'],
+        [/\bcommand not found\b[^\n]*/i, 'the test command names a program that does not exist'],
+        [/ERROR: failed to solve[^\n]*/i, 'the docker build in the test command fails on the unchanged base'],
+        [/unable to prepare context[^\n]*|failed to read dockerfile[^\n]*/i, 'the docker build context or Dockerfile path is wrong'],
+    ];
+    for (const [re, why] of patterns) {
+        const m = text.match(re);
+        if (m) return `${why}: ${m[0].trim().slice(0, 160)}`;
+    }
+    return null;
+}
+
+/**
+ * Changed paths (tracked edits and untracked files) inside the brief's
+ * `allow:` list, from `git status --porcelain --untracked-files=all`. A
+ * `mode: script` run commits exactly these.
+ */
+export function inScopeChanged(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.length > 3 && !l.startsWith('!! '))
+        .flatMap((l) => {
+            const raw = l.slice(3).trim();
+            return raw.includes(' -> ') ? [raw.split(' -> ')[1]] : [raw];
+        })
+        .map(decodeGitQuotedPath)
+        .filter((p) => p && allow.some((a) => p.startsWith(a)));
 }
 
 /**
@@ -995,6 +1067,32 @@ export function lockIsStale({ text = '', mtimeMs = 0, now = Date.now(), bootTime
     if (bootTimeMs && Number.isFinite(started) && started < bootTimeMs) return 'before-boot';
     if (now - started >= maxAgeMs) return 'expired';
     return null;
+}
+
+/** Repos a dispatch lock says its cycle is running imps in (`busy`), [] when unknown. */
+export function lockBusyRepos(text = '') {
+    try {
+        const lock = JSON.parse(text);
+        return Array.isArray(lock?.busy) ? lock.busy.map(String) : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Whether a tick that found the main dispatch lock held (and live) may start
+ * a pick-only overflow cycle. Yes once the main cycle has held the lock for
+ * `overflowAfterMs` and no live overflow cycle is running. A slow run used to
+ * block every tick behind it (2026-11-19: 2.5 h of "previous cycle still
+ * running"). `overflow` is the overflow lock's { text, mtimeMs } or null.
+ */
+export function mayOverflow({ mainText = '', mainMtimeMs = 0, overflow = null, now = Date.now(), overflowAfterMs = DEFAULTS.overflowAfterMs, staleCheck = () => null } = {}) {
+    if (!(overflowAfterMs > 0)) return false;
+    let started = mainMtimeMs;
+    try { started = Date.parse(JSON.parse(mainText).startedAt || '') || mainMtimeMs; } catch { /* legacy lock */ }
+    if (!(now - started >= overflowAfterMs)) return false;
+    if (overflow && !staleCheck(overflow)) return false;
+    return true;
 }
 
 // ── waiting for 9router ───────────────────────────────────────────────────
