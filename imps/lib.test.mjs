@@ -1883,3 +1883,10 @@ test('strayUntracked lists only untracked paths outside allow', async () => {
     assert.deepEqual(strayUntracked(porcelain, ['public/', 'tests_playwright/']), [`C${String.fromCharCode(0xf03a)}Usersajhartest_full_output.txt`, 'notes.log']);
     assert.deepEqual(strayUntracked(porcelain, []), []);
 });
+
+test('outOfScopeTracked lists tracked edits outside allow, never untracked or with no allow list', async () => {
+    const { outOfScopeTracked } = await import('./lib.mjs');
+    const porcelain = [' M config/eslint.config.mjs', 'M  app/lib/stripe-status.js', '?? test-output.txt', 'R  old.js -> docs/new.js', ' D scripts/x.sh'].join(String.fromCharCode(10));
+    assert.deepEqual(outOfScopeTracked(porcelain, ['app/lib/', 'tests/unit/']), ['config/eslint.config.mjs', 'docs/new.js', 'scripts/x.sh']);
+    assert.deepEqual(outOfScopeTracked(porcelain, []), []);
+});

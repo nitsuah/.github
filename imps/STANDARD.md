@@ -282,7 +282,7 @@ A machine that runs dispatch should set `"heartbeat": true` in `~/.imps/config.j
 
 ## Commit-recovery hygiene
 
-Before commit recovery and before its verification, the runner deletes untracked files outside the brief's `allow:` (never tracked files, never anything when `allow:` is empty) and records them as `strayRemoved` on the run. vhs#169 finished its work but left a scratch file under a mangled Windows path, so recovery could not verify a clean tree.
+Before commit recovery and before its verification, the runner deletes untracked files outside the brief's `allow:` (never tracked files, never anything when `allow:` is empty) and records them as `strayRemoved` on the run. vhs#169 finished its work but left a scratch file under a mangled Windows path, so recovery could not verify a clean tree. Tracked files with uncommitted edits outside `allow:` are restored to HEAD the same way (`outOfScopeReverted`): such an edit could only fail the gate, and fire#483 committed its fix, left a stray `config/eslint.config.mjs` edit, and failed recovery with "no new commit".
 
 ## Known gaps (next)
 

@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -242,6 +242,13 @@ async function runGate(id) {
         console.log(`removed ${strays.length} stray untracked file(s) outside allow: ${strays.slice(0, 5).join(', ')}`);
         update(id, { strayRemoved: strays.slice(0, 20) });
     }
+    // Uncommitted edits to tracked files outside `allow:` could only ever fail
+    // the gate; restore them so the gate judges what the imp committed (fire#483).
+    const reverted = revertOutOfScope(r.worktree, meta.allow);
+    if (reverted.length) {
+        console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
+        update(id, { outOfScopeReverted: reverted.slice(0, 20) });
+    }
     const leftover = git(r.worktree, 'status', '--porcelain').out;
     if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
         console.log('commit recovery previously failed; refusing to gate a dirty tree');
@@ -301,6 +308,7 @@ async function runGate(id) {
         }
         const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
         removeStrayUntracked(r.worktree, meta.allow);
+        revertOutOfScope(r.worktree, meta.allow);
         const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
         const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
         const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
@@ -418,6 +426,18 @@ function removeStrayUntracked(wt, allowCsv) {
         try { rmSync(full, { force: true }); removed.push(p); } catch { /* left for the dirty check */ }
     }
     return removed;
+}
+
+/** Restore tracked out-of-scope files to HEAD (unstaging first); returns what was restored. */
+function revertOutOfScope(wt, allowCsv) {
+    const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const paths = outOfScopeTracked(git(wt, 'status', '--porcelain').out, allow);
+    const done = [];
+    for (const p of paths) {
+        git(wt, 'reset', '-q', '--', p);
+        if (!git(wt, 'checkout', 'HEAD', '--', p).code) done.push(p);
+    }
+    return done;
 }
 
 // Poll `gh pr checks --json` until every check (required *and* optional) is

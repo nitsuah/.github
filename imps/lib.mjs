@@ -423,6 +423,25 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
  * commit recovery instead of failing the run (vhs#169, 2026-11-19). Tracked
  * files are never touched, and with no allow list nothing is called stray.
  */
+/**
+ * Tracked files with uncommitted changes outside the brief's `allow:` list.
+ * An uncommitted out-of-scope edit can never be part of a passing gate (it
+ * would fail "outside scope" if committed), so the runner restores those files
+ * to HEAD and gates what the imp committed. fire#483 committed its fix, then
+ * left a stray `config/eslint.config.mjs` edit and commit recovery failed with
+ * "no new commit" (2026-11-19). With no allow list nothing is reverted.
+ */
+export function outOfScopeTracked(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.length > 3 && !l.startsWith('?? ') && !l.startsWith('!! '))
+        .map((l) => l.slice(3).trim())
+        .map((p) => (p.includes(' -> ') ? p.split(' -> ').pop() : p))
+        .map((p) => decodeGitQuotedPath(p))
+        .filter((p) => p && !allow.some((a) => p.startsWith(a)));
+}
+
 export function strayUntracked(porcelain = '', allow = []) {
     if (!allow.length) return [];
     return String(porcelain)
