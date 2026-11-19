@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -91,7 +91,8 @@ async function run() {
         console.error('Docker not available – ensure Docker Desktop is running.');
         process.exit(1);
     }
-    const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const { meta: parsedMeta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const meta = { ...parsedMeta, repo: briefRepoName(parsedMeta.repo) };
     validateBrief(meta);
     // No claude binary means no run can start: say so before reserving quota, so each
     // hourly retry on such a machine does not spend a reservation. dispatch reads this
@@ -245,6 +246,13 @@ async function runGate(id) {
     // Uncommitted edits to tracked files outside `allow:` could only ever fail
     // the gate; restore them so the gate judges what the imp committed (fire#483).
     const reverted = revertOutOfScope(r.worktree, meta.allow);
+    // Unstage+checkout cannot remove an added path that did not exist in HEAD;
+    // after reset it is untracked, so run the scoped cleanup again before recovery.
+    const postRestoreStrays = removeStrayUntracked(r.worktree, meta.allow);
+    if (postRestoreStrays.length) {
+        console.log(`removed ${postRestoreStrays.length} staged-addition stray file(s): ${postRestoreStrays.slice(0, 5).join(', ')}`);
+        update(id, { strayRemoved: [...(r.strayRemoved || []), ...postRestoreStrays].slice(0, 20) });
+    }
     if (reverted.length) {
         console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
         update(id, { outOfScopeReverted: reverted.slice(0, 20) });
