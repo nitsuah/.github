@@ -123,6 +123,18 @@ export function parseBrief(text) {
 }
 
 /**
+ * A brief's `repo:` as a bare repo name. Brief writers often put the full slug
+ * (`nitsuah/fire`); that names the same repo, so it is accepted instead of
+ * failing the issue (vhs#180, fire#483 on 2026-11-19). Any other owner stays
+ * as written, so it still fails the match.
+ */
+export function briefRepoName(repo, owner = DEFAULTS.owner) {
+    const s = String(repo ?? '').trim();
+    const i = s.indexOf('/');
+    return i > 0 && s.slice(0, i).toLowerCase() === String(owner).toLowerCase() ? s.slice(i + 1) : s;
+}
+
+/**
  * Validates that a brief's front matter has required `repo` and `issue`
  * fields matching the expected repository and issue number.
  * Returns an error string or null if valid.
@@ -139,13 +151,54 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     if (!meta.issue || String(meta.issue).trim() === '') {
         return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
     }
-    if (String(meta.repo).trim() !== String(expectedRepo).trim()) {
+    if (briefRepoName(meta.repo) !== String(expectedRepo).trim()) {
         return `Brief \`repo\` (${meta.repo}) does not match the target repository (${expectedRepo})`;
     }
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
         return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
     }
+    return dockerGitProblem(meta);
+}
+
+/**
+ * A `git` command inside a brief's `docker run` always fails in an imp
+ * worktree: the worktree's `.git` file points at a host path the container
+ * cannot see, so git exits 128 (fire#483's lint, 2026-11-19). Run git checks
+ * such as `git diff --check` as their own host-side `format:` instead.
+ */
+export function dockerGitProblem(meta = {}) {
+    for (const key of ['test', 'lint', 'format']) {
+        // Every top-level command (split on unquoted &&, ||, ; and |) is checked
+        // on its own: host-side git after a container is fine, git inside any
+        // container (including its quoted sh -c script) is not.
+        for (const segment of shellSegments(String(meta[key] || ''))) {
+            const at = segment.search(/\bdocker\s+run\b/);
+            if (at >= 0 && /(^|[\s;&|('"])git\s/.test(segment.slice(at))) {
+                return `Brief \`${key}:\` runs git inside \`docker run\`; a worktree's .git points at a host path the container cannot see, so it exits 128. Move git checks (e.g. \`git diff --check\`) to a host-side \`format:\` line.`;
+            }
+        }
+    }
     return null;
+}
+
+/** Split a shell line into its top-level commands on unquoted `&&`, `||`, `;` and `|`. */
+export function shellSegments(cmd = '') {
+    const out = [];
+    let quote = null;
+    let start = 0;
+    for (let i = 0; i < cmd.length; i++) {
+        const ch = cmd[i];
+        if (quote) {
+            if (ch === quote && cmd[i - 1] !== '\\') quote = null;
+            continue;
+        }
+        if (ch === "'" || ch === '"') { quote = ch; continue; }
+        const two = cmd.slice(i, i + 2);
+        if (two === '&&' || two === '||') { out.push(cmd.slice(start, i)); start = i + 2; i++; continue; }
+        if (ch === ';' || ch === '|') { out.push(cmd.slice(start, i)); start = i + 1; }
+    }
+    out.push(cmd.slice(start));
+    return out.map((s) => s.trim()).filter(Boolean);
 }
 
 // Validate the optional brief cap before it reaches effectiveMaxLines/gate.
@@ -170,6 +223,7 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
     };
     let toolTurn = 0;
     const stamps = [];
+    const streamedText = [];
     let last = null;
     for (const e of events) {
         if (e.type === 'assistant') {
@@ -180,7 +234,9 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
                 last = model;
             }
             if (e._ts) stamps.push(e._ts);
-            const uses = (e.message?.content || []).filter((c) => c.type === 'tool_use');
+            const content = e.message?.content || [];
+            for (const block of content) if (block.type === 'text' && block.text) streamedText.push(block.text);
+            const uses = content.filter((c) => c.type === 'tool_use');
             if (uses.length) toolTurn++;
             for (const c of uses) {
                 s.tools[c.name] = (s.tools[c.name] || 0) + 1;
@@ -214,6 +270,9 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
             };
         }
     }
+    // A turn-capped stream has no result event; preserve the tail of its
+    // assistant notes so the one-shot salvage step receives the actual findings.
+    if (s.end === 'no-result' && streamedText.length) s.finalText = streamedText.join('\n').slice(-6000);
     const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).sort((a, b) => a - b);
     if (gaps.length) s.turnMs = { max: gaps[gaps.length - 1], median: gaps[Math.floor(gaps.length / 2)] };
     if (s.durationMs == null && startedAt && endedAt) s.durationMs = endedAt - startedAt;
@@ -350,7 +409,21 @@ export function effectiveMaxLines(metaMax, slack = 0) {
     return (Number.isNaN(n) ? n : Math.max(n, DEFAULTS.maxLines)) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, allow = [], bugfix = false }) {
+/** Test files: a `tests/`-style directory or a `.test.`/`.spec.` file name. */
+export const TEST_PATH = /(^|\/)(tests?|__tests__|tests_playwright|e2e|spec)\/|\.(test|spec)\.[^/]+$/i;
+
+/**
+ * The test-file budget. Tests get their own allowance (default twice the code
+ * cap) so a brief that asks for several test scenarios is not rejected for
+ * size: vhs#169 wrote 125 code lines and a 224-line spec and failed a 180
+ * cap that review would have accepted.
+ */
+export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
+    if (metaMaxTest) return Number(metaMaxTest) + Number(slack);
+    return 2 * effectiveMaxLines(metaMax) + Number(slack);
+}
+
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -360,6 +433,11 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
         });
     const files = parse(numstat);
     const lines = parse(numstat).reduce((n, f) => n + f.lines, 0);
+    // With a test budget, test files are measured on their own and the code cap
+    // applies to the rest. Without one, everything counts against maxLines.
+    const split = maxTestLines != null;
+    const testLines = split ? files.filter((f) => TEST_PATH.test(f.path)).reduce((n, f) => n + f.lines, 0) : 0;
+    const codeLines = lines - testLines;
     const reasons = [];
     if (dirty) reasons.push('edits left uncommitted');
     else if (!commits.length) reasons.push('no commits');
@@ -369,7 +447,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
-    if (!(lines <= maxLines)) reasons.push(`diff ${lines} lines > ${maxLines}`);
+    if (!(codeLines <= maxLines)) reasons.push(`diff ${codeLines} lines > ${maxLines}`);
+    if (split && !(testLines <= maxTestLines)) reasons.push(`diff ${testLines} lines > ${maxTestLines} (tests)`);
     if (commits.length && !commits.every((c) => /Co-Authored-By: .*imp/i.test(c))) reasons.push('commit missing imp trailer');
     // "tests not run" is not a second fact when there was nothing to run them
     // on: it is the same uncommitted-edit cause wearing another name (#53).
@@ -380,7 +459,45 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
         const markerPaths = findConflictMarkers(diff);
         for (const path of markerPaths) reasons.push(`unresolved conflict marker in ${path}`);
     }
-    return { pass: reasons.length === 0, reasons, lines, files: files.map((f) => f.path) };
+    return { pass: reasons.length === 0, reasons, lines, ...(split ? { codeLines, testLines } : {}), files: files.map((f) => f.path) };
+}
+
+/**
+ * Untracked files outside the brief's `allow:` list, from
+ * `git status --porcelain --untracked-files=all`. These are never part of the
+ * fix (stray scratch output, a test log written under a mangled Windows path)
+ * and nothing but a clean tree may be gated, so the runner deletes them before
+ * commit recovery instead of failing the run (vhs#169, 2026-11-19). Tracked
+ * files are never touched, and with no allow list nothing is called stray.
+ */
+/**
+ * Tracked files with uncommitted changes outside the brief's `allow:` list.
+ * An uncommitted out-of-scope edit can never be part of a passing gate (it
+ * would fail "outside scope" if committed), so the runner restores those files
+ * to HEAD and gates what the imp committed. fire#483 committed its fix, then
+ * left a stray `config/eslint.config.mjs` edit and commit recovery failed with
+ * "no new commit" (2026-11-19). With no allow list nothing is reverted.
+ */
+export function outOfScopeTracked(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.length > 3 && !l.startsWith('?? ') && !l.startsWith('!! '))
+        .flatMap((l) => {
+            const raw = l.slice(3).trim();
+            const paths = raw.includes(' -> ') ? raw.split(' -> ') : [raw];
+            return paths.map(decodeGitQuotedPath);
+        })
+        .filter((p) => p && !allow.some((a) => p.startsWith(a)));
+}
+
+export function strayUntracked(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.startsWith('?? '))
+        .map((l) => decodeGitQuotedPath(l.slice(3).trim()))
+        .filter((p) => p && !allow.some((a) => p.startsWith(a)));
 }
 
 function decodeGitQuotedPath(raw) {
@@ -1486,4 +1603,26 @@ export function exitHint(status, error) {
     if (status === 125) return 'exit 125 = docker itself failed (daemon down, bad flag or mount), not the tests';
     if (status === 137) return 'exit 137 = killed (out of memory or docker stop)';
     return null;
+}
+
+/**
+ * The agent's own words for the salvage step, untruncated: the full `result`
+ * event when there is one (summarizeRun keeps only its first 2,000 characters,
+ * and the JSON block is usually at the end), else its streamed assistant text.
+ * The last 6,000 characters are kept.
+ */
+export function agentNotes(file, fallback = '') {
+    let result = '';
+    const texts = [];
+    try {
+        for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            let e;
+            try { e = JSON.parse(line); } catch { continue; }
+            if (e.type === 'result' && typeof e.result === 'string') result = e.result;
+            else if (e.type === 'assistant') for (const b of e.message?.content || []) if (b?.type === 'text' && b.text) texts.push(b.text);
+        }
+    } catch { /* no transcript */ }
+    const text = result || texts.join('\n') || String(fallback || '');
+    return text.slice(-6000);
 }

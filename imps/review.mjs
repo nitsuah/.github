@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseReview, renderReview } from './lib.mjs';
+import { parseReview, renderReview, agentNotes } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, chat } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -56,31 +56,69 @@ const transcript = join(HOME, 'runs', `${id}.review.jsonl`);
 let metrics;
 let rv;
 let mode = o.mode;
-if (mode === 'chat') {
-    // The whole diff and brief are in the prompt, so one completion is enough. Anything
-    // unusable (HTTP error, truncated, no JSON block) falls back to the agent session.
-    metrics = await chat({
-        model: o.model, minutes: o.minutes,
-        prompt: `${prompt}
+const CHAT_ONLY = `**You cannot read other files in this mode: judge the diff and the context above only, and do not report a file as missing because you cannot see it. Keep the reasoning short and end with the required \`json\` block.**`;
 
-**You cannot read other files in this mode: judge the diff and the context above only, and do not report a file as missing because you cannot see it. Keep the reasoning short and end with the required \`json\` block.**`,
-    });
-    rv = parseReview(metrics.finalText);
-    if (rv.error) {
-        console.log(`chat review unusable (${rv.error}, ${metrics.end}); falling back to the agent session`);
-        mode = 'agent';
-    }
+function combineMetrics(earlier, later) {
+    if (!earlier) return later;
+    const keys = ['input', 'output', 'cacheRead', 'cacheWrite'];
+    return {
+        ...later,
+        turns: (earlier.turns || 0) + (later.turns || 0),
+        durationMs: (earlier.durationMs || 0) + (later.durationMs || 0),
+        served: [...new Set([...(earlier.served || []), ...(later.served || [])])],
+        toolErrors: (earlier.toolErrors || 0) + (later.toolErrors || 0),
+        tokens: Object.fromEntries(keys.map((key) => [key, (earlier.tokens?.[key] || 0) + (later.tokens?.[key] || 0)])),
+    };
 }
-for (const attempt of mode === 'agent' ? [1, 2] : []) {
+if (mode === 'chat') {
+    // The whole diff and brief are in the prompt, so one completion is enough.
+    // A reasoning model can spend the default output budget before it reaches
+    // the JSON block, so a miss gets one more completion with more room and a
+    // terser ask before the (much costlier) agent session.
+    const RETRY = `\n\n**Your previous answer ended without the \`json\` block. Output only that block, nothing before it.**`;
+    for (const [maxTokens, extra] of [[6000, ''], [16000, RETRY]]) {
+        const previous = metrics;
+        metrics = await chat({ model: o.model, minutes: o.minutes, maxTokens, prompt: `${prompt}
+
+${CHAT_ONLY}${extra}` });
+        metrics = combineMetrics(previous, metrics);
+        rv = parseReview(metrics.finalText);
+        if (!rv.error) break;
+        console.log(`chat review unusable (${rv.error}, ${metrics.end}, maxTokens ${maxTokens})`);
+    }
+    if (rv.error) mode = 'agent';
+}
+if (mode === 'agent') {
+    const previous = metrics;
     metrics = await runClaude({
         cwd: r.worktree, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
-        prompt: attempt === 1 ? prompt : `${prompt}\n\n**Your previous attempt ended without the required \`json\` block. Keep it short and end with that block.**`,
-        minutes: o.minutes, budget: 10, maxTurns: 25, permissionMode: 'default',
-        transcript: attempt === 1 ? transcript : transcript.replace(/\.jsonl$/, '.retry.jsonl'),
+        prompt, minutes: o.minutes, budget: 10, maxTurns: 25, permissionMode: 'default', transcript,
     });
+    metrics = combineMetrics(previous, metrics);
     rv = parseReview(metrics.finalText);
-    if (!rv.error) break;
-    console.log(`attempt ${attempt}: ${rv.error} (${metrics.end})${attempt === 1 ? '; retrying once' : ''}`);
+    if (rv.error) {
+        // A second 25-turn session explored the same files again and ran out the
+        // same way (vhs#181, 2026-11-19). Instead, hand what the agent concluded
+        // to one tool-less completion that only has to write the verdict.
+        console.log(`agent review: ${rv.error} (${metrics.end}); salvaging with one completion`);
+        const notes = agentNotes(transcript, metrics.finalText) || '(the agent left no notes)';
+        const beforeSalvage = metrics;
+        metrics = await chat({
+            model: o.model, minutes: o.minutes, maxTokens: 16000,
+            prompt: `${prompt}
+
+## A reviewer's notes so far
+
+${notes}
+
+${CHAT_ONLY}
+
+**Write the final review now from the diff and these notes. Output only the \`json\` block.**`,
+        });
+        metrics = combineMetrics(beforeSalvage, metrics);
+        rv = parseReview(metrics.finalText);
+        if (!rv.error) mode = 'agent+salvage';
+    }
 }
 const minutes = metrics.durationMs ? (metrics.durationMs / 60000).toFixed(1) : null;
 const record = {

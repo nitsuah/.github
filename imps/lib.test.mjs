@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -1841,4 +1841,102 @@ test('exitHint names the command-not-found / docker-failure classes and nothing 
     assert.match(exitHint(null), /signal or timeout/);
     assert.match(exitHint(null, Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })), /could not start.*ENOENT/);
     assert.equal(exitHint(1), null);
+});
+
+test('validateBriefMeta accepts the owner/repo slug for the same repo, not another owner', async () => {
+    const { briefRepoName } = await import('./lib.mjs');
+    assert.equal(briefRepoName('nitsuah/fire'), 'fire');
+    assert.equal(briefRepoName('fire'), 'fire');
+    assert.equal(briefRepoName('someone/fire'), 'someone/fire');
+    assert.equal(validateBriefMeta('---\nrepo: nitsuah/vhs\nissue: 180\n---\nx', 'vhs', 180), null);
+    assert.match(validateBriefMeta('---\nrepo: someone/vhs\nissue: 180\n---\nx', 'vhs', 180), /does not match/);
+});
+
+test('gate measures test files against their own budget when one is given', () => {
+    // vhs#169: 125 code lines + a 224-line spec failed a 180 cap as one 349-line diff.
+    const numstat = '123\t2\tpublic/js/modules/detail-modal.js\n224\t0\ttests_playwright/artwork-link.spec.js';
+    const legacy = gate({ numstat, commits: [ok], testExit: 0, maxLines: 180, allow: ['public/', 'tests_playwright/'] });
+    assert.equal(legacy.pass, false);
+    assert.ok(legacy.reasons.includes('diff 349 lines > 180'));
+    const split = gate({ numstat, commits: [ok], testExit: 0, maxLines: 180, maxTestLines: 360, allow: ['public/', 'tests_playwright/'] });
+    assert.equal(split.pass, true, split.reasons.join());
+    assert.equal(split.codeLines, 125);
+    assert.equal(split.testLines, 224);
+    const tight = gate({ numstat, commits: [ok], testExit: 0, maxLines: 100, maxTestLines: 200, allow: ['public/', 'tests_playwright/'] });
+    assert.deepEqual(tight.reasons, ['diff 125 lines > 100', 'diff 224 lines > 200 (tests)']);
+    assert.equal(isSizeOnlyFailure({ pass: false, reasons: tight.reasons }), true);
+});
+
+test('effectiveMaxTestLines defaults to twice the code cap and honours a brief value', async () => {
+    const { effectiveMaxTestLines } = await import('./lib.mjs');
+    assert.equal(effectiveMaxTestLines(undefined, 180), 360);
+    assert.equal(effectiveMaxTestLines('90', 180), 90);
+    assert.equal(effectiveMaxTestLines(undefined, 180, 20), 380);
+});
+
+test('strayUntracked lists only untracked paths outside allow', async () => {
+    const { strayUntracked } = await import('./lib.mjs');
+    // git quotes the mangled name vhs#169 left behind (U+F03A in place of the colon).
+    const bs = String.fromCharCode(92);
+    const quoted = `?? "C${bs}357${bs}200${bs}272Usersajhartest_full_output.txt"`;
+    const porcelain = [' M public/js/a.js', '?? tests_playwright/new.spec.js', quoted, '?? notes.log'].join('\n');
+    assert.deepEqual(strayUntracked(porcelain, ['public/', 'tests_playwright/']), [`C${String.fromCharCode(0xf03a)}Usersajhartest_full_output.txt`, 'notes.log']);
+    assert.deepEqual(strayUntracked(porcelain, []), []);
+});
+
+test('outOfScopeTracked lists tracked edits outside allow, never untracked or with no allow list', async () => {
+    const { outOfScopeTracked } = await import('./lib.mjs');
+    const porcelain = [' M config/eslint.config.mjs', 'M  app/lib/stripe-status.js', '?? test-output.txt', 'R  old.js -> docs/new.js', ' D scripts/x.sh'].join(String.fromCharCode(10));
+    assert.deepEqual(outOfScopeTracked(porcelain, ['app/lib/', 'tests/unit/']), ['config/eslint.config.mjs', 'old.js', 'docs/new.js', 'scripts/x.sh']);
+    assert.deepEqual(outOfScopeTracked(porcelain, []), []);
+});
+
+test('validateBriefMeta rejects git inside docker run, allows host-side git checks', async () => {
+    const { dockerGitProblem } = await import('./lib.mjs');
+    const nl = String.fromCharCode(10);
+    const bad = ['---', 'repo: fire', 'issue: 483', "lint: docker run --rm -v {wt}:/app -w /app node:22 sh -lc 'npx eslint a.js; git diff --check'", '---', 'x'].join(nl);
+    assert.match(validateBriefMeta(bad, 'fire', 483), /runs git inside `docker run`/);
+    assert.equal(dockerGitProblem({ format: 'git diff --check', test: 'docker run --rm node:22 sh -c "npm test"' }), null);
+    assert.equal(dockerGitProblem({ test: 'docker run --rm node:22 npm test && git diff --check' }), null);
+    assert.equal(dockerGitProblem({ test: 'docker run --rm -e GIT_SHA=1 node:22 sh -c "npm test"' }), null);
+});
+
+test('TEST_PATH recognizes test/spec files across languages but not ordinary source files', () => {
+    for (const path of ['app/main.test.py', 'src/foo.spec.rb', 'lib/a.test.ts', 'tests/unit/thing.go']) assert.equal(TEST_PATH.test(path), true, path);
+    for (const path of ['app/main.py', 'src/foo.js', 'lib/test-helper.ts']) assert.equal(TEST_PATH.test(path), false, path);
+});
+
+test('summarizeRun retains streamed assistant notes when no result event arrives', () => {
+    const summary = summarizeRun([
+        { type: 'assistant', message: { model: 'model-a', content: [{ type: 'text', text: 'Initial analysis' }] } },
+        { type: 'assistant', message: { model: 'model-a', content: [{ type: 'text', text: 'Final findings at the end' }] } },
+    ]);
+    assert.equal(summary.end, 'no-result');
+    assert.match(summary.finalText, /Initial analysis/);
+    assert.match(summary.finalText, /Final findings at the end/);
+});
+
+test('shellSegments + dockerGitProblem check every container command and allow host-side git', async () => {
+    const { shellSegments, dockerGitProblem } = await import('./lib.mjs');
+    assert.deepEqual(shellSegments(`docker run x sh -c "a && git b" && git diff --check; echo 'c|d'`), ['docker run x sh -c "a && git b"', 'git diff --check', "echo 'c|d'"]);
+    assert.equal(dockerGitProblem({ test: 'docker run --rm node:22 npm test && git diff --check' }), null);
+    assert.match(dockerGitProblem({ test: 'docker run --rm node:22 npm test && docker run --rm node:22 git diff --check' }), /runs git inside/);
+});
+
+test('agentNotes prefers the full result event, then streamed assistant text, keeping the last 6000 chars', async () => {
+    const { agentNotes } = await import('./lib.mjs');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'imps-notes-'));
+    const nl = String.fromCharCode(10);
+    const long = 'x'.repeat(5000) + 'TAIL';
+    const withResult = join(dir, 'a.jsonl');
+    writeFileSync(withResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'thinking' }] } }), JSON.stringify({ type: 'result', result: long })].join(nl));
+    assert.ok(agentNotes(withResult).endsWith('TAIL'));
+    assert.equal(agentNotes(withResult).length, 5004);
+    const noResult = join(dir, 'b.jsonl');
+    writeFileSync(noResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding one' }] } }), JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding two' }] } })].join(nl));
+    assert.equal(agentNotes(noResult), 'finding one' + nl + 'finding two');
+    assert.equal(agentNotes(join(dir, 'missing.jsonl'), 'fallback'), 'fallback');
 });

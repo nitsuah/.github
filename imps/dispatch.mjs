@@ -721,7 +721,7 @@ for (const i of pickable()) {
         if (!dry) {
             try {
                 relabel(i.repo, i.number, 'imp:failed', ['imp:ready']);
-                comment(i.repo, i.number, `Invalid brief metadata:\n\n${metaErr}\n\nA brief must have YAML front matter with \`repo:\` and \`issue:\` matching this issue (e.g., \`repo: fire\`, \`issue: 166\`).`);
+                comment(i.repo, i.number, `<!-- imp-invalid-brief -->\nInvalid brief:\n\n${metaErr}\n\nFix the \`<!-- imp-brief -->\` comment (\`node imps/brieflint.mjs <file>\` checks it) and re-add \`imp:ready\`. Front matter needs \`repo:\` and \`issue:\` matching this issue (e.g., \`repo: fire\`, \`issue: 166\`).`);
             } catch (e) {
                 log({ event: 'issue-note-error', repo: i.repo, number: i.number, error: e.message });
             }

@@ -19,12 +19,12 @@
 // (the ledger), runs/<id>.jsonl (transcripts). Kit code lives in the detached
 // imps-runner checkout (see setup.ps1 / STANDARD.md § Install).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, appendFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -91,7 +91,8 @@ async function run() {
         console.error('Docker not available – ensure Docker Desktop is running.');
         process.exit(1);
     }
-    const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const { meta: parsedMeta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const meta = { ...parsedMeta, repo: briefRepoName(parsedMeta.repo) };
     validateBrief(meta);
     // No claude binary means no run can start: say so before reserving quota, so each
     // hourly retry on such a machine does not spend a reservation. dispatch reads this
@@ -234,6 +235,28 @@ async function runGate(id) {
     // new non-empty commit and clean status are verified.
     let commitRecovered = false;
     let commitRecovery = r.commitRecovery || null;
+    // Stray untracked files outside `allow:` are deleted first (never tracked
+    // files): they are never the fix, and leaving them turns a finished run
+    // into a commit-recovery failure (vhs#169).
+    const strays = removeStrayUntracked(r.worktree, meta.allow);
+    if (strays.length) {
+        console.log(`removed ${strays.length} stray untracked file(s) outside allow: ${strays.slice(0, 5).join(', ')}`);
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...strays].slice(0, 20) }));
+    }
+    // Uncommitted edits to tracked files outside `allow:` could only ever fail
+    // the gate; restore them so the gate judges what the imp committed (fire#483).
+    const reverted = revertOutOfScope(r.worktree, meta.allow);
+    // Unstage+checkout cannot remove an added path that did not exist in HEAD;
+    // after reset it is untracked, so run the scoped cleanup again before recovery.
+    const postRestoreStrays = removeStrayUntracked(r.worktree, meta.allow);
+    if (postRestoreStrays.length) {
+        console.log(`removed ${postRestoreStrays.length} staged-addition stray file(s): ${postRestoreStrays.slice(0, 5).join(', ')}`);
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...postRestoreStrays].slice(0, 20) }));
+    }
+    if (reverted.length) {
+        console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
+        update(id, { outOfScopeReverted: reverted.slice(0, 20) });
+    }
     const leftover = git(r.worktree, 'status', '--porcelain').out;
     if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
         console.log('commit recovery previously failed; refusing to gate a dirty tree');
@@ -292,6 +315,8 @@ async function runGate(id) {
             }
         }
         const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        removeStrayUntracked(r.worktree, meta.allow);
+        revertOutOfScope(r.worktree, meta.allow);
         const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
         const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
         const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
@@ -381,6 +406,7 @@ async function runGate(id) {
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
         maxLines: effectiveMaxLines(meta.maxLines, o.slack),
+        maxTestLines: effectiveMaxTestLines(meta.maxTestLines, meta.maxLines, o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
     });
@@ -394,6 +420,42 @@ async function runGate(id) {
     }));
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
+}
+
+/** Delete untracked files outside the brief's allow list; returns what was removed. */
+function removeStrayUntracked(wt, allowCsv) {
+    const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const strays = strayUntracked(porcelainStatus(wt, '--untracked-files=all'), allow);
+    const removed = [];
+    for (const p of strays) {
+        const full = resolve(wt, p);
+        // Never follow a path out of the worktree.
+        if (!full.startsWith(resolve(wt))) continue;
+        try { rmSync(full, { force: true }); removed.push(p); } catch { /* left for the dirty check */ }
+    }
+    return removed;
+}
+
+/**
+ * `git status --porcelain` with its leading status columns intact. The shared
+ * `git()` helper trims stdout, which turns a first entry of ` M a.js` into
+ * `M a.js` and makes the path parser drop a character.
+ */
+function porcelainStatus(wt, ...args) {
+    const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', ...args], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? String(r.stdout || '').replace(/\r?\n$/, '') : '';
+}
+
+/** Restore tracked out-of-scope files to HEAD (unstaging first); returns what was restored. */
+function revertOutOfScope(wt, allowCsv) {
+    const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const paths = outOfScopeTracked(porcelainStatus(wt), allow);
+    const done = [];
+    for (const p of paths) {
+        git(wt, 'reset', '-q', '--', p);
+        if (!git(wt, 'checkout', 'HEAD', '--', p).code) done.push(p);
+    }
+    return done;
 }
 
 // Poll `gh pr checks --json` until every check (required *and* optional) is
