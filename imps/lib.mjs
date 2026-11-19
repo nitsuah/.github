@@ -214,6 +214,7 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
     };
     let toolTurn = 0;
     const stamps = [];
+    const streamedText = [];
     let last = null;
     for (const e of events) {
         if (e.type === 'assistant') {
@@ -224,7 +225,9 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
                 last = model;
             }
             if (e._ts) stamps.push(e._ts);
-            const uses = (e.message?.content || []).filter((c) => c.type === 'tool_use');
+            const content = e.message?.content || [];
+            for (const block of content) if (block.type === 'text' && block.text) streamedText.push(block.text);
+            const uses = content.filter((c) => c.type === 'tool_use');
             if (uses.length) toolTurn++;
             for (const c of uses) {
                 s.tools[c.name] = (s.tools[c.name] || 0) + 1;
@@ -258,6 +261,9 @@ export function summarizeRun(events, { startedAt, endedAt } = {}) {
             };
         }
     }
+    // A turn-capped stream has no result event; preserve the tail of its
+    // assistant notes so the one-shot salvage step receives the actual findings.
+    if (s.end === 'no-result' && streamedText.length) s.finalText = streamedText.join('\n').slice(-6000);
     const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).sort((a, b) => a - b);
     if (gaps.length) s.turnMs = { max: gaps[gaps.length - 1], median: gaps[Math.floor(gaps.length / 2)] };
     if (s.durationMs == null && startedAt && endedAt) s.durationMs = endedAt - startedAt;
