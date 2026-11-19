@@ -109,12 +109,25 @@ export function strugglingRepos(rows = [], { minRuns = 4, maxRate = 0.35, last =
         .sort((a, b) => a.merged / a.runs - b.merged / b.runs);
 }
 
+/**
+ * Remove HTML comments until none are left, then any unterminated opener, so a
+ * nested or split `<!--` can't survive one pass (CodeQL js/incomplete-multi-character-sanitization).
+ */
+export function stripComments(text) {
+    let out = String(text);
+    for (let prev = null; prev !== out;) {
+        prev = out;
+        out = out.replace(/<!--[\s\S]*?-->/g, '');
+    }
+    return out.split('<!--').join('').split('-->').join('');
+}
+
 /** The kit's curated lessons for a repo (`imps/memory/<repo>.md`), capped. */
 export function curatedMemory(kitDir, repo, read = readFileSync, exists = existsSync) {
     if (!/^[A-Za-z0-9._-]+$/.test(String(repo || '')) || repo === '.' || repo === '..') return '';
     const p = join(kitDir, 'memory', `${repo}.md`);
     if (!exists(p)) return '';
-    const text = String(read(p, 'utf8')).replace(/<!--[\s\S]*?-->/g, '').trim();
+    const text = stripComments(String(read(p, 'utf8'))).trim();
     return text.length > CURATED_CAP ? `${text.slice(0, CURATED_CAP - 1)}…` : text;
 }
 

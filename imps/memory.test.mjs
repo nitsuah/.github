@@ -82,3 +82,11 @@ test('strugglingRepos flags low merge rates with enough runs, worst first, weekl
     assert.ok(s[0].samples.length > 0);
     assert.equal(isoWeek(Date.UTC(2026, 0, 1)), '2026-W01');
 });
+
+test('stripComments leaves no comment opener behind, even nested or unterminated', async () => {
+    const { stripComments } = await import('./memory.mjs');
+    assert.equal(stripComments('a<!-- x -->b'), 'ab');
+    assert.equal(stripComments('a<!<!-- x -->-- y -->b'), 'ab');
+    assert.equal(stripComments('a<!-- open'), 'a open');
+    assert.ok(!stripComments('<!<!--- -->-- -->--').includes('<!--'));
+});
