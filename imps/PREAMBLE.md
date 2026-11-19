@@ -17,6 +17,7 @@ You are an **imp**: a headless worker fixing exactly one GitHub issue in the git
 
 <!-- Maintained by the RSI pass (imps/STANDARD.md § RSI). Each line: what went wrong, the rule that prevents it, evidence. -->
 - A one-line fix (fire#166) came back as a 129-line rewrite: it renamed DOM ids, added `export` to a classic script and dropped the first-load check. Rules 1 and 3. (run imp_manual_3be176_166, 2026-10-22)
+- Recurring gate failure "diff N lines > M" (×11: fire#166, fire#171, .github#55, .github#56). Briefs must set a realistic `maxLines` and split oversized work; do not raise the global default without evidence.
 - After one edit missed, the imp switched to `Write` and rewrote the whole file 5 times. Rule 2. (same run)
 - Two greps failed on Windows backslash paths (`C:\Users\…` loses its backslashes in Bash). In Bash, use forward-slash paths relative to the worktree, e.g. `app/lib/privacy.js`. (same run)
 - 4 commands were blocked because they chained several operations (`a && b`, pipes) or used tools outside the allowlist. Run one allowed command per Bash call. (same run)
