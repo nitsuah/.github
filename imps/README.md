@@ -186,13 +186,13 @@ Live view of the imps without a second window. `watch.mjs` is read-only (no writ
 {
   "statusLine": {
     "type": "command",
-    "command": "node \"$(tr -d '\\r\\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/watch.mjs\" --statusline",
-    "refreshInterval": 2
+    "command": "node \"$(tr -d '\\r\\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/statusline.mjs\"",
+    "refreshInterval": 5
   }
 }
 ```
 
-Claude Code runs this under Git Bash on Windows, so `%VAR%` does not expand; the command resolves the kit from `kit-path.txt` (setup writes it with CRLF, hence the `tr`). Verified in a real `claude` 2.1.312 session on Windows 11. Rows: cycle state (running + elapsed from `dispatch.lock`, queue, picked, quota used), one lane per running imp (`repo#issue  elapsed  turns  tool errors  last tool`), then the latest dispatch events (PR green, gate-fail/error red, fix-sweep cyan). Anything read from files is sanitized and truncated; Bash shows only its first word.
+`statusline.mjs` shows the imps (health, squares: blue running, red needs you, yellow PR waiting, dim □ queued, then 24 h ▪ green PR / red fail) and, when `security-program/vuln` is present, the vuln pipeline: full rows while it has open PRs, workers or something that needs you, one dim line when idle (`IMPS_VULN_DIR` moves it, `IMPS_VULN=0` hides it). `watch.mjs --statusline` still prints the imps-only rows. Claude Code runs this under Git Bash on Windows, so `%VAR%` does not expand; the command resolves the kit from `kit-path.txt` (setup writes it with CRLF, hence the `tr`). Verified in a real `claude` 2.1.312 session on Windows 11. Rows: cycle state (running + elapsed from `dispatch.lock`, queue, picked, quota used), one lane per running imp (`repo#issue  elapsed  turns  tool errors  last tool`), then the latest dispatch events (PR green, gate-fail/error red, fix-sweep cyan). Anything read from files is sanitized and truncated; Bash shows only its first word.
 
 **In a spare pane (full screen).** `node imps/watch.mjs` redraws at 1 Hz; `q` quits. Flags for both modes: `--once` (one frame, no TTY), `--home <dir>` (default `IMPS_HOME` or `~/.imps`), `--no-color`.
 
