@@ -168,28 +168,37 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
  */
 export function dockerGitProblem(meta = {}) {
     for (const key of ['test', 'lint', 'format']) {
-        const cmd = String(meta[key] || '');
-        const at = cmd.search(/\bdocker\s+run\b/);
-        if (at < 0) continue;
-        // Stop at an unquoted shell operator: host-side && git is not in Docker,
-        // while quoted shell scripts passed to the container remain in scope.
-        const dockerCommand = cmd.slice(at);
-        let quote = null;
-        let end = dockerCommand.length;
-        for (let i = 0; i < dockerCommand.length - 1; i++) {
-            const ch = dockerCommand[i];
-            if (quote) {
-                if (ch === quote && dockerCommand[i - 1] !== '\\') quote = null;
-            } else if (ch === "'" || ch === '"') quote = ch;
-            else if ((ch === '&' && dockerCommand[i + 1] === '&') || ch === ';' || ch === '|') {
-                end = i; break;
+        // Every top-level command (split on unquoted &&, ||, ; and |) is checked
+        // on its own: host-side git after a container is fine, git inside any
+        // container (including its quoted sh -c script) is not.
+        for (const segment of shellSegments(String(meta[key] || ''))) {
+            const at = segment.search(/\bdocker\s+run\b/);
+            if (at >= 0 && /(^|[\s;&|('"])git\s/.test(segment.slice(at))) {
+                return `Brief \`${key}:\` runs git inside \`docker run\`; a worktree's .git points at a host path the container cannot see, so it exits 128. Move git checks (e.g. \`git diff --check\`) to a host-side \`format:\` line.`;
             }
-        }
-        if (/(^|[\s;&|('"])git\s/.test(dockerCommand.slice(0, end))) {
-            return `Brief \`${key}:\` runs git inside \`docker run\`; a worktree's .git points at a host path the container cannot see, so it exits 128. Move git checks (e.g. \`git diff --check\`) to a host-side \`format:\` line.`;
         }
     }
     return null;
+}
+
+/** Split a shell line into its top-level commands on unquoted `&&`, `||`, `;` and `|`. */
+export function shellSegments(cmd = '') {
+    const out = [];
+    let quote = null;
+    let start = 0;
+    for (let i = 0; i < cmd.length; i++) {
+        const ch = cmd[i];
+        if (quote) {
+            if (ch === quote && cmd[i - 1] !== '\\') quote = null;
+            continue;
+        }
+        if (ch === "'" || ch === '"') { quote = ch; continue; }
+        const two = cmd.slice(i, i + 2);
+        if (two === '&&' || two === '||') { out.push(cmd.slice(start, i)); start = i + 2; i++; continue; }
+        if (ch === ';' || ch === '|') { out.push(cmd.slice(start, i)); start = i + 1; }
+    }
+    out.push(cmd.slice(start));
+    return out.map((s) => s.trim()).filter(Boolean);
 }
 
 // Validate the optional brief cap before it reaches effectiveMaxLines/gate.
@@ -1594,4 +1603,26 @@ export function exitHint(status, error) {
     if (status === 125) return 'exit 125 = docker itself failed (daemon down, bad flag or mount), not the tests';
     if (status === 137) return 'exit 137 = killed (out of memory or docker stop)';
     return null;
+}
+
+/**
+ * The agent's own words for the salvage step, untruncated: the full `result`
+ * event when there is one (summarizeRun keeps only its first 2,000 characters,
+ * and the JSON block is usually at the end), else its streamed assistant text.
+ * The last 6,000 characters are kept.
+ */
+export function agentNotes(file, fallback = '') {
+    let result = '';
+    const texts = [];
+    try {
+        for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            let e;
+            try { e = JSON.parse(line); } catch { continue; }
+            if (e.type === 'result' && typeof e.result === 'string') result = e.result;
+            else if (e.type === 'assistant') for (const b of e.message?.content || []) if (b?.type === 'text' && b.text) texts.push(b.text);
+        }
+    } catch { /* no transcript */ }
+    const text = result || texts.join('\n') || String(fallback || '');
+    return text.slice(-6000);
 }

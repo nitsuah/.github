@@ -241,7 +241,7 @@ async function runGate(id) {
     const strays = removeStrayUntracked(r.worktree, meta.allow);
     if (strays.length) {
         console.log(`removed ${strays.length} stray untracked file(s) outside allow: ${strays.slice(0, 5).join(', ')}`);
-        update(id, { strayRemoved: strays.slice(0, 20) });
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...strays].slice(0, 20) }));
     }
     // Uncommitted edits to tracked files outside `allow:` could only ever fail
     // the gate; restore them so the gate judges what the imp committed (fire#483).
@@ -251,7 +251,7 @@ async function runGate(id) {
     const postRestoreStrays = removeStrayUntracked(r.worktree, meta.allow);
     if (postRestoreStrays.length) {
         console.log(`removed ${postRestoreStrays.length} staged-addition stray file(s): ${postRestoreStrays.slice(0, 5).join(', ')}`);
-        update(id, { strayRemoved: [...(r.strayRemoved || []), ...postRestoreStrays].slice(0, 20) });
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...postRestoreStrays].slice(0, 20) }));
     }
     if (reverted.length) {
         console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
@@ -425,7 +425,7 @@ async function runGate(id) {
 /** Delete untracked files outside the brief's allow list; returns what was removed. */
 function removeStrayUntracked(wt, allowCsv) {
     const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
-    const strays = strayUntracked(git(wt, 'status', '--porcelain', '--untracked-files=all').out, allow);
+    const strays = strayUntracked(porcelainStatus(wt, '--untracked-files=all'), allow);
     const removed = [];
     for (const p of strays) {
         const full = resolve(wt, p);
@@ -436,10 +436,20 @@ function removeStrayUntracked(wt, allowCsv) {
     return removed;
 }
 
+/**
+ * `git status --porcelain` with its leading status columns intact. The shared
+ * `git()` helper trims stdout, which turns a first entry of ` M a.js` into
+ * `M a.js` and makes the path parser drop a character.
+ */
+function porcelainStatus(wt, ...args) {
+    const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', ...args], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? String(r.stdout || '').replace(/\r?\n$/, '') : '';
+}
+
 /** Restore tracked out-of-scope files to HEAD (unstaging first); returns what was restored. */
 function revertOutOfScope(wt, allowCsv) {
     const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
-    const paths = outOfScopeTracked(git(wt, 'status', '--porcelain').out, allow);
+    const paths = outOfScopeTracked(porcelainStatus(wt), allow);
     const done = [];
     for (const p of paths) {
         git(wt, 'reset', '-q', '--', p);

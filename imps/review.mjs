@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseReview, renderReview } from './lib.mjs';
+import { parseReview, renderReview, agentNotes } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, chat } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -101,7 +101,7 @@ if (mode === 'agent') {
         // same way (vhs#181, 2026-11-19). Instead, hand what the agent concluded
         // to one tool-less completion that only has to write the verdict.
         console.log(`agent review: ${rv.error} (${metrics.end}); salvaging with one completion`);
-        const notes = String(metrics.finalText || '').slice(-6000) || '(the agent left no notes)';
+        const notes = agentNotes(transcript, metrics.finalText) || '(the agent left no notes)';
         const beforeSalvage = metrics;
         metrics = await chat({
             model: o.model, minutes: o.minutes, maxTokens: 16000,

@@ -1915,3 +1915,28 @@ test('summarizeRun retains streamed assistant notes when no result event arrives
     assert.match(summary.finalText, /Initial analysis/);
     assert.match(summary.finalText, /Final findings at the end/);
 });
+
+test('shellSegments + dockerGitProblem check every container command and allow host-side git', async () => {
+    const { shellSegments, dockerGitProblem } = await import('./lib.mjs');
+    assert.deepEqual(shellSegments(`docker run x sh -c "a && git b" && git diff --check; echo 'c|d'`), ['docker run x sh -c "a && git b"', 'git diff --check', "echo 'c|d'"]);
+    assert.equal(dockerGitProblem({ test: 'docker run --rm node:22 npm test && git diff --check' }), null);
+    assert.match(dockerGitProblem({ test: 'docker run --rm node:22 npm test && docker run --rm node:22 git diff --check' }), /runs git inside/);
+});
+
+test('agentNotes prefers the full result event, then streamed assistant text, keeping the last 6000 chars', async () => {
+    const { agentNotes } = await import('./lib.mjs');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'imps-notes-'));
+    const nl = String.fromCharCode(10);
+    const long = 'x'.repeat(5000) + 'TAIL';
+    const withResult = join(dir, 'a.jsonl');
+    writeFileSync(withResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'thinking' }] } }), JSON.stringify({ type: 'result', result: long })].join(nl));
+    assert.ok(agentNotes(withResult).endsWith('TAIL'));
+    assert.equal(agentNotes(withResult).length, 5004);
+    const noResult = join(dir, 'b.jsonl');
+    writeFileSync(noResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding one' }] } }), JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding two' }] } })].join(nl));
+    assert.equal(agentNotes(noResult), 'finding one' + nl + 'finding two');
+    assert.equal(agentNotes(join(dir, 'missing.jsonl'), 'fallback'), 'fallback');
+});

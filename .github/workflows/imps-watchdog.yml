@@ -45,20 +45,23 @@ jobs:
             age_h=$(( (now - $(date -u -d "$at" +%s)) / 3600 ))
             down=no; case ",$labels," in *,imps:down,*) down=yes ;; esac
             echo "#$n $machine: last report $at (${age_h}h ago, down=$down)"
-            comments=$(gh issue view "$n" -R "$REPO" --json comments --jq '[.comments[].body] | join("\\n")')
+            # The newest watchdog marker, not the label, decides which notice is owed:
+            # each outage gets one "down" notice and each recovery one "recovered"
+            # notice, and a failed post is retried next hour. The comment is posted
+            # before the label changes, so a failed post never hides itself.
+            last=$(gh issue view "$n" -R "$REPO" --json comments \
+              --jq '[.comments[].body | capture("<!-- imps-watchdog:(?<k>down|recovered) -->").k] | last // "none"')
             if [ "$age_h" -ge "$STALE_HOURS" ]; then
-              if [ "$down" = no ]; then
-                gh issue edit "$n" -R "$REPO" --add-label 'imps:down'
-              fi
-              if ! grep -Fq '<!-- imps-watchdog:down -->' <<<"$comments"; then
+              if [ "$last" != down ]; then
                 gh issue comment "$n" -R "$REPO" --body "<!-- imps-watchdog:down -->
           @$OWNER the imps loop on \`$machine\` has not reported since $at (${age_h} h). Check that the \`imps-dispatch\` task is enabled and 9router is up (\`/imp status\`). Label \`imps:retired\` if this machine no longer runs imps."
               fi
-            elif [ "$down" = yes ]; then
-              gh issue edit "$n" -R "$REPO" --remove-label 'imps:down'
-              if ! grep -Fq '<!-- imps-watchdog:recovered -->' <<<"$comments"; then
+              [ "$down" = yes ] || gh issue edit "$n" -R "$REPO" --add-label 'imps:down'
+            else
+              if [ "$last" = down ]; then
                 gh issue comment "$n" -R "$REPO" --body "<!-- imps-watchdog:recovered -->
           Recovered: \`$machine\` reported at $at."
               fi
+              [ "$down" = no ] || gh issue edit "$n" -R "$REPO" --remove-label 'imps:down'
             fi
           done
