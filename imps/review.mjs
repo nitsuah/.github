@@ -57,6 +57,19 @@ let metrics;
 let rv;
 let mode = o.mode;
 const CHAT_ONLY = `**You cannot read other files in this mode: judge the diff and the context above only, and do not report a file as missing because you cannot see it. Keep the reasoning short and end with the required \`json\` block.**`;
+
+function combineMetrics(earlier, later) {
+    if (!earlier) return later;
+    const keys = ['input', 'output', 'cacheRead', 'cacheWrite'];
+    return {
+        ...later,
+        turns: (earlier.turns || 0) + (later.turns || 0),
+        durationMs: (earlier.durationMs || 0) + (later.durationMs || 0),
+        served: [...new Set([...(earlier.served || []), ...(later.served || [])])],
+        toolErrors: (earlier.toolErrors || 0) + (later.toolErrors || 0),
+        tokens: Object.fromEntries(keys.map((key) => [key, (earlier.tokens?.[key] || 0) + (later.tokens?.[key] || 0)])),
+    };
+}
 if (mode === 'chat') {
     // The whole diff and brief are in the prompt, so one completion is enough.
     // A reasoning model can spend the default output budget before it reaches
@@ -64,9 +77,11 @@ if (mode === 'chat') {
     // terser ask before the (much costlier) agent session.
     const RETRY = `\n\n**Your previous answer ended without the \`json\` block. Output only that block, nothing before it.**`;
     for (const [maxTokens, extra] of [[6000, ''], [16000, RETRY]]) {
+        const previous = metrics;
         metrics = await chat({ model: o.model, minutes: o.minutes, maxTokens, prompt: `${prompt}
 
 ${CHAT_ONLY}${extra}` });
+        metrics = combineMetrics(previous, metrics);
         rv = parseReview(metrics.finalText);
         if (!rv.error) break;
         console.log(`chat review unusable (${rv.error}, ${metrics.end}, maxTokens ${maxTokens})`);
@@ -74,10 +89,12 @@ ${CHAT_ONLY}${extra}` });
     if (rv.error) mode = 'agent';
 }
 if (mode === 'agent') {
+    const previous = metrics;
     metrics = await runClaude({
         cwd: r.worktree, model: o.model, tools: ['Read', 'Glob', 'Grep'], deny: ['Edit', 'Write'],
         prompt, minutes: o.minutes, budget: 10, maxTurns: 25, permissionMode: 'default', transcript,
     });
+    metrics = combineMetrics(previous, metrics);
     rv = parseReview(metrics.finalText);
     if (rv.error) {
         // A second 25-turn session explored the same files again and ran out the
@@ -85,7 +102,7 @@ if (mode === 'agent') {
         // to one tool-less completion that only has to write the verdict.
         console.log(`agent review: ${rv.error} (${metrics.end}); salvaging with one completion`);
         const notes = String(metrics.finalText || '').slice(-6000) || '(the agent left no notes)';
-        const agent = metrics;
+        const beforeSalvage = metrics;
         metrics = await chat({
             model: o.model, minutes: o.minutes, maxTokens: 16000,
             prompt: `${prompt}
@@ -98,8 +115,8 @@ ${CHAT_ONLY}
 
 **Write the final review now from the diff and these notes. Output only the \`json\` block.**`,
         });
+        metrics = combineMetrics(beforeSalvage, metrics);
         rv = parseReview(metrics.finalText);
-        metrics = { ...metrics, turns: (agent.turns || 0) + 1, durationMs: (agent.durationMs || 0) + (metrics.durationMs || 0), served: [...new Set([...(agent.served || []), ...(metrics.served || [])])], toolErrors: agent.toolErrors };
         if (!rv.error) mode = 'agent+salvage';
     }
 }
