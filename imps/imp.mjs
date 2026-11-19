@@ -251,6 +251,7 @@ function scriptRun(id, wt, bm) {
     const files = inScopeChanged(porcelainStatus(wt, '--untracked-files=all'), allow);
     let committed = false;
     let gitFailure = null;
+    let gitError = null;
     if (ran && files.length) {
         const failedAdd = files.find((f) => git(wt, 'add', '--', f).code);
         if (failedAdd) gitFailure = `git add failed for ${failedAdd}`;
@@ -258,7 +259,9 @@ function scriptRun(id, wt, bm) {
             const subject = String(bm.commit || '').trim() || `chore: scripted update for #${bm.issue}`;
             const c = git(wt, 'commit', '-q', '-m', [subject, '', `Refs #${bm.issue}`, '', 'Co-Authored-By: 9router imp <noreply@anthropic.com>'].join(NL));
             committed = !c.code;
-            if (!committed) gitFailure = `git commit failed: ${String(c.err || '').split(NL)[0].slice(0, 160)}`;
+            // The reason is posted on the issue, so it stays a fixed phrase; git's own message (hooks can print
+            // anything) is kept only in the ledger as gitError.
+            if (!committed) { gitFailure = 'git commit failed'; gitError = String(c.err || '').split(NL)[0].slice(0, 160); }
         }
     }
     // Leave nothing behind for the gate's dirty check: the commit holds the only change.
@@ -272,7 +275,7 @@ function scriptRun(id, wt, bm) {
     console.log(`script mode: ${why}`);
     return {
         end: ran ? 'script' : 'script-failed', isError: !ran || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
-        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, unmetered: true,
+        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, ...(gitError ? { gitError } : {}), unmetered: true,
     };
 }
 

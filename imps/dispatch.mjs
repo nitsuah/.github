@@ -10,6 +10,7 @@
 // or an unlabelled non-consuming `commit-recovery-failed` outcome. Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { readLock, lockOwnedBy, acquireLock, releaseLock, writeLockAtomic } from './locks.mjs';
 import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,15 +89,9 @@ const alive = (pid) => {
     }
 };
 const OVERFLOW_LOCK = join(HOME, 'dispatch-overflow.lock');
-/** A lock's text and mtime, or null when it is gone (the other cycle can exit between any two reads). */
-const lockState = (file) => {
-    try {
-        return { text: readFileSync(file, 'utf8'), mtimeMs: statSync(file).mtimeMs };
-    } catch (e) {
-        if (e.code === 'ENOENT') return null;
-        throw e;
-    }
-};
+// The lock protocol (exclusive create, guarded stale takeover, owner-only release, atomic updates) lives in
+// locks.mjs, where it is tested against a temp directory.
+const lockState = readLock;
 const stalenessOf = (st) => lockIsStale({
     text: st.text,
     mtimeMs: st.mtimeMs,
@@ -112,61 +107,10 @@ const staleness = (file) => {
     return st ? stalenessOf(st) : 'gone';
 };
 const lockInfo = { pid: process.pid, host: hostname(), startedAt: new Date().toISOString() };
-/** True when `file` still records this process as its owner. */
-const owns = (file) => {
-    const st = lockState(file);
-    if (!st) return false;
-    try {
-        const j = JSON.parse(st.text);
-        return j.pid === lockInfo.pid && j.startedAt === lockInfo.startedAt;
-    } catch {
-        return false;
-    }
-};
-/** Exclusive create: fails if the file exists, so two ticks can never both hold one lock. */
-const tryCreate = (file, info) => {
-    if (dry) return true;
-    try {
-        writeFileSync(file, JSON.stringify(info), { flag: 'wx' });
-        return true;
-    } catch (e) {
-        if (e.code === 'EEXIST') return false;
-        throw e;
-    }
-};
-/**
- * Remove a stale lock under a short exclusive guard, and only if it is still the
- * stale lock we read: without the guard, two ticks that both saw it stale could
- * each delete it, and the second would delete the first one's fresh lock.
- */
-const clearStale = (file, seen, why) => {
-    if (dry) return;
-    const guard = `${file}.guard`;
-    const g = lockState(guard);
-    if (g && Date.now() - g.mtimeMs > 60_000) rmSync(guard, { force: true }); // a crashed clearer
-    if (!tryCreate(guard, lockInfo)) return;
-    try {
-        const now = lockState(file);
-        if (now && now.text === seen.text) {
-            log({ event: 'lock-cleared', lock: file === LOCK ? 'main' : 'overflow', reason: why, text: seen.text.slice(0, 200) });
-            rmSync(file, { force: true });
-        }
-    } finally {
-        rmSync(guard, { force: true });
-    }
-};
-/** Take `file` if it is free or stale. Returns true when this process now holds it. */
-const acquire = (file, info) => {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        if (tryCreate(file, info)) return true;
-        const st = lockState(file);
-        if (!st) continue; // released between the create and the read: try again
-        const why = stalenessOf(st);
-        if (!why) return false; // live
-        clearStale(file, st, why);
-    }
-    return false;
-};
+/** Take `file` if it is free or stale. Returns true when this process now holds it (always, in a dry run). */
+const acquire = (file, info) => dry || acquireLock(file, info, stalenessOf, {
+    onCleared: (why, st) => log({ event: 'lock-cleared', lock: file === LOCK ? 'main' : 'overflow', reason: why, text: st.text.slice(0, 200) }),
+});
 // An overflow cycle only picks and runs new issues, in repos the main cycle is not touching. It skips the
 // sweeps, hygiene, RSI and heartbeat: the main cycle owns those, and running them twice at once would race.
 let overflow = false;
@@ -190,7 +134,7 @@ if (!acquire(LOCK, lockInfo)) {
 const MY_LOCK = overflow ? OVERFLOW_LOCK : LOCK;
 const myInfo = { ...lockInfo, ...(overflow ? { overflow: true } : {}) };
 // Release only a lock this process still owns: never one another cycle took over after ours went stale.
-const unlock = () => { if (!dry && owns(MY_LOCK)) rmSync(MY_LOCK, { force: true }); };
+const unlock = () => { if (!dry) releaseLock(MY_LOCK, lockInfo); };
 process.on('exit', unlock);
 if (overflow) log({ event: 'overflow-start', mainBusy: lockBusyRepos(lockState(LOCK)?.text || '') });
 /**
@@ -199,7 +143,8 @@ if (overflow) log({ event: 'overflow-start', mainBusy: lockBusyRepos(lockState(L
  */
 let myBusy = [];
 let myPicks = [];
-const writeMine = () => { if (!dry && owns(MY_LOCK)) writeFileSync(MY_LOCK, JSON.stringify({ ...myInfo, busy: myBusy, picks: myPicks })); };
+// Atomic (temp file + rename): the other cycle must never read a truncated lock as an empty busy list.
+const writeMine = () => { if (!dry && lockOwnedBy(MY_LOCK, lockInfo)) writeLockAtomic(MY_LOCK, { ...myInfo, busy: myBusy, picks: myPicks }); };
 const markBusy = (repos) => { myBusy = repos; writeMine(); };
 const markPicks = (picks) => { myPicks = picks; writeMine(); };
 const otherLock = () => {
@@ -545,6 +490,17 @@ async function work(issue) {
             relabel(repo, number, 'imp:failed', ['imp:working']);
             note(repo, number, `<!-- imp-brief-broken -->\nNo model ran: the brief's \`test:\` command fails on the unchanged base before any change (run \`${id}\`).\n\n- ${why}\n\nThe command's output is kept in the runner's local ledger, not posted here. Fix the command in the \`<!-- imp-brief -->\` comment (try it on main first) and re-add \`imp:ready\`.`);
             return log({ event: 'brief-broken', repo, number, id, reason: why });
+        }
+        const sm = ledgerRow(id)?.metrics;
+        if (sm && (sm.end === 'script-failed' || (sm.end === 'script' && sm.isError))) {
+            // A `mode: script` run that failed or committed nothing: the gate would only say "no commits", so
+            // the author gets the runner's reason instead. It is a fixed phrase (exit code, timeout, "changed no
+            // allowed file", "git commit failed"); raw output stays in the local ledger. A rerun of the same
+            // script brief cannot change the result, so it goes back to its author like a broken brief.
+            const why = String(sm.finalText || 'script run failed').slice(0, 300);
+            relabel(repo, number, 'imp:failed', ['imp:working']);
+            note(repo, number, `<!-- imp-script-failed -->\nThe \`mode: script\` run made no commit (run \`${id}\`).\n\n- ${why}\n\nThe command's output is kept in the runner's local ledger, not posted here. Check the brief's \`test:\` command and \`allow:\` list on main, then re-add \`imp:ready\`.`);
+            return log({ event: 'script-failed', repo, number, id, reason: why });
         }
         const gateRun = await node(['gate', id]);
         const row = ledgerRow(id);
