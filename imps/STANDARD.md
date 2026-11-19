@@ -165,6 +165,10 @@ node imps/rsi.mjs --dry-run
 node imps/dispatch.mjs --rsi          # or IMPS_RSI=1 on the hourly tick
 ```
 
+With `"rsi": true` in `~/.imps/config.json` the dispatcher also runs it once a UTC day at the end of a cycle (`rsiDue`). Before 2026-11-19 nothing read that setting, so RSI never ran on the hourly loop.
+
+Sources, in order: recurring gate-failure signatures; **repos where imps keep failing** (at least 4 recent runs and under 35% merged, from `memory.mjs strugglingRepos`), whose brief asks for `imps/memory/<repo>.md`; fix rounds escalating to needs-human; journey/review findings.
+
 **Kill switch:** `IMPS_RSI=0` or `~/.imps/config.json` → `{"rsi": false}`.
 
 ### Manual (hypervisor)
@@ -275,6 +279,16 @@ What 9router offers that we are not using yet (from its source, v0.5.104):
 - **`MAX` is a reasoning model** and may put its reasoning in `content`. Keep `max_tokens` generous for chat calls and parse for the `json` block rather than expecting only JSON.
 - **Baseline cost per call**: a one-line prompt cost 2.8k prompt tokens on `/v1/chat/completions`, so some system text is injected upstream.
 - Other endpoints (`/v1/messages/count_tokens`, `/v1/embeddings`, `/v1/search`, `/v1/web/fetch`, `/v1/models`) are available for cheap pre-checks, issue dedupe and the model probe.
+
+## Per-repo memory
+
+Every imp prompt gets a "What we know about this repo" section after the gate limits (`memory.mjs`, called from `runner.loadBrief`). Nothing in it needs a model:
+
+1. **Ledger notes:** up to 8 lines computed from this machine's last 12 runs in the repo. Each names a count and the rule that avoids it: work left uncommitted, tests failing at the gate, lint failures, size-cap misses, files the runner had to revert, turn-cap or no-edit stalls, denied commands, missing paths, Edit misses, scratch files.
+2. **Curated lessons:** `imps/memory/<repo>.md` in the kit, capped at 1,200 characters. Written by hand or by an RSI "imps keep failing in <repo>" issue. See `imps/memory/README.md`.
+3. **Repo docs digest:** which of `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `CONTRIBUTING.md` the repo has, plus their rule-like bullets (conventions, tests, lint, never/always), capped at 1,000 characters.
+
+The section is around 1.5 KB (about 400 tokens) and is resent every turn, so each source stays capped. A broken ledger line or unreadable doc drops the section instead of failing the run.
 
 ## Uptime watchdog
 

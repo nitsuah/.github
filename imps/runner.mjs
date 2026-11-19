@@ -8,7 +8,8 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive } from './lib.mjs';
+import { memorySection } from './memory.mjs';
+import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -453,7 +454,14 @@ export function loadBrief(path, wt) {
     ].filter(Boolean).join('\n');
     // Vault playbook (IMPS_VAULT_PROMPT) is for humans / RSI logging — never
     // injected into the worker prompt (token cost). See resolveVaultPrompt().
-    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
+    // Per-repo memory (memory.mjs): this machine's recent failures in the repo,
+    // the kit's curated lessons for it, and a digest of the repo's agent docs.
+    // Never fatal: a broken ledger line or unreadable doc just drops the section.
+    let memory = '';
+    try {
+        memory = memorySection({ rows: rows(), repo: briefRepoName(meta.repo), kitDir: HERE, wt });
+    } catch { memory = ''; }
+    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n${memory ? `${memory}\n\n` : ''}---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
 }

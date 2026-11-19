@@ -71,3 +71,23 @@ test('proposeRsiIssues: fix needs-human signal', () => {
     assert.equal(p.length, 1);
     assert.equal(p[0].kind, 'fix');
 });
+
+test('rsiDue: flag and env win, config.rsi runs once per UTC day', async () => {
+    const { rsiDue } = await import('./rsi-lib.mjs');
+    const now = Date.UTC(2026, 10, 19, 12);
+    assert.equal(rsiDue({ flag: true, now }), true);
+    assert.equal(rsiDue({ env: { IMPS_RSI: '0' }, flag: true, now }), false);
+    assert.equal(rsiDue({ config: {}, now }), false);
+    assert.equal(rsiDue({ config: { rsi: true }, dispatchLines: [], now }), true);
+    assert.equal(rsiDue({ config: { rsi: true }, dispatchLines: ['{"at":"2026-11-19T01:00:00Z","event":"rsi","code":0}'], now }), false);
+    assert.equal(rsiDue({ config: { rsi: true }, dispatchLines: ['{"at":"2026-11-18T23:00:00Z","event":"rsi","code":0}'], now }), true);
+});
+
+test('proposeRsiIssues files a struggling repo first with a memory-file brief and a stable title', () => {
+    const struggling = [{ repo: 'skyview', runs: 4, merged: 0, passed: 0, gated: 3, notes: ['2 runs here ended with work not committed.'], samples: ['skyview#234'], week: '2026-W47' }];
+    const out = proposeRsiIssues({ struggling, dailyCap: 3 });
+    assert.equal(out[0].kind, 'struggle');
+    assert.equal(out[0].title, 'imps RSI: imps keep failing in skyview');
+    assert.match(out[0].brief, /allow: imps\/memory\/skyview\.md/);
+    assert.equal(proposeRsiIssues({ struggling, openRsi: [{ title: 'imps RSI: imps keep failing in skyview' }] }).filter((p) => p.kind === 'struggle').length, 0);
+});

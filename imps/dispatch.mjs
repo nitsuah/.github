@@ -9,7 +9,7 @@
 // `imp:working`, then `imp:pr` (PR opened), `imp:failed` (gate reasons commented),
 // or an unlabelled non-consuming `commit-recovery-failed` outcome. Defaults: imps/defaults.mjs. Contract: STANDARD.md.
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, 
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
+import { rsiDue } from './rsi-lib.mjs';
 
 function loadHomeConfig() {
     try {
@@ -794,9 +795,27 @@ await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.leng
 }));
 log({ event: 'done' });
 
-// Optional RSI pass (also runnable via `node rsi.mjs`). Off by default on the
-// hourly tick; enable with --rsi or IMPS_RSI=1. Kill switch: IMPS_RSI=0.
-if (o.rsi || process.env.IMPS_RSI === '1') {
+// RSI pass (also runnable via `node rsi.mjs`). Runs with --rsi or IMPS_RSI=1,
+// and once a UTC day when config.json has `"rsi": true`: that setting existed
+// but nothing read it, so RSI never ran on the hourly loop (2026-11-19).
+// Kill switch: IMPS_RSI=0.
+/** The last `bytes` of a file as text ('' when missing). */
+function tailText(file, bytes) {
+    let fd;
+    try {
+        fd = openSync(file, 'r');
+        const size = statSync(file).size;
+        const start = Math.max(0, size - bytes);
+        const buf = Buffer.alloc(size - start);
+        readSync(fd, buf, 0, buf.length, start);
+        return buf.toString('utf8');
+    } catch {
+        return '';
+    } finally {
+        if (fd !== undefined) closeSync(fd);
+    }
+}
+if (rsiDue({ flag: o.rsi, env: process.env, config: loadHomeConfig(), dispatchLines: tailText(join(HOME, 'dispatch.jsonl'), 256 * 1024).split(/\r?\n/) })) {
     if (process.env.IMPS_RSI === '0') {
         log({ event: 'rsi-skip', reason: 'IMPS_RSI=0' });
     } else {

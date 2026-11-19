@@ -1,0 +1,2 @@
+- `config/eslint.config.mjs` is not part of any fix: make the code pass lint instead. fire#483 edited it, and the runner threw the edit away.
+- Unit tests are `tests/unit/*.test.mjs`, run by vitest with `config/vitest.config.ts`; RUNTEST runs only the files the brief names.
