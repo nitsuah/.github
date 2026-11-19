@@ -42,13 +42,14 @@ export function createLockExclusive(file, info) {
  * Replace a lock's contents atomically: write a temp file beside it and rename
  * it over, so a reader never sees a truncated lock (and an empty busy list).
  * Windows can refuse the rename while a reader has the file open, so retry briefly.
+ * `rename` is injectable so tests can check the lock is untouched until it runs.
  */
-export function writeLockAtomic(file, info, { tries = 10, delayMs = 25 } = {}) {
+export function writeLockAtomic(file, info, { tries = 10, delayMs = 25, rename = renameSync } = {}) {
     const tmp = `${file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(info));
     for (let n = 1; ; n++) {
         try {
-            renameSync(tmp, file);
+            rename(tmp, file);
             return;
         } catch (e) {
             if (n >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) {

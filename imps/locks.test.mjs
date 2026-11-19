@@ -1,7 +1,7 @@
 // Dispatch lock protocol, against a real temp directory (#298 review).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireLock, releaseLock, writeLockAtomic, clearStaleLock, readLock, lockOwnedBy } from './locks.mjs';
@@ -57,6 +57,38 @@ test('releaseLock: only the owner can release', () => {
     assert.ok(existsSync(f));
     assert.equal(releaseLock(f, me), true);
     assert.equal(existsSync(f), false);
+});
+
+test('writeLockAtomic: the old lock stays intact until one rename installs the complete new one', () => {
+    // An in-place writeFileSync would fail this: the lock would change before any rename, and no rename runs.
+    const f = join(dir(), 'dispatch.lock');
+    acquireLock(f, me, neverStale);
+    const before = readFileSync(f, 'utf8');
+    const next = { ...me, busy: ['vhs', 'fire'], picks: ['vhs#1'] };
+    const renames = [];
+    writeLockAtomic(f, next, {
+        rename: (from, to) => {
+            assert.equal(readFileSync(f, 'utf8'), before, 'lock changed before the rename');
+            assert.deepEqual(JSON.parse(readFileSync(from, 'utf8')), next, 'temp file is not the complete replacement');
+            renames.push([from, to]);
+            renameSync(from, to);
+        },
+    });
+    assert.equal(renames.length, 1);
+    assert.equal(renames[0][1], f);
+    assert.deepEqual(JSON.parse(readFileSync(f, 'utf8')), next);
+});
+
+test('writeLockAtomic: retries a refused rename, then gives up and removes its temp file', () => {
+    const d = dir();
+    const f = join(d, 'dispatch.lock');
+    acquireLock(f, me, neverStale);
+    let calls = 0;
+    writeLockAtomic(f, { ...me, busy: ['a'] }, { delayMs: 1, rename: (a, b) => { if (++calls < 3) throw Object.assign(new Error('busy'), { code: 'EPERM' }); renameSync(a, b); } });
+    assert.equal(calls, 3);
+    assert.deepEqual(JSON.parse(readFileSync(f, 'utf8')).busy, ['a']);
+    assert.throws(() => writeLockAtomic(f, { ...me }, { tries: 2, delayMs: 1, rename: () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); } }), /busy/);
+    assert.deepEqual(readdirSync(d), ['dispatch.lock']);
 });
 
 test('writeLockAtomic: replaces contents in one step and leaves no temp file', () => {

@@ -275,7 +275,7 @@ function scriptRun(id, wt, bm) {
     console.log(`script mode: ${why}`);
     return {
         end: ran ? 'script' : 'script-failed', isError: !ran || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
-        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, ...(gitError ? { gitError } : {}), unmetered: true,
+        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, ...(gitError ? { gitError } : {}), outputTail: tailOutput(out, 1200), unmetered: true,
     };
 }
 
