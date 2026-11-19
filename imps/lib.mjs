@@ -157,6 +157,23 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
         return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
     }
+    return dockerGitProblem(meta);
+}
+
+/**
+ * A `git` command inside a brief's `docker run` always fails in an imp
+ * worktree: the worktree's `.git` file points at a host path the container
+ * cannot see, so git exits 128 (fire#483's lint, 2026-11-19). Run git checks
+ * such as `git diff --check` as their own host-side `format:` instead.
+ */
+export function dockerGitProblem(meta = {}) {
+    for (const key of ['test', 'lint', 'format']) {
+        const cmd = String(meta[key] || '');
+        const at = cmd.search(/\bdocker\s+run\b/);
+        if (at >= 0 && /(^|[\s;&|('"])git\s/.test(cmd.slice(at))) {
+            return `Brief \`${key}:\` runs git inside \`docker run\`; a worktree's .git points at a host path the container cannot see, so it exits 128. Move git checks (e.g. \`git diff --check\`) to a host-side \`format:\` line.`;
+        }
+    }
     return null;
 }
 

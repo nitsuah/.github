@@ -1890,3 +1890,12 @@ test('outOfScopeTracked lists tracked edits outside allow, never untracked or wi
     assert.deepEqual(outOfScopeTracked(porcelain, ['app/lib/', 'tests/unit/']), ['config/eslint.config.mjs', 'docs/new.js', 'scripts/x.sh']);
     assert.deepEqual(outOfScopeTracked(porcelain, []), []);
 });
+
+test('validateBriefMeta rejects git inside docker run, allows host-side git checks', async () => {
+    const { dockerGitProblem } = await import('./lib.mjs');
+    const nl = String.fromCharCode(10);
+    const bad = ['---', 'repo: fire', 'issue: 483', "lint: docker run --rm -v {wt}:/app -w /app node:22 sh -lc 'npx eslint a.js; git diff --check'", '---', 'x'].join(nl);
+    assert.match(validateBriefMeta(bad, 'fire', 483), /runs git inside `docker run`/);
+    assert.equal(dockerGitProblem({ format: 'git diff --check', test: 'docker run --rm node:22 sh -c "npm test"' }), null);
+    assert.equal(dockerGitProblem({ test: 'docker run --rm -e GIT_SHA=1 node:22 sh -c "npm test"' }), null);
+});
