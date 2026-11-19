@@ -44,6 +44,11 @@ export const DEFAULTS = {
     // twice at 25 and held the cycle for 50 min (2026-11-19). imp.mjs --minutes overrides.
     runMinutes: 15,
 
+    // Wall-clock cap on the brief's test run before the model (base preflight)
+    // and on a `mode: script` run (minutes). Generous: a first Playwright image
+    // build can take ~10 min. A run that hits it ends `brief-broken`.
+    preflightMinutes: 20,
+
     // Overflow cycle: once the running cycle has held the lock this long, the
     // next tick may start a pick-only cycle on repos the running one is not
     // touching, so a slow run no longer starves new work (2026-11-19: 2.5 h of

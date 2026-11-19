@@ -160,8 +160,9 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     return dockerGitProblem(meta) || briefProblem(brief);
 }
 
-// A concrete file the brief points at: a path with a directory, or a bare file name with a code/asset extension.
-const NAMED_FILE = /[\w.@-]+\/[\w./@-]*\.\w{1,6}\b|\b[\w.-]+\.(?:m?[jt]sx?|cjs|py|go|rs|rb|java|kt|cs|php|css|scss|html|vue|svelte|sql|sh|ps1|md|json|ya?ml|toml|png|svg)\b/;
+// A concrete file the brief points at: a path with a directory, a bare file name with an extension
+// (`foo.c`, `notes.txt`), or a well-known extensionless file. "e.g." and "i.e." are not files.
+const NAMED_FILE = /[\w.@-]+\/[\w./@-]*\.\w{1,6}\b|(?<![\w.])(?!(?:e\.g|i\.e)\b)[\w-][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,7}\b|\b(?:Dockerfile|Containerfile|Makefile|Procfile|Gemfile|Rakefile|Justfile|Caddyfile|Vagrantfile|LICENSE|CODEOWNERS)\b/;
 
 /**
  * Structural problems that make a brief unrunnable, whatever the model does.
@@ -191,27 +192,49 @@ export function briefProblem(brief) {
  * base before any model is spent (vhs#178's `--update-snapshots <spec>` was
  * rejected by Playwright's argument parser; 2026-11-19). Only signatures that
  * mean "the command itself is wrong" count: an ordinary failing or missing
- * test is expected on a bug's base. Returns a short reason or null.
+ * test is expected on a bug's base. Launcher errors come first and start a
+ * line, so the phrases are anchored to a line start and read only from the
+ * first lines of output; a failing test that prints one mid-output is not a
+ * broken command. Docker build failures are specific enough to match anywhere.
+ * Returns a short category (never the raw output, which can carry arguments
+ * and is posted on the issue) or null.
  */
+export const SIGNATURE_HEAD_LINES = 20;
 export function brokenCommandSignature(status, output = '') {
     if (status === 0) return null;
     if (status === 127 || status === 126 || status === 125) return exitHint(status);
-    const text = String(output || '');
+    const lines = String(output || '').split(/\r?\n/);
+    const head = lines.slice(0, SIGNATURE_HEAD_LINES).join('\n');
+    const all = lines.join('\n');
     const patterns = [
-        [/error: option '[^']*' argument '[^']*' is invalid[^\n]*/i, 'the test command passes an invalid option argument'],
-        [/error: (?:unknown|invalid) option[^\n]*/i, 'the test command uses an unknown option'],
-        [/\bunrecognized (?:option|arguments?)\b[^\n]*/i, 'the test command uses an unrecognized option'],
-        [/npm (?:ERR!|error) Missing script:[^\n]*/i, 'the test command names an npm script that does not exist'],
-        [/is not recognized as an internal or external command[^\n]*/i, 'the test command names a program that does not exist'],
-        [/\bcommand not found\b[^\n]*/i, 'the test command names a program that does not exist'],
-        [/ERROR: failed to solve[^\n]*/i, 'the docker build in the test command fails on the unchanged base'],
-        [/unable to prepare context[^\n]*|failed to read dockerfile[^\n]*/i, 'the docker build context or Dockerfile path is wrong'],
+        [head, /^error: option '[^'\n]*' argument '[^'\n]*' is invalid/im, 'the test command passes an invalid option argument'],
+        [head, /^(?:[\w./-]+: )?error: (?:unknown|invalid) option\b/im, 'the test command uses an unknown option'],
+        [head, /^(?:[\w./-]+: )?(?:error: )?unrecognized (?:option|arguments?)\b/im, 'the test command uses an unrecognized option'],
+        [head, /^npm (?:ERR!|error) Missing script:/im, 'the test command names an npm script that does not exist'],
+        [head, /^'[^'\n]+' is not recognized as an internal or external command/im, 'the test command names a program that does not exist'],
+        [head, /^[\w./-]+: (?:line \d+: )?[^\s:]+: command not found$/im, 'the test command names a program that does not exist'],
+        [all, /^(?:#\d+ )?ERROR: failed to solve\b/im, 'the docker build in the test command fails on the unchanged base'],
+        [all, /^(?:ERROR: )?(?:unable to prepare context|failed to read dockerfile)\b/im, 'the docker build context or Dockerfile path is wrong'],
     ];
-    for (const [re, why] of patterns) {
-        const m = text.match(re);
-        if (m) return `${why}: ${m[0].trim().slice(0, 160)}`;
-    }
+    for (const [text, re, why] of patterns) if (re.test(text)) return why;
     return null;
+}
+
+/**
+ * Issues a dispatch cycle has picked (its lock's `picks`, `repo#n`) that have
+ * no ledger row started since that cycle began: accepted but not yet run, so
+ * invisible to the daily cap's ledger count. 0 for a legacy or unreadable lock.
+ */
+export function pendingPicks(lockText, rows = []) {
+    let j;
+    try {
+        j = JSON.parse(lockText);
+    } catch {
+        return 0;
+    }
+    const picks = Array.isArray(j?.picks) ? j.picks : [];
+    const since = Date.parse(j?.startedAt || '') || 0;
+    return picks.filter((key) => !rows.some((r) => `${r.repo}#${r.issue}` === key && r.startedAt && Date.parse(r.startedAt) >= since)).length;
 }
 
 /**

@@ -125,7 +125,12 @@ async function run() {
         console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
     }
-    const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
+    // The repo is part of the id: main and overflow cycles can start fire#42 and vhs#42 in the same minute,
+    // and every ledger lookup is by id. Readers match `^imp_\d`, which this keeps.
+    const idBase = `imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}_${String(meta.repo).replace(/[^\w-]/g, '-')}`;
+    const taken = new Set(rows().map((x) => x.id));
+    let id = idBase;
+    for (let n = 2; taken.has(id); n++) id = `${idBase}_${n}`;
     const repoDir = join(CODE, meta.repo);
     if (!existsSync(repoDir)) {
         throw new Error(
@@ -186,13 +191,18 @@ async function run() {
     // expected on a bug's base and only recorded. Kill switch: IMPS_BASE_PREFLIGHT=0.
     if (bm.test && process.env.IMPS_BASE_PREFLIGHT !== '0') {
         const t0 = Date.now();
-        const p = briefShell(wt, bm.test);
+        // Bounded: a hanging test would otherwise hold the dispatch cycle with no model clock running.
+        const limitMin = DEFAULTS.preflightMinutes;
+        const p = briefShell(wt, bm.test, limitMin * 60_000);
         const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
-        const broken = p.error ? `could not start the test command: ${p.error.code || p.error.message}` : brokenCommandSignature(p.status, out);
+        const timedOut = p.error?.code === 'ETIMEDOUT';
+        const broken = timedOut
+            ? `the test command did not finish within ${limitMin} min on the unchanged base`
+            : p.error ? `could not start the test command: ${p.error.code || 'spawn error'}` : brokenCommandSignature(p.status, out);
         // The test may have written files (snapshots, reports): the imp starts from a clean base.
         git(wt, 'reset', '-q', '--hard');
         git(wt, 'clean', '-qfd');
-        update(id, { baseTest: { exit: p.status, ms: Date.now() - t0, ...(broken ? { broken } : {}), tail: tailOutput(out, 600) } });
+        update(id, { baseTest: { exit: p.status, ms: Date.now() - t0, ...(timedOut ? { timedOut: true } : {}), ...(broken ? { broken } : {}), tail: tailOutput(out, 600) } });
         console.log(`base preflight: test exit ${p.status} in ${Math.round((Date.now() - t0) / 1000)}s${broken ? ` — broken: ${broken}` : ''}`);
         if (broken) {
             return finishRun(id, meta, { end: 'brief-broken', isError: true, turns: 0, toolTurns: 0, toolErrors: 0, tools: {}, served: [], durationMs: Date.now() - t0, finalText: broken });
@@ -216,8 +226,8 @@ function finishRun(id, meta, metrics) {
 const NL = String.fromCharCode(10);
 
 /** Run a brief command in the worktree the same way the gate does. */
-function briefShell(wt, cmd) {
-    return spawnSync(cmd, { cwd: wt, shell: gateShell(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+function briefShell(wt, cmd, timeoutMs) {
+    return spawnSync(cmd, { cwd: wt, shell: gateShell(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' }, ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}) });
 }
 
 /**
@@ -230,26 +240,38 @@ function briefShell(wt, cmd) {
 function scriptRun(id, wt, bm) {
     const t0 = Date.now();
     console.log(`script mode: ${bm.test}`);
-    const p = briefShell(wt, bm.test);
+    const limitMin = DEFAULTS.preflightMinutes;
+    const p = briefShell(wt, bm.test, limitMin * 60_000);
     const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
     process.stdout.write(tailOutput(out, 2000) + NL);
+    const ran = p.status === 0 && !p.error;
     const allow = String(bm.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
     removeStrayUntracked(wt, bm.allow);
     revertOutOfScope(wt, bm.allow);
     const files = inScopeChanged(porcelainStatus(wt, '--untracked-files=all'), allow);
     let committed = false;
-    if (p.status === 0 && files.length) {
-        for (const f of files) git(wt, 'add', '--', f);
-        const subject = String(bm.commit || '').trim() || `chore: scripted update for #${bm.issue}`;
-        committed = !git(wt, 'commit', '-q', '-m', [subject, '', `Refs #${bm.issue}`, '', 'Co-Authored-By: 9router imp <noreply@anthropic.com>'].join(NL)).code;
+    let gitFailure = null;
+    if (ran && files.length) {
+        const failedAdd = files.find((f) => git(wt, 'add', '--', f).code);
+        if (failedAdd) gitFailure = `git add failed for ${failedAdd}`;
+        else {
+            const subject = String(bm.commit || '').trim() || `chore: scripted update for #${bm.issue}`;
+            const c = git(wt, 'commit', '-q', '-m', [subject, '', `Refs #${bm.issue}`, '', 'Co-Authored-By: 9router imp <noreply@anthropic.com>'].join(NL));
+            committed = !c.code;
+            if (!committed) gitFailure = `git commit failed: ${String(c.err || '').split(NL)[0].slice(0, 160)}`;
+        }
     }
     // Leave nothing behind for the gate's dirty check: the commit holds the only change.
     git(wt, 'reset', '-q', '--hard');
     git(wt, 'clean', '-qfd');
-    const why = p.status !== 0 ? `script command exited ${p.status}` : files.length ? `committed ${files.length} file(s)` : 'script changed no allowed file';
+    const why = p.error?.code === 'ETIMEDOUT' ? `script command did not finish within ${limitMin} min`
+        : p.error ? `script command could not start: ${p.error.code || 'spawn error'}`
+        : p.status !== 0 ? `script command exited ${p.status}`
+        : gitFailure ? `${gitFailure}; nothing committed`
+        : committed ? `committed ${files.length} file(s)` : 'script changed no allowed file';
     console.log(`script mode: ${why}`);
     return {
-        end: p.status === 0 ? 'script' : 'script-failed', isError: p.status !== 0 || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
+        end: ran ? 'script' : 'script-failed', isError: !ran || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
         served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, unmetered: true,
     };
 }

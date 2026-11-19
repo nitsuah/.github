@@ -14,7 +14,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -88,52 +88,140 @@ const alive = (pid) => {
     }
 };
 const OVERFLOW_LOCK = join(HOME, 'dispatch-overflow.lock');
-const staleness = (file) => lockIsStale({
-    text: readFileSync(file, 'utf8'),
-    mtimeMs: statSync(file).mtimeMs,
+/** A lock's text and mtime, or null when it is gone (the other cycle can exit between any two reads). */
+const lockState = (file) => {
+    try {
+        return { text: readFileSync(file, 'utf8'), mtimeMs: statSync(file).mtimeMs };
+    } catch (e) {
+        if (e.code === 'ENOENT') return null;
+        throw e;
+    }
+};
+const stalenessOf = (st) => lockIsStale({
+    text: st.text,
+    mtimeMs: st.mtimeMs,
     now: Date.now(),
     bootTimeMs: Date.now() - uptime() * 1000,
     host: hostname(),
     alive,
     maxAgeMs: DEFAULTS.lockMaxAgeMs,
 });
+/** Why a lock file is stale, null when it is live, 'gone' when it no longer exists. */
+const staleness = (file) => {
+    const st = lockState(file);
+    return st ? stalenessOf(st) : 'gone';
+};
+const lockInfo = { pid: process.pid, host: hostname(), startedAt: new Date().toISOString() };
+/** True when `file` still records this process as its owner. */
+const owns = (file) => {
+    const st = lockState(file);
+    if (!st) return false;
+    try {
+        const j = JSON.parse(st.text);
+        return j.pid === lockInfo.pid && j.startedAt === lockInfo.startedAt;
+    } catch {
+        return false;
+    }
+};
+/** Exclusive create: fails if the file exists, so two ticks can never both hold one lock. */
+const tryCreate = (file, info) => {
+    if (dry) return true;
+    try {
+        writeFileSync(file, JSON.stringify(info), { flag: 'wx' });
+        return true;
+    } catch (e) {
+        if (e.code === 'EEXIST') return false;
+        throw e;
+    }
+};
+/**
+ * Remove a stale lock under a short exclusive guard, and only if it is still the
+ * stale lock we read: without the guard, two ticks that both saw it stale could
+ * each delete it, and the second would delete the first one's fresh lock.
+ */
+const clearStale = (file, seen, why) => {
+    if (dry) return;
+    const guard = `${file}.guard`;
+    const g = lockState(guard);
+    if (g && Date.now() - g.mtimeMs > 60_000) rmSync(guard, { force: true }); // a crashed clearer
+    if (!tryCreate(guard, lockInfo)) return;
+    try {
+        const now = lockState(file);
+        if (now && now.text === seen.text) {
+            log({ event: 'lock-cleared', lock: file === LOCK ? 'main' : 'overflow', reason: why, text: seen.text.slice(0, 200) });
+            rmSync(file, { force: true });
+        }
+    } finally {
+        rmSync(guard, { force: true });
+    }
+};
+/** Take `file` if it is free or stale. Returns true when this process now holds it. */
+const acquire = (file, info) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (tryCreate(file, info)) return true;
+        const st = lockState(file);
+        if (!st) continue; // released between the create and the read: try again
+        const why = stalenessOf(st);
+        if (!why) return false; // live
+        clearStale(file, st, why);
+    }
+    return false;
+};
 // An overflow cycle only picks and runs new issues, in repos the main cycle is not touching. It skips the
 // sweeps, hygiene, RSI and heartbeat: the main cycle owns those, and running them twice at once would race.
 let overflow = false;
-if (existsSync(LOCK)) {
-    const why = staleness(LOCK);
-    if (!why) {
-        const overflowAfterMs = Number(loadHomeConfig().overflowAfterMs ?? DEFAULTS.overflowAfterMs);
-        const ok = process.env.IMPS_OVERFLOW !== '0' && !o.only && mayOverflow({
-            mainText: readFileSync(LOCK, 'utf8'),
-            mainMtimeMs: statSync(LOCK).mtimeMs,
-            overflow: existsSync(OVERFLOW_LOCK) ? OVERFLOW_LOCK : null,
-            now: Date.now(),
-            overflowAfterMs,
-            staleCheck: (file) => { try { return staleness(file); } catch { return 'unreadable'; } },
-        });
-        if (!ok) {
-            log({ event: 'skip', reason: 'previous cycle still running (lock < 3h old)' });
-            process.exit(0);
-        }
-        overflow = true;
-    } else {
-        log({ event: 'lock-cleared', reason: why, lock: readFileSync(LOCK, 'utf8').slice(0, 200) });
-        if (!dry) rmSync(LOCK, { force: true });
+if (!acquire(LOCK, lockInfo)) {
+    const main = lockState(LOCK);
+    const overflowAfterMs = Number(loadHomeConfig().overflowAfterMs ?? DEFAULTS.overflowAfterMs);
+    const ok = !!main && process.env.IMPS_OVERFLOW !== '0' && !o.only && mayOverflow({
+        mainText: main.text,
+        mainMtimeMs: main.mtimeMs,
+        overflow: existsSync(OVERFLOW_LOCK) ? OVERFLOW_LOCK : null,
+        now: Date.now(),
+        overflowAfterMs,
+        staleCheck: (file) => { try { return staleness(file); } catch { return 'unreadable'; } },
+    });
+    if (!ok || !acquire(OVERFLOW_LOCK, { ...lockInfo, overflow: true })) {
+        log({ event: 'skip', reason: main ? 'previous cycle still running (lock < 3h old)' : 'lock contention' });
+        process.exit(0);
     }
+    overflow = true;
 }
 const MY_LOCK = overflow ? OVERFLOW_LOCK : LOCK;
-const lockInfo = { pid: process.pid, host: hostname(), startedAt: new Date().toISOString(), ...(overflow ? { overflow: true } : {}) };
-if (!dry) writeFileSync(MY_LOCK, JSON.stringify(lockInfo));
-const unlock = () => { if (!dry) rmSync(MY_LOCK, { force: true }); };
+const myInfo = { ...lockInfo, ...(overflow ? { overflow: true } : {}) };
+// Release only a lock this process still owns: never one another cycle took over after ours went stale.
+const unlock = () => { if (!dry && owns(MY_LOCK)) rmSync(MY_LOCK, { force: true }); };
 process.on('exit', unlock);
-if (overflow) log({ event: 'overflow-start', mainBusy: lockBusyRepos(readFileSync(LOCK, 'utf8')) });
-/** Record which repos this cycle runs imps in, so the other cycle leaves them alone. */
-const markBusy = (repos) => { if (!dry) writeFileSync(MY_LOCK, JSON.stringify({ ...lockInfo, busy: repos })); };
-/** Repos the other cycle (main or overflow) is running imps in right now. */
-const otherBusy = () => {
+if (overflow) log({ event: 'overflow-start', mainBusy: lockBusyRepos(lockState(LOCK)?.text || '') });
+/**
+ * Record which repos this cycle is working in (imps and fix rounds), so the other cycle leaves them alone,
+ * and which issues it has picked but not started, so both cycles count them against the daily cap.
+ */
+let myBusy = [];
+let myPicks = [];
+const writeMine = () => { if (!dry && owns(MY_LOCK)) writeFileSync(MY_LOCK, JSON.stringify({ ...myInfo, busy: myBusy, picks: myPicks })); };
+const markBusy = (repos) => { myBusy = repos; writeMine(); };
+const markPicks = (picks) => { myPicks = picks; writeMine(); };
+const otherLock = () => {
     const other = overflow ? LOCK : OVERFLOW_LOCK;
-    try { return existsSync(other) && !staleness(other) ? lockBusyRepos(readFileSync(other, 'utf8')) : []; } catch { return []; }
+    try {
+        const st = lockState(other);
+        return st && !stalenessOf(st) ? st.text : '';
+    } catch {
+        return '';
+    }
+};
+/** Repos the other cycle (main or overflow) is working in right now. */
+const otherBusy = () => lockBusyRepos(otherLock());
+/**
+ * Claim `repo` for this cycle, then check the other cycle has not: mark first, check second, so two cycles
+ * racing for one repo can both back off but never both proceed. Returns false (and unclaims) on a clash.
+ */
+const reserveRepo = (repo, base = []) => {
+    markBusy([...new Set([...base, repo])]);
+    if (!otherBusy().includes(repo)) return true;
+    markBusy(base);
+    return false;
 };
 
 // ── 9router must be up ────────────────────────────────────────────────────
@@ -451,9 +539,11 @@ async function work(issue) {
         if (ledgerRow(id)?.metrics?.end === 'brief-broken') {
             // The brief's own test command could not run on the unchanged base (see imp.mjs base preflight):
             // no model ran, and rerunning the same brief cannot help, so it goes straight back to its author.
+            // finalText is a fixed category (brokenCommandSignature never returns raw output, which can carry
+            // arguments); the output itself stays in the local ledger as baseTest.tail.
             const why = String(ledgerRow(id)?.metrics?.finalText || 'test command broken').slice(0, 300);
             relabel(repo, number, 'imp:failed', ['imp:working']);
-            note(repo, number, `<!-- imp-brief-broken -->\nNo model ran: the brief's \`test:\` command fails on the unchanged base before any change (run \`${id}\`).\n\n- ${why}\n\nFix the command in the \`<!-- imp-brief -->\` comment (try it on main first) and re-add \`imp:ready\`.`);
+            note(repo, number, `<!-- imp-brief-broken -->\nNo model ran: the brief's \`test:\` command fails on the unchanged base before any change (run \`${id}\`).\n\n- ${why}\n\nThe command's output is kept in the runner's local ledger, not posted here. Fix the command in the \`<!-- imp-brief -->\` comment (try it on main first) and re-add \`imp:ready\`.`);
             return log({ event: 'brief-broken', repo, number, id, reason: why });
         }
         const gateRun = await node(['gate', id]);
@@ -637,7 +727,14 @@ if (!overflow) {
     for (const p of openImp) {
         const row = ledger.find((r) => r.pr === p.url);
         if (!row) continue; // opened from another machine's ledger
+        // A fix round runs the repo's gate on its imp-nm-<repo> volume: hold the repo so an overflow cycle
+        // does not start an imp there meanwhile, and skip it if overflow already has.
+        if (!reserveRepo(p.repo)) {
+            log({ event: 'fix-sweep-skip', pr: p.url, reason: 'repo busy in the overflow cycle' });
+            continue;
+        }
         const f = await node(['fix', row.id, ...(dry ? ['--dry-run'] : [])], 'fix.mjs');
+        markBusy([]);
         const last = f.out.trim().split('\n').reverse().find((l) => l.startsWith('{"id"'));
         const result = last ? JSON.parse(last).event : `exit ${f.code}`;
         if (!sweepIsRepeat(recentEvents, p.url, result)) log({ event: 'fix-sweep', pr: p.url, id: row.id, result });
@@ -710,6 +807,9 @@ const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 // readLedger, not readFileSync: a fresh machine has no runs.jsonl yet.
 const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha });
+// The other cycle's accepted-but-unstarted picks have no ledger row yet; count them so main and overflow
+// together never exceed the daily cap.
+budget.runsLast24h += pendingPicks(otherLock(), readLedger());
 // An issue with no brief is skipped below, so it must not use up one of the --max
 // slots (with --max 1 a briefless issue at the head of the queue starved the cycle
 // every hour). Pick in batches until the slots hold issues that can run.
@@ -823,7 +923,15 @@ if (dry) process.exit(0);
 // A cycle that picks nothing still goes on to RSI and the heartbeat below: it used to exit here, so an
 // idle machine never beat and the watchdog would have called it down after 4 quiet hours.
 if (picked.length) {
+    // Mark first, check second (see reserveRepo): a repo the other cycle took meanwhile is dropped from this
+    // cycle untouched. Nothing is claimed yet, so a dropped issue stays imp:ready for the next tick.
     markBusy([...new Set(picked.map((i) => i.repo))]);
+    const clash = new Set(otherBusy());
+    for (const i of picked.filter((x) => clash.has(x.repo))) log({ event: 'pick-dropped', repo: i.repo, number: i.number, reason: 'repo busy in the other cycle' });
+    picked.splice(0, picked.length, ...picked.filter((x) => !clash.has(x.repo)));
+    markBusy([...new Set(picked.map((i) => i.repo))]);
+    // Picked but not started counts against the daily cap in both cycles, until it starts or this cycle ends.
+    markPicks(picked.map((i) => `${i.repo}#${i.number}`));
     const byRepo = new Map();
     for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
     const pool = [...byRepo.values()];
@@ -835,6 +943,7 @@ if (picked.length) {
                 } catch (e) {
                     log({ event: 'error', repo: i.repo, number: i.number, error: e.message });
                 }
+                markPicks(myPicks.filter((k) => k !== `${i.repo}#${i.number}`));
             }
         }
     }));

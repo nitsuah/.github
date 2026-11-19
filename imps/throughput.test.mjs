@@ -1,7 +1,7 @@
 // Brief preflight, script mode and overflow-cycle helpers (2026-11-19 throughput pass).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { briefProblem, validateBriefMeta, brokenCommandSignature, inScopeChanged, lockBusyRepos, mayOverflow } from './lib.mjs';
+import { briefProblem, validateBriefMeta, brokenCommandSignature, inScopeChanged, lockBusyRepos, mayOverflow, pendingPicks, SIGNATURE_HEAD_LINES } from './lib.mjs';
 import { lintBrief } from './brieflint.mjs';
 
 const NL = String.fromCharCode(10);
@@ -18,6 +18,13 @@ test('briefProblem: a brief that names no file is not imp work (ats-fill#176)', 
     assert.equal(briefProblem(brief(['repo: a', 'issue: 1', 'test: npm test'], 'Change `validate()` in lib/form.ts.')), null);
     assert.equal(briefProblem(brief(['repo: a', 'issue: 1', 'test: npm test', 'allow: src/'], 'No path here.')), null);
     assert.equal(briefProblem(brief(['repo: a', 'issue: 1', 'test: npm test'], 'Edit README.md.')), null);
+});
+
+test('briefProblem: bare and extensionless file names count as named files', () => {
+    for (const body of ['Fix the loop in foo.c.', 'Append a line to notes.txt', 'Pin the base image in the Dockerfile.', 'Add a lint target to the Makefile']) {
+        assert.equal(briefProblem(brief(['repo: a', 'issue: 1', 'test: make test'], body)), null, body);
+    }
+    assert.match(briefProblem(brief(['repo: a', 'issue: 1', 'test: npm test'], 'Tighten things up, e.g. the auth flow, i.e. the login.')), /names no file/);
 });
 
 test('briefProblem: mode must be agent or script, and script needs allow', () => {
@@ -43,6 +50,30 @@ test('brokenCommandSignature: catches a command that cannot run, ignores ordinar
     assert.equal(brokenCommandSignature(1, '  1 failed' + NL + '  expect(received).toBe(expected)'), null);
     assert.equal(brokenCommandSignature(1, 'No tests found, exiting with code 1'), null);
     assert.equal(brokenCommandSignature(1, "Error: Cannot find module './new-helper'"), null);
+    assert.match(brokenCommandSignature(1, 'bash: playwrite: command not found'), /does not exist/);
+});
+
+test('brokenCommandSignature: a failing test that prints a launcher phrase mid-output is not broken', () => {
+    // Indented assertion output, and a phrase past the first lines, are test output, not launcher errors.
+    assert.equal(brokenCommandSignature(1, ['Running 3 tests', '  1 failed', "    Expected: \"error: unknown option '--x'\"", '    Received: "bash: foo: command not found"'].join(NL)), null);
+    const late = [...Array.from({ length: SIGNATURE_HEAD_LINES }, (_, n) => `ok ${n}`), 'error: unknown option --x'].join(NL);
+    assert.equal(brokenCommandSignature(1, late), null);
+});
+
+test('brokenCommandSignature returns a category, never the raw output line', () => {
+    const r = brokenCommandSignature(1, "error: unknown option '--token=ghp_SECRET123'");
+    assert.ok(r && !r.includes('SECRET'), r);
+});
+
+test('pendingPicks: picks with no ledger row since the cycle began count against the cap', () => {
+    const lock = JSON.stringify({ pid: 1, startedAt: '2026-11-19T12:00:00Z', picks: ['vhs#1', 'fire#2', 'vhs#3'] });
+    const rows = [
+        { repo: 'vhs', issue: 1, startedAt: '2026-11-19T12:05:00Z' },
+        { repo: 'fire', issue: 2, startedAt: '2026-11-19T11:00:00Z' },
+    ];
+    assert.equal(pendingPicks(lock, rows), 2);
+    assert.equal(pendingPicks(JSON.stringify({ pid: 1 }), rows), 0);
+    assert.equal(pendingPicks('', rows), 0);
 });
 
 test('inScopeChanged: tracked edits and new files inside allow, nothing else', () => {
