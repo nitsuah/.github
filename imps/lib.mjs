@@ -1494,9 +1494,13 @@ export function extractFailureDiagnostic(output = '', runId = '', worktree = '')
 
     // Playwright: "  1) [chromium] › tests/x.spec.js:12:5 › suite › test ───" or the
     // "N failed" summary line "    [chromium] › tests/x.spec.js:12:5 › suite › test".
-    const playwrightFail = plain.match(/^[ \t]*(?:\d+\)[ \t]+)?\[[^\]\n]+\][ \t]+›[ \t]+\S+:\d+:\d+[ \t]+›[ \t]+(.+?)(?:[ \t]+─+)?[ \t]*$/m);
+    // The "[project] ›" prefix is omitted when the project has no name.
+    const playwrightFail = plain.match(/^[ \t]*(?:\d+\)[ \t]+)?(?:\[[^\]\n]+\][ \t]+›[ \t]+)?\S+:\d+:\d+[ \t]+›[ \t]+(.+?)(?:[ \t]+─+)?[ \t]*$/m);
     if (playwrightFail) {
-        const assertion = /^\s*Error: expect\(/m.test(plain);
+        // Classify only the selected failure's block: it ends at the next "N) " header or the "N failed" summary.
+        const rest = plain.slice(playwrightFail.index + playwrightFail[0].length);
+        const end = rest.search(/^[ \t]*(?:\d+\)[ \t]+\S|\d+ failed\b)/m);
+        const assertion = /^\s*Error: expect\(/m.test(end < 0 ? rest : rest.slice(0, end));
         return { kind: 'test', runId, test: playwrightFail[1].slice(0, 120), error: assertion ? 'assertion failure' : 'test failure' };
     }
 
