@@ -44,9 +44,9 @@ on:
         type: string
         default: ''
       kit-ref:
-        description: Ref of nitsuah/.github to take reporter.mjs from.
+        description: Pinned commit (or tag) of nitsuah/.github to take reporter.mjs from. Callers should pass the same ref they call this workflow at.
         type: string
-        default: main
+        default: a88b895e5428b89b2359d75bf639c6adfbeef31f
       timeout-minutes:
         type: number
         default: 30

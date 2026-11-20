@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -60,7 +60,7 @@ for (const c of checks.filter((x) => /FAILURE|ERROR/i.test(x.state) && /actions\
     c.log = sh('gh', ['run', 'view', run, '-R', slug, '--log-failed']).out.split('\n').slice(-60).join('\n').slice(-3000);
 }
 const since = r.fixes?.length ? r.fixes[r.fixes.length - 1].at : r.gate?.at || null;
-const items = feedbackItems({ threads, comments, checks, impReview: r.review, since });
+const items = feedbackItems({ threads, comments, checks, impReview: r.review, since, allowedAuthors: parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS) });
 
 // ── 2. nothing to do / stale CodeRabbit block / limits ───────────────────
 const latestBy = latestDecisiveReviews(pr.reviews);
