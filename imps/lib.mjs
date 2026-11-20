@@ -433,7 +433,12 @@ export function impTouchedPaths(log, impAuthor = '9router imp') {
     for (const chunk of String(log || '').split('\0')) {
         const [author, ...files] = chunk.split('\n');
         if (author.trim() !== impAuthor) continue;
-        for (const f of files) if (f.trim()) paths.add(f.trim());
+        // Keep names exactly as git prints them (numstat does not trim either):
+        // trimming " stray.js" would make an imp-authored path dodge the scope check.
+        for (const f of files) {
+            const name = f.endsWith('\r') ? f.slice(0, -1) : f;
+            if (name) paths.add(name);
+        }
     }
     return [...paths];
 }

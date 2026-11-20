@@ -1995,6 +1995,10 @@ test('gate exempts human-only paths from scope but not from deny (fire#527)', ()
     assert.equal(gate({ ...base, impPaths }).pass, true);
     // An imp-touched path outside allow still fails.
     assert.ok(gate({ ...base, impPaths: [...impPaths, 'docs/CHANGELOG.md'] }).reasons.includes('outside scope docs/CHANGELOG.md'));
+    // Whitespace in an imp-authored name is kept, so it still fails scope.
+    const spaced = impTouchedPaths('\0' + '9router imp\n\n stray.js\n');
+    assert.deepEqual(spaced, [' stray.js']);
+    assert.ok(gate({ ...base, numstat: '1\t0\t stray.js', impPaths: spaced }).reasons.includes('outside scope  stray.js'));
     // A human commit to a denied path still fails the gate.
     assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', impPaths }).reasons.includes('denied path package-lock.json'));
 });
