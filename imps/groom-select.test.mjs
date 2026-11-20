@@ -27,6 +27,17 @@ test('groomEligible: skips imp-labelled, security, design and epic issues', () =
     assert.match(groomEligible(iss({ title: 'Epic: metrics platform' }), own).reason, /epic/);
 });
 
+test('groomEligible: skips off-limits repos, safety-critical, heartbeat and report issues', () => {
+    assert.match(groomEligible(iss({ repo: 'security-program' }), own).reason, /never groomed/);
+    assert.match(groomEligible(iss({ repo: '9router' }), own).reason, /never groomed/);
+    assert.match(groomEligible(iss({ labels: ['safety-critical'] }), own).reason, /safety-critical/);
+    assert.match(groomEligible(iss({ labels: ['imp'], title: 'imps heartbeat: YOKAI' }), own).reason, /label imp/);
+    for (const title of ['QA fast crawl (post-Cloudflare move): findings', '[Audit] Owned-repo maintenance roll-up', 'chore(triage): human-review backlog queue', 'Brand & link pass (2026-11-20): index of imp-ready issues', 'Owned-repository field audit: CI']) {
+        assert.match(groomEligible(iss({ title }), own).reason, /report or bookkeeping/, title);
+    }
+    assert.equal(groomEligible(iss({ repo: 'fire', title: 'Quick Start Hub: feed real state into the card' }), own).ok, true);
+});
+
 test('isEpic: phased plans and long checklists are epics, short ones are not', () => {
     assert.equal(isEpic({ body: '## Phase 1\nx\n## Phase 2\ny' }), true);
     assert.equal(isEpic({ body: '- [ ] a\n- [ ] b\n- [ ] c\n- [ ] d' }), true);

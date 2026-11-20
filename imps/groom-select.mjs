@@ -12,7 +12,16 @@ const BLOCK_LABELS = new Set([
     'security', 'audit', 'investigate', 'needs-human', 'imp:needs-human',
     'epic', 'tracking', 'parent', 'meta', 'design', 'spec', 'rfc',
     'question', 'discussion', 'wontfix', 'duplicate', 'blocked',
+    'safety-critical', 'imp', 'report',
 ]);
+
+// Repos the groomer never touches: the security program runs its own gated
+// pipeline, and 9router tracks upstream exactly.
+export const SKIP_REPOS = new Set(['security-program', '9router']);
+
+// Report and bookkeeping issues: findings lists, audits, roll-ups, triage queues,
+// heartbeats. They hold many tasks, not one PR's worth of work.
+const REPORT_TITLE = /^\s*(\[?(audit|report|qa|triage|heartbeat)\b|qa fast crawl|owned-repo|owned-repository|brand & link pass|imps heartbeat|chore\(triage\))|roll-?up|\bindex of\b|\bfindings\b/i;
 
 const lower = (xs = []) => xs.map((x) => String(typeof x === 'string' ? x : x?.name || '').toLowerCase()).filter(Boolean);
 
@@ -33,12 +42,14 @@ export function isEpic({ title = '', body = '', labels = [] } = {}) {
  */
 export function groomEligible(issue = {}, { owner = '', trustedAuthors = [] } = {}) {
     const labels = lower(issue.labels);
+    if (SKIP_REPOS.has(String(issue.repo || '').toLowerCase())) return { ok: false, reason: `repo ${issue.repo} is never groomed` };
     if (labels.some((l) => l.startsWith('imp:'))) return { ok: false, reason: 'already has an imp:* label' };
     const trusted = new Set([owner, ...trustedAuthors].map((a) => String(a).toLowerCase()).filter(Boolean));
     if (!trusted.has(String(issue.author || '').toLowerCase())) return { ok: false, reason: `author ${issue.author || '(unknown)'} not trusted` };
     const blocked = labels.find((l) => BLOCK_LABELS.has(l));
     if (blocked) return { ok: false, reason: `label ${blocked}` };
     if (isEpic(issue)) return { ok: false, reason: 'epic or multi-phase issue' };
+    if (REPORT_TITLE.test(String(issue.title || ''))) return { ok: false, reason: 'report or bookkeeping issue' };
     return { ok: true, reason: '' };
 }
 
