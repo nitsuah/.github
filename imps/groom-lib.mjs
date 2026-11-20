@@ -150,7 +150,7 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
                 },
                 body: JSON.stringify({
                     model: 'MAX',
-                    max_tokens: 4000,
+                    max_tokens: 8000,
                     stream: false,
                     system: sys,
                     messages: [{ role: 'user', content: 'Write the brief.' }],
@@ -159,7 +159,8 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
 
             if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
             const data = await res.json();
-            const text = data.content?.[0]?.text || '';
+            // 9router models often lead with a thinking block: join the text blocks, not content[0].
+            const text = (data.content || []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
             // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
             const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
             return (m ? m[1] : text).trim();
