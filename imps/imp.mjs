@@ -5,7 +5,7 @@
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
-//   node imp.mjs run     --brief <brief.md> [--model MAX] [--minutes 25] [--budget 15]
+//   node imp.mjs run     --brief <brief.md> [--model MAX] [--minutes 15] [--budget 15]
 //   node imp.mjs gate    <run-id>          tests in Docker + diff/scope/trailer checks
 //   node imp.mjs pr      <run-id>          gate must have passed; opens an `imp` PR (auto-merge when trusted)
 //   node imp.mjs outcome <run-id>          records merged / closed / open from GitHub
@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -62,7 +62,7 @@ const { values: o, positionals: pos } = parseArgs({
     options: {
         brief: { type: 'string' },
         model: { type: 'string', default: 'MAX' },
-        minutes: { type: 'string', default: '25' },
+        minutes: { type: 'string', default: String(DEFAULTS.runMinutes) },
         budget: { type: 'string', default: '15' },
         worktree: { type: 'string' },
         slack: { type: 'string', default: '0' },
@@ -94,10 +94,14 @@ async function run() {
     const { meta: parsedMeta } = parseBrief(readFileSync(o.brief, 'utf8'));
     const meta = { ...parsedMeta, repo: briefRepoName(parsedMeta.repo) };
     validateBrief(meta);
+    // `mode: script` briefs never call a model: the brief's test command makes the change (regenerated
+    // screenshots, generated files) and the runner commits what lands inside `allow:`. So none of the
+    // model checks below apply to them.
+    const scripted = String(meta.mode || '').trim() === 'script';
     // No claude binary means no run can start: say so before reserving quota, so each
     // hourly retry on such a machine does not spend a reservation. dispatch reads this
     // line and puts the issue back on imp:ready instead of labelling it failed.
-    if (!resolveClaudeBin()) {
+    if (!scripted && !resolveClaudeBin()) {
         console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
         process.exit(1);
     }
@@ -106,7 +110,7 @@ async function run() {
     // family mismatch. This runs before quota is reserved and before any worktree or ledger row, so
     // no attempt is consumed; dispatch sees the marker line and puts the issue back on imp:ready.
     const expected = expectedFamilies(loadHomeConfig(), process.env);
-    if (expected.length) {
+    if (!scripted && expected.length) {
         const router = resolveRouter();
         const probe = await probeServedModel({ baseUrl: router.baseUrl, key: router.key, model: o.model, expected });
         if (!probe.ok) {
@@ -116,12 +120,17 @@ async function run() {
         console.log(`served-model probe: ${probe.verdict}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
     }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
-    const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
+    const chosenModel = scripted ? 'none (script)' : reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
     if (!chosenModel) {
         console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
     }
-    const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
+    // The repo is part of the id: main and overflow cycles can start fire#42 and vhs#42 in the same minute,
+    // and every ledger lookup is by id. Readers match `^imp_\d`, which this keeps.
+    const idBase = `imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}_${String(meta.repo).replace(/[^\w-]/g, '-')}`;
+    const taken = new Set(rows().map((x) => x.id));
+    let id = idBase;
+    for (let n = 2; taken.has(id); n++) id = `${idBase}_${n}`;
     const repoDir = join(CODE, meta.repo);
     if (!existsSync(repoDir)) {
         throw new Error(
@@ -175,14 +184,99 @@ async function run() {
     appendRow(row);
     console.log(`${id}  ${wt}`);
 
+    if (scripted) return finishRun(id, meta, scriptRun(id, wt, bm));
+    // Base preflight: run the brief's test once on the unchanged base, before any model time. A command
+    // that cannot run at all (bad flag, missing script, broken docker build) fails here in seconds as
+    // `brief-broken` instead of after a full model run (vhs#178, 2026-11-19). An ordinary failing test is
+    // expected on a bug's base and only recorded. Kill switch: IMPS_BASE_PREFLIGHT=0.
+    if (bm.test && process.env.IMPS_BASE_PREFLIGHT !== '0') {
+        const t0 = Date.now();
+        // Bounded: a hanging test would otherwise hold the dispatch cycle with no model clock running.
+        const limitMin = DEFAULTS.preflightMinutes;
+        const p = briefShell(wt, bm.test, limitMin * 60_000);
+        const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
+        const timedOut = p.error?.code === 'ETIMEDOUT';
+        const broken = timedOut
+            ? `the test command did not finish within ${limitMin} min on the unchanged base`
+            : p.error ? `could not start the test command: ${p.error.code || 'spawn error'}` : brokenCommandSignature(p.status, out);
+        // The test may have written files (snapshots, reports): the imp starts from a clean base.
+        git(wt, 'reset', '-q', '--hard');
+        git(wt, 'clean', '-qfd');
+        update(id, { baseTest: { exit: p.status, ms: Date.now() - t0, ...(timedOut ? { timedOut: true } : {}), ...(broken ? { broken } : {}), tail: tailOutput(out, 600) } });
+        console.log(`base preflight: test exit ${p.status} in ${Math.round((Date.now() - t0) / 1000)}s${broken ? ` — broken: ${broken}` : ''}`);
+        if (broken) {
+            return finishRun(id, meta, { end: 'brief-broken', isError: true, turns: 0, toolTurns: 0, toolErrors: 0, tools: {}, served: [], durationMs: Date.now() - t0, finalText: broken });
+        }
+    }
+
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
     const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: DEFAULTS.maxTurns || 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
+    finishRun(id, meta, metrics);
+}
+
+function finishRun(id, meta, metrics) {
     update(id, { endedAt: new Date().toISOString(), metrics });
     writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
-    console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
-    console.log(metrics.finalText);
+    console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${(metrics.served || []).join(', ') || 'none'}`);
+    console.log(metrics.finalText || '');
     console.log(`next: node imp.mjs gate ${id}`);
+}
+
+const NL = String.fromCharCode(10);
+
+/** Run a brief command in the worktree the same way the gate does. */
+function briefShell(wt, cmd, timeoutMs) {
+    return spawnSync(cmd, { cwd: wt, shell: gateShell(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' }, ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}) });
+}
+
+/**
+ * A `mode: script` run: the brief's test command makes the change, and the
+ * runner commits the changed files inside `allow:` (everything else is
+ * restored or deleted). No model, no quota. The gate then runs as usual, so a
+ * script that changes nothing fails "no commits" and a failing command fails
+ * on its exit code. Returns the run's metrics.
+ */
+function scriptRun(id, wt, bm) {
+    const t0 = Date.now();
+    console.log(`script mode: ${bm.test}`);
+    const limitMin = DEFAULTS.preflightMinutes;
+    const p = briefShell(wt, bm.test, limitMin * 60_000);
+    const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
+    process.stdout.write(tailOutput(out, 2000) + NL);
+    const ran = p.status === 0 && !p.error;
+    const allow = String(bm.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+    removeStrayUntracked(wt, bm.allow);
+    revertOutOfScope(wt, bm.allow);
+    const files = inScopeChanged(porcelainStatus(wt, '--untracked-files=all'), allow);
+    let committed = false;
+    let gitFailure = null;
+    let gitError = null;
+    if (ran && files.length) {
+        const failedAdd = files.find((f) => git(wt, 'add', '--', f).code);
+        if (failedAdd) gitFailure = `git add failed for ${failedAdd}`;
+        else {
+            const subject = String(bm.commit || '').trim() || `chore: scripted update for #${bm.issue}`;
+            const c = git(wt, 'commit', '-q', '-m', [subject, '', `Refs #${bm.issue}`, '', 'Co-Authored-By: 9router imp <noreply@anthropic.com>'].join(NL));
+            committed = !c.code;
+            // The reason is posted on the issue, so it stays a fixed phrase; git's own message (hooks can print
+            // anything) is kept only in the ledger as gitError.
+            if (!committed) { gitFailure = 'git commit failed'; gitError = String(c.err || '').split(NL)[0].slice(0, 160); }
+        }
+    }
+    // Leave nothing behind for the gate's dirty check: the commit holds the only change.
+    git(wt, 'reset', '-q', '--hard');
+    git(wt, 'clean', '-qfd');
+    const why = p.error?.code === 'ETIMEDOUT' ? `script command did not finish within ${limitMin} min`
+        : p.error ? `script command could not start: ${p.error.code || 'spawn error'}`
+        : p.status !== 0 ? `script command exited ${p.status}`
+        : gitFailure ? `${gitFailure}; nothing committed`
+        : committed ? `committed ${files.length} file(s)` : 'script changed no allowed file';
+    console.log(`script mode: ${why}`);
+    return {
+        end: ran ? 'script' : 'script-failed', isError: !ran || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
+        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, ...(gitError ? { gitError } : {}), outputTail: tailOutput(out, 1200), unmetered: true,
+    };
 }
 
 async function runGate(id) {
@@ -409,6 +503,13 @@ async function runGate(id) {
         lintExit = shell(meta.lint, 'lint');
     }
     // Tests and lint can create untracked or modify tracked files; gate the final tree.
+    // A `mode: script` test is the generator itself, so re-running it here rewrites its outputs: what it
+    // leaves outside `allow:` is scratch (reports, logs) and is cleaned first. A change it makes inside
+    // `allow:` still counts as dirty, because that means the script's output is not reproducible.
+    if (String(meta.mode || '').trim() === 'script') {
+        removeStrayUntracked(r.worktree, meta.allow);
+        revertOutOfScope(r.worktree, meta.allow);
+    }
     const dirtyAfterChecks = git(r.worktree, 'status', '--porcelain').out;
     const dirty = Boolean(dirtyBeforeChecks || dirtyAfterChecks);
     const g = gate({

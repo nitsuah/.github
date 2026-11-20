@@ -44,8 +44,10 @@ if (diff.length > 60_000) diff = diff.slice(0, 60_000) + '\n… (diff truncated;
 
 const prompt = [
     readFileSync(join(HERE, 'REVIEW.md'), 'utf8'),
-    `---\n\n## Issue ${slug}#${r.issue}: ${issue.title || ''}\n\n${(issue.body || '').slice(0, 6000)}`,
-    `## The brief the imp was given\n\n${brief.slice(0, 8000)}`,
+    // The brief comes first and is labelled as the scope: the issue body is often an older brief, and the
+    // reviewer used to block PRs for following a corrected brief (vhs#192, 2026-11-19).
+    `---\n\n## The brief the imp was given (this is the scope)\n\n${brief.slice(0, 8000)}`,
+    `## Issue ${slug}#${r.issue}: ${issue.title || ''} (background; the brief above wins where they differ)\n\n${(issue.body || '').slice(0, 6000)}`,
     `## The PR diff (${r.pr})\n\n\`\`\`\n${stat}\n\`\`\`\n\n\`\`\`diff\n${diff}\n\`\`\``,
 ].join('\n\n');
 

@@ -157,7 +157,102 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
         return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
     }
-    return dockerGitProblem(meta);
+    return dockerGitProblem(meta) || briefProblem(brief);
+}
+
+// A concrete file the brief points at: a path with a directory, a bare file name with an extension
+// (`foo.c`, `notes.txt`), or a well-known extensionless file. "e.g." and "i.e." are not files.
+const NAMED_FILE = /[\w.@-]+\/[\w./@-]*\.\w{1,6}\b|(?<![\w.])(?!(?:e\.g|i\.e)\b)[\w-][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,7}\b|\b(?:Dockerfile|Containerfile|Makefile|Procfile|Gemfile|Rakefile|Justfile|Caddyfile|Vagrantfile|LICENSE|CODEOWNERS)\b/;
+
+/**
+ * Structural problems that make a brief unrunnable, whatever the model does.
+ * Half of 2026-11-19's failures were briefs like these (vhs#180 had no
+ * `test:`, ats-fill#176 was a review epic naming no file), and each burned a
+ * model run to learn it. Returns an error string or null.
+ */
+export function briefProblem(brief) {
+    const { meta, body } = parseBrief(String(brief || ''));
+    if (!String(meta.test || '').trim()) {
+        return 'Brief has no `test:` command. Every brief needs one: the gate runs it, and without it the run ends "tests not run".';
+    }
+    if (meta.mode && !['agent', 'script'].includes(String(meta.mode).trim())) {
+        return `Brief \`mode:\` must be \`agent\` (default) or \`script\`, not \`${meta.mode}\`.`;
+    }
+    if (String(meta.mode).trim() === 'script' && !String(meta.allow || '').trim()) {
+        return 'A `mode: script` brief needs an `allow:` list: the runner commits only changed files inside it.';
+    }
+    if (!String(meta.allow || '').trim() && !NAMED_FILE.test(body)) {
+        return 'Brief names no file to change (no `allow:` and no file path in the body). Reviews, audits and epics are not imp work: split out a concrete fix first.';
+    }
+    return null;
+}
+
+/**
+ * A test command that cannot run at all, read from one run on the unchanged
+ * base before any model is spent (vhs#178's `--update-snapshots <spec>` was
+ * rejected by Playwright's argument parser; 2026-11-19). Only signatures that
+ * mean "the command itself is wrong" count: an ordinary failing or missing
+ * test is expected on a bug's base. Launcher errors come first and start a
+ * line, so the phrases are anchored to a line start and read only from the
+ * first lines of output; a failing test that prints one mid-output is not a
+ * broken command. Docker build failures are specific enough to match anywhere.
+ * Returns a short category (never the raw output, which can carry arguments
+ * and is posted on the issue) or null.
+ */
+export const SIGNATURE_HEAD_LINES = 20;
+export function brokenCommandSignature(status, output = '') {
+    if (status === 0) return null;
+    if (status === 127 || status === 126 || status === 125) return exitHint(status);
+    const lines = String(output || '').split(/\r?\n/);
+    const head = lines.slice(0, SIGNATURE_HEAD_LINES).join('\n');
+    const all = lines.join('\n');
+    const patterns = [
+        [head, /^error: option '[^'\n]*' argument '[^'\n]*' is invalid/im, 'the test command passes an invalid option argument'],
+        [head, /^(?:[\w./-]+: )?error: (?:unknown|invalid) option\b/im, 'the test command uses an unknown option'],
+        [head, /^(?:[\w./-]+: )?(?:error: )?unrecognized (?:option|arguments?)\b/im, 'the test command uses an unrecognized option'],
+        [head, /^npm (?:ERR!|error) Missing script:/im, 'the test command names an npm script that does not exist'],
+        [head, /^'[^'\n]+' is not recognized as an internal or external command/im, 'the test command names a program that does not exist'],
+        [head, /^[\w./-]+: (?:line \d+: )?[^\s:]+: command not found$/im, 'the test command names a program that does not exist'],
+        [all, /^(?:#\d+ )?ERROR: failed to solve\b/im, 'the docker build in the test command fails on the unchanged base'],
+        [all, /^(?:ERROR: )?(?:unable to prepare context|failed to read dockerfile)\b/im, 'the docker build context or Dockerfile path is wrong'],
+    ];
+    for (const [text, re, why] of patterns) if (re.test(text)) return why;
+    return null;
+}
+
+/**
+ * Issues a dispatch cycle has picked (its lock's `picks`, `repo#n`) that have
+ * no ledger row started since that cycle began: accepted but not yet run, so
+ * invisible to the daily cap's ledger count. 0 for a legacy or unreadable lock.
+ */
+export function pendingPicks(lockText, rows = []) {
+    let j;
+    try {
+        j = JSON.parse(lockText);
+    } catch {
+        return 0;
+    }
+    const picks = Array.isArray(j?.picks) ? j.picks : [];
+    const since = Date.parse(j?.startedAt || '') || 0;
+    return picks.filter((key) => !rows.some((r) => `${r.repo}#${r.issue}` === key && r.startedAt && Date.parse(r.startedAt) >= since)).length;
+}
+
+/**
+ * Changed paths (tracked edits and untracked files) inside the brief's
+ * `allow:` list, from `git status --porcelain --untracked-files=all`. A
+ * `mode: script` run commits exactly these.
+ */
+export function inScopeChanged(porcelain = '', allow = []) {
+    if (!allow.length) return [];
+    return String(porcelain)
+        .split('\n')
+        .filter((l) => l.length > 3 && !l.startsWith('!! '))
+        .flatMap((l) => {
+            const raw = l.slice(3).trim();
+            return raw.includes(' -> ') ? [raw.split(' -> ')[1]] : [raw];
+        })
+        .map(decodeGitQuotedPath)
+        .filter((p) => p && allow.some((a) => p.startsWith(a)));
 }
 
 /**
@@ -1020,6 +1115,32 @@ export function lockIsStale({ text = '', mtimeMs = 0, now = Date.now(), bootTime
     if (bootTimeMs && Number.isFinite(started) && started < bootTimeMs) return 'before-boot';
     if (now - started >= maxAgeMs) return 'expired';
     return null;
+}
+
+/** Repos a dispatch lock says its cycle is running imps in (`busy`), [] when unknown. */
+export function lockBusyRepos(text = '') {
+    try {
+        const lock = JSON.parse(text);
+        return Array.isArray(lock?.busy) ? lock.busy.map(String) : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Whether a tick that found the main dispatch lock held (and live) may start
+ * a pick-only overflow cycle. Yes once the main cycle has held the lock for
+ * `overflowAfterMs` and no live overflow cycle is running. A slow run used to
+ * block every tick behind it (2026-11-19: 2.5 h of "previous cycle still
+ * running"). `overflow` is the overflow lock's { text, mtimeMs } or null.
+ */
+export function mayOverflow({ mainText = '', mainMtimeMs = 0, overflow = null, now = Date.now(), overflowAfterMs = DEFAULTS.overflowAfterMs, staleCheck = () => null } = {}) {
+    if (!(overflowAfterMs > 0)) return false;
+    let started = mainMtimeMs;
+    try { started = Date.parse(JSON.parse(mainText).startedAt || '') || mainMtimeMs; } catch { /* legacy lock */ }
+    if (!(now - started >= overflowAfterMs)) return false;
+    if (overflow && !staleCheck(overflow)) return false;
+    return true;
 }
 
 // ── waiting for 9router ───────────────────────────────────────────────────
