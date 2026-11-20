@@ -27,6 +27,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
+import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
@@ -314,9 +315,15 @@ async function runGate(id) {
     // Never format over uncommitted imp work: it would be swept into the runner commit.
     const dirtyBefore = git(r.worktree, 'status', '--porcelain').out;
     const formatCmd = meta.format || deriveFormat(meta.lint);
-    if (formatCmd && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
-        console.log(`format: ${formatCmd}`);
-        shell(formatCmd);
+    if (!runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
+        if (formatCmd) {
+            console.log(`format: ${formatCmd}`);
+            shell(formatCmd);
+        }
+        // Missing final newlines fail pre-commit's end-of-file-fixer in CI (motor-pool#205, #213).
+        const touched = git(r.worktree, 'diff', '--name-only', '--diff-filter=AM', `${r.baseSha}..HEAD`).out.split(/\r?\n/).filter(Boolean);
+        const eol = ensureFinalNewlines(r.worktree, touched);
+        if (eol.length) console.log(`added a final newline to ${eol.length} file(s): ${eol.slice(0, 5).join(', ')}`);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
             git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
