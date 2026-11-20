@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
 import { promotionVerdict, groomedComment } from './groom-promote.mjs';
+import { groomEligible, namedPaths, fetchNamedFiles, DRAFT_CHECKLIST } from './groom-select.mjs';
 
 export const DRAFT_MARK = '<!-- imp-brief-draft -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
@@ -124,12 +125,14 @@ The brief MUST be valid front-matter + body:
 - Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
 ${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
-${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, 3000)}`).join('\n\n')}
+${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, f.startsWith('file: ') ? 6000 : 3000)}`).join('\n\n')}
 
 Issue:
 #${issue}: ${title}
 
 ${body || '(no description)'}
+
+${DRAFT_CHECKLIST}
 
 Output ONLY the brief as a fenced markdown block. No explanation.`;
 
@@ -335,7 +338,10 @@ export async function runGroom({
 
             // Skip if already has imp label or is groomed
             if (hasImpLabel(issue.labels)) { results.skipped++; continue; }
-            if (!isPrShaped(issue.labels)) { results.skipped++; continue; }
+            // Owner-filed issues qualify without a bug/enhancement label; untrusted, security,
+            // design and epic issues are skipped before drafting so they cannot burn the cap.
+            const elig = groomEligible(issue, { owner, trustedAuthors: config.groomTrustedAuthors || [] });
+            if (!elig.ok) { results.skipped++; continue; }
 
             const comments = ghJson(['issue', 'view', String(issue.number), '-R', `${owner}/${issue.repo}`, '--json', 'comments']).comments;
             if (alreadyGroomed(comments)) { results.skipped++; continue; }
@@ -345,7 +351,11 @@ export async function runGroom({
 
             // Fetch context and draft
             try {
-                const context = await fetchRepoContext(gh, owner, issue.repo);
+                // The files the issue names, so the brief can state real code facts.
+                const context = {
+                    ...(await fetchRepoContext(gh, owner, issue.repo)),
+                    ...fetchNamedFiles(gh, owner, issue.repo, namedPaths(`${issue.title}\n${issue.body}`)),
+                };
                 const allowGuess = 'src/,lib/,app/,tests/,pkg/'; // generic default
                 if (example === undefined) example = recentBrief(ghJson, owner, issue.repo, { exclude: issue.number });
                 const briefText = await draftBrief({
