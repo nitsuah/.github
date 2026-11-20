@@ -262,6 +262,8 @@ export async function runGroom({
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
     singleRepo = null,
+    poster = null,
+    briefAuthors = ['nitsuah'],
 } = {}) {
     const results = { candidates: 0, drafted: 0, skipped: 0, promoted: [], held: [], errors: [] };
 
@@ -364,6 +366,7 @@ export async function runGroom({
                     issue, briefText, owner, maxLines,
                     trustedAuthors: config.groomTrustedAuthors || [],
                     enabled: config.groomAutoPromote !== false,
+                    poster, briefAuthors,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {

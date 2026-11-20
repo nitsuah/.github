@@ -17,7 +17,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from './defaults.mjs';
-import { BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { BRIEF_MARK, resolveRouter, parseBriefAuthors } from './lib.mjs';
 import { runGroom, loadGroomConfig, groomEnabled } from './groom-lib.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
@@ -80,6 +80,11 @@ for (const name of Object.keys(repos)) {
     } catch { /* ignore */ }
 }
 
+// Who will post the comments, and who the dispatcher accepts briefs from (same parse as dispatch.mjs).
+let poster = null;
+try { poster = gh(['api', 'user', '--jq', '.login']); } catch { /* unknown poster: every draft is held */ }
+const briefAuthors = parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS);
+
 const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.groomDailyIssueCap;
 const quietHours = config.groomQuietHours ?? DEFAULTS.quietHours;
 const maxLines = config.groomMaxLines ?? DEFAULTS.maxLines;
@@ -96,6 +101,8 @@ const results = await runGroom({
     maxLines,
     dryRun: o['dry-run'],
     singleRepo: o.repo,
+    poster,
+    briefAuthors,
 });
 
 if (o.json) console.log(JSON.stringify(results, null, 2));

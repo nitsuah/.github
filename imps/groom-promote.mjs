@@ -55,9 +55,13 @@ export function sensitiveTerm(text) {
  * Decide whether a groomed brief may be promoted to imp:ready.
  * Returns { promote, reasons } where reasons lists every failed check (empty when promoted).
  */
-export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true } = {}) {
+export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'] } = {}) {
     const reasons = [];
     if (!enabled) reasons.push('auto-promote is off (config groomAutoPromote: false)');
+    // The dispatcher only reads briefs posted by IMPS_BRIEF_AUTHORS; a brief from any other
+    // login would leave imp:ready on an issue with no brief it accepts.
+    const dispatcherTrusts = new Set(briefAuthors.map((a) => String(a).trim().toLowerCase()));
+    if (!poster || !dispatcherTrusts.has(String(poster).toLowerCase())) reasons.push(`posting login ${poster || '(unknown)'} is not in the dispatcher's IMPS_BRIEF_AUTHORS`);
 
     const trusted = new Set([owner, ...trustedAuthors].map((a) => String(a || '').trim().toLowerCase()).filter(Boolean));
     const author = String(issue.author || '').toLowerCase();

@@ -12,7 +12,7 @@ const brief = (over = {}) => {
     return `---\n${front}\n---\n## Issue nitsuah/vhs#42\n\n## The fix\nIn src/stats/chips.js, round the count.\n\n## Done when\nThe chip shows 3, not 2.999.\n`;
 };
 const issue = (over = {}) => ({ repo: 'vhs', number: 42, title: 'Stats chip shows 2.999', body: 'The count chip rounds wrong.', labels: ['bug'], author: 'nitsuah', ...over });
-const verdict = (over = {}, text = brief()) => promotionVerdict({ issue: issue(over), briefText: text, owner: 'nitsuah', maxLines: 180 });
+const verdict = (over = {}, text = brief()) => promotionVerdict({ issue: issue(over), briefText: text, owner: 'nitsuah', maxLines: 180, poster: 'nitsuah' });
 
 test('unsafeCommand accepts the canonical sandboxed shapes', () => {
     assert.equal(unsafeCommand(NODE, 'vhs'), null);
@@ -68,7 +68,7 @@ test('promotionVerdict holds untrusted authors, security issues and security bri
     assert.match(verdict({ body: 'Verify the session cookie first.' }).reasons.join(), /session|cookie/);
     assert.match(verdict({}, brief({ allow: 'src/auth/, CHANGELOG.md' })).reasons.join(), /brief mentions "auth/);
     assert.match(verdict({ title: 'Fix authorization checks' }).reasons.join(), /issue mentions "authorization/);
-    const trusted = promotionVerdict({ issue: issue({ author: 'helper-bot' }), briefText: brief(), owner: 'nitsuah', trustedAuthors: ['helper-bot'] });
+    const trusted = promotionVerdict({ issue: issue({ author: 'helper-bot' }), briefText: brief(), owner: 'nitsuah', trustedAuthors: ['helper-bot'], poster: 'nitsuah' });
     assert.equal(trusted.promote, true);
 });
 
@@ -83,7 +83,10 @@ test('promotionVerdict holds unsafe commands, brieflint problems, size, mismatch
     assert.equal(verdict({}, brief({ depends: 'none' })).promote, true);
     const nested = brief().replace('## Done when', '```js\nx()\n```\n## Done when');
     assert.match(verdict({}, nested).reasons.join(), /brieflint: nested/);
-    assert.equal(promotionVerdict({ issue: issue(), briefText: brief(), owner: 'nitsuah', enabled: false }).promote, false);
+    assert.equal(promotionVerdict({ issue: issue(), briefText: brief(), owner: 'nitsuah', enabled: false, poster: 'nitsuah' }).promote, false);
+    assert.match(promotionVerdict({ issue: issue(), briefText: brief(), owner: 'nitsuah', poster: 'other-login' }).reasons.join(), /posting login other-login is not in the dispatcher/);
+    assert.match(promotionVerdict({ issue: issue(), briefText: brief(), owner: 'nitsuah' }).reasons.join(), /posting login \(unknown\)/);
+    assert.equal(promotionVerdict({ issue: issue(), briefText: brief(), owner: 'nitsuah', poster: 'Helper', briefAuthors: ['nitsuah', 'helper'] }).promote, true);
 });
 
 test('groomedComment: a promoted brief round-trips through briefFromComments; a held one is not a brief', () => {
