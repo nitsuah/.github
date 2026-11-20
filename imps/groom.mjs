@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // groomer: draft-first triage for untriaged issues. Finds open issues without imp:*
-// labels, screens for PR-shaped work, drafts briefs via 9router, lints them,
-// and posts as draft comments with `imp:needs-brief` for human promotion.
+// labels, screens for PR-shaped work, drafts briefs via 9router and lints them.
+// A brief that passes every check in groom-promote.mjs (trusted author, sandboxed
+// Docker commands, brieflint, no security terms) is posted as a real brief with
+// `imp:ready`; anything else is posted as a held draft with `imp:needs-brief`.
 //
 //   node groom.mjs [--dry-run] [--owner nitsuah] [--json]
 //
@@ -15,7 +17,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from './defaults.mjs';
-import { BRIEF_MARK, resolveRouter } from './lib.mjs';
+import { BRIEF_MARK, resolveRouter, parseBriefAuthors } from './lib.mjs';
 import { runGroom, loadGroomConfig, groomEnabled } from './groom-lib.mjs';
 
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
@@ -26,6 +28,7 @@ const { values: o } = parseArgs({
         'dry-run': { type: 'boolean', default: false },
         owner: { type: 'string', default: DEFAULTS.owner },
         json: { type: 'boolean', default: false },
+        repo: { type: 'string' },
     },
 });
 
@@ -77,7 +80,12 @@ for (const name of Object.keys(repos)) {
     } catch { /* ignore */ }
 }
 
-const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap;
+// Who will post the comments, and who the dispatcher accepts briefs from (same parse as dispatch.mjs).
+let poster = null;
+try { poster = gh(['api', 'user', '--jq', '.login']); } catch { /* unknown poster: every draft is held */ }
+const briefAuthors = parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS);
+
+const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.groomDailyIssueCap;
 const quietHours = config.groomQuietHours ?? DEFAULTS.quietHours;
 const maxLines = config.groomMaxLines ?? DEFAULTS.maxLines;
 
@@ -92,11 +100,16 @@ const results = await runGroom({
     quietHours,
     maxLines,
     dryRun: o['dry-run'],
+    singleRepo: o.repo,
+    poster,
+    briefAuthors,
 });
 
 if (o.json) console.log(JSON.stringify(results, null, 2));
 else {
-    console.log(`groom: ${results.drafted} drafted, ${results.skipped} skipped, ${results.candidates} candidates`);
+    console.log(`groom ${new Date().toISOString()}: ${results.drafted} drafted (${results.promoted.length} promoted to imp:ready, ${results.held.length} held), ${results.skipped} skipped, ${results.candidates} candidates`);
+    for (const p of results.promoted) console.log(`  + ${p}`);
+    for (const h of results.held) console.log(`  ~ ${h.issue}: ${h.reasons.join('; ')}`);
     if (results.errors.length) {
         console.log('errors:');
         for (const e of results.errors) console.log(`  - ${e}`);

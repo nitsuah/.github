@@ -57,6 +57,8 @@ export const DEFAULTS = {
 
     // RSI self-improvement: max new imp:ready issues filed per day
     rsiDailyIssueCap: 3,
+    // Groomer: max issues drafted per day across its 3-hourly runs (held drafts count too)
+    groomDailyIssueCap: 10,
     // Recurring gate-failure signature must appear at least this often
     rsiMinRecurrence: 3,
 

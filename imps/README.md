@@ -23,7 +23,7 @@ That:
 5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07, plus 2 min after logon) and `imps-label-watch` (every 5 min).
 
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
-The draft-first **groomer** is opt-in: setup registers `imps-groom` only with `-WithGroomer` (see [Groomer (opt-in)](#groomer-opt-in)).
+The **groomer** is opt-in: setup registers `imps-groom` only with `-WithGroomer`. It drafts briefs every 3 hours and promotes only the ones that pass its safety checks (see [Groomer (opt-in)](#groomer-opt-in)).
 
 ```powershell
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check (incl. topology)
@@ -141,15 +141,21 @@ node imps/rsi.mjs --dry-run
 
 ## Groomer (opt-in)
 
-`groom.mjs` drafts briefs for untriaged issues and posts them as public `imp-brief-draft` comments with `imp:needs-brief` for human promotion; it never adds `imp:ready`. Because it writes to GitHub, it is **off by default**:
+`groom.mjs` drafts briefs for untriaged `bug`/`enhancement` issues (no `imp:*` label yet) every 3 hours, up to `groomDailyIssueCap` (10) a day. It copies the test command and style of the repo's newest trusted brief. Each draft then goes through `groom-promote.mjs`, which is fail-closed:
+
+- **Promoted** (posted as a real `<!-- imp-brief -->` with `imp:ready`, so the next dispatch cycle runs it) only when all of these hold: the issue author is the owner or in `groomTrustedAuthors`; no security label and no security term (auth, token, secret, webhook, payment, crypto, session, permission, injection and similar) in the issue or the brief; brieflint finds no problem; `repo:`/`issue:` match; `maxLines` is within the cap; no `depends:`; and every `test:`/`lint:`/`format:` is the sandboxed Docker shape (worktree at `/app`, the repo's own `imp-nm-<repo>` volume, an allowlisted `node`/`python`/`golang`/`rust` image, no other flags or mounts, no `$`, backticks, `%`, `!` or backslashes).
+- **Held** otherwise: posted as an `imp-brief-draft` comment listing every failed check, with `imp:needs-brief`. Copy it as an `<!-- imp-brief -->` and add `imp:ready` to run it.
+
+Because it writes to GitHub, the task is **off by default**:
 
 ```powershell
-pwsh -File imps/setup.ps1 -WithGroomer   # registers the daily imps-groom task (06:07)
-$env:IMPS_GROOM = '1'; node imps/groom.mjs --dry-run   # one-off manual run
+pwsh -File imps/setup.ps1 -WithGroomer   # registers imps-groom (every 3 h from 06:07)
+$env:IMPS_GROOM = '1'; node imps/groom.mjs --dry-run   # one-off manual run: prints what it would promote or hold
 ```
 
 - `groomEnabled()` is true only when `IMPS_GROOM=1`. The scheduled `groom.cmd` sets it itself, so the task is the opt-in.
 - Without `-WithGroomer`, `setup.ps1` does not register the task (and removes a previously registered one).
+- Config (`~/.imps/config.json`): `"groomAutoPromote": false` holds every draft; `"groomTrustedAuthors": [...]` adds issue authors; `"groomRequireQuiet": true` grooms only repos with no open PRs and no commits for `quietHours`; `"groomDailyIssueCap"` overrides the cap.
 - Kill switches: `IMPS_GROOM=0` / `false` (checked first in the wrapper), `-SkipGroomer` (deprecated; off is the default), or `~/.imps/config.json` `"groom": false`, which wins even when `IMPS_GROOM=1`.
 - `warlock.mjs` reports the task as informational and does not fail when it is absent.
 
