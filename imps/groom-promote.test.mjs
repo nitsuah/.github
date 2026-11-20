@@ -18,6 +18,8 @@ test('unsafeCommand accepts the canonical sandboxed shapes', () => {
     assert.equal(unsafeCommand(NODE, 'vhs'), null);
     assert.equal(unsafeCommand('docker run --rm -v {wt}://app -v imp-nm-vhs://app/node_modules -w //app node:22 npx vitest run tests/a.test.js', 'vhs'), null);
     assert.equal(unsafeCommand('docker run --rm -v {wt}:/app -w /app python:3.12-slim sh -c "pip install -q -e . && pytest tests/test_x.py"', 'vhs'), null);
+    assert.equal(unsafeCommand(NODE.replace('-v {wt}:/app', '-v "{wt}:/app"'), 'vhs'), null);
+    assert.ok(unsafeCommand(NODE.replace('-v {wt}:/app', '-v "{wt}:/app'), 'vhs'), 'unbalanced quote');
     assert.equal(unsafeCommand('docker run --rm -v {wt}:/app -v imp-nm-.github:/app/node_modules -w /app node:22 node --test imps/x.test.mjs', '.github'), null);
 });
 
@@ -48,6 +50,8 @@ test('sensitiveTerm catches security words and spares "author"', () => {
     assert.equal(sensitiveTerm('rotate the API key'), 'API key');
     assert.equal(sensitiveTerm('OAuth login flow'), 'OAuth');
     assert.equal(sensitiveTerm('show the commit author in the list'), null);
+    assert.equal(sensitiveTerm('list issues authored by me, sorted by authors'), null);
+    for (const w of ['Fix authorization checks', 'authorize the relay', 'only authorized users', 'authentication flow']) assert.ok(sensitiveTerm(w), w);
     assert.equal(sensitiveTerm('round the stats chip'), null);
 });
 
@@ -63,6 +67,7 @@ test('promotionVerdict holds untrusted authors, security issues and security bri
     assert.match(verdict({ labels: ['enhancement', 'security'] }).reasons.join(), /label security/);
     assert.match(verdict({ body: 'Verify the session cookie first.' }).reasons.join(), /session|cookie/);
     assert.match(verdict({}, brief({ allow: 'src/auth/, CHANGELOG.md' })).reasons.join(), /brief mentions "auth/);
+    assert.match(verdict({ title: 'Fix authorization checks' }).reasons.join(), /issue mentions "authorization/);
     const trusted = promotionVerdict({ issue: issue({ author: 'helper-bot' }), briefText: brief(), owner: 'nitsuah', trustedAuthors: ['helper-bot'] });
     assert.equal(trusted.promote, true);
 });

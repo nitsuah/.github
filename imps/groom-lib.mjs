@@ -114,7 +114,7 @@ The brief MUST be valid front-matter + body:
 - repo: ${repo}
 - issue: ${issue}
 - test: one Docker command, exactly this shape (the gate runs it literally on the host):
-  docker run --rm -v {wt}:/app -v imp-nm-${repo}:/app/node_modules -w /app node:22 sh -c "npm ci --no-audit --no-fund && <focused test command>"
+  docker run --rm -v "{wt}:/app" -v imp-nm-${repo}:/app/node_modules -w /app node:22 sh -c "npm ci --no-audit --no-fund && <focused test command>"
   Use python:3.12-slim, golang:1.23 or rust:1 instead of node:22 when the repo is not Node (then drop the node_modules volume).
   Never use $, backticks, %, ! or backslashes inside the quotes. Add "npx tsc --noEmit &&" before the tests for TypeScript repos.
 - maxLines: at most ${maxLines}
@@ -205,6 +205,48 @@ export function alreadyGroomed(comments = []) {
     const hasDraft = comments.some((c) => (c.body || '').includes(DRAFT_MARK));
     const hasBrief = !!briefFromComments(comments);
     return hasDraft || hasBrief;
+}
+
+/**
+ * Post a groomed comment and add the label atomically.
+ * If label fails after comment succeeds, deletes the comment so the issue can be regroomed.
+ * Returns { ok: true } on success, { ok: false, error } on failure.
+ */
+export async function postGroomed({ gh, owner, repo, number, commentBody, label }) {
+    // Post comment and capture URL to extract comment ID
+    let commentId;
+    try {
+        const commentOut = gh(['issue', 'comment', String(number), '-R', `${owner}/${repo}`, '--body', commentBody]);
+        // gh prints URL like: https://github.com/owner/repo/issues/123#issuecomment-123456789
+        const m = String(commentOut).match(/#issuecomment-(\d+)$/);
+        if (m) commentId = m[1];
+    } catch (e) {
+        return { ok: false, error: `comment failed: ${e.message}` };
+    }
+
+    // Try to add label up to 2 times
+    let labelErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            gh(['issue', 'edit', String(number), '-R', `${owner}/${repo}`, '--add-label', label]);
+            return { ok: true };
+        } catch (e) {
+            labelErr = e;
+            if (attempt === 0) await new Promise(r => setTimeout(r, 500));
+        }
+    }
+
+    // Both label attempts failed - delete the comment
+    if (commentId) {
+        try {
+            gh(['api', '-X', 'DELETE', `repos/${owner}/${repo}/issues/comments/${commentId}`]);
+            return { ok: false, error: `label failed for ${owner}/${repo}#${number}; comment removed so the next run regrooms it` };
+        } catch (e) {
+            return { ok: false, error: `label failed for ${owner}/${repo}#${number}; comment removal failed too` };
+        }
+    }
+
+    return { ok: false, error: `label failed for ${owner}/${repo}#${number}; could not parse comment ID for cleanup` };
 }
 
 /** Main groomer logic: find candidate issues, draft briefs, post as drafts. */
@@ -324,23 +366,27 @@ export async function runGroom({
                     enabled: config.groomAutoPromote !== false,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
-                (verdict.promote ? results.promoted : results.held).push(
-                    verdict.promote ? `${issue.repo}#${issue.number}` : { issue: `${issue.repo}#${issue.number}`, reasons: verdict.reasons },
-                );
-
                 if (!dryRun) {
                     if (!verdict.promote) {
                         gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
                     }
                     const commentBody = groomedComment({ briefText, verdict, draftMark: DRAFT_MARK });
-                    gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
-                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', label]);
+                    const pg = await postGroomed({ gh, owner, repo: issue.repo, number: issue.number, commentBody, label });
+                    if (!pg.ok) {
+                        results.errors.push(pg.error);
+                        results.skipped++;
+                        continue;
+                    }
 
                     // Track
                     filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
                     filedState.count++;
                 }
 
+                // Counted only once posted: a failed label rolls the post back.
+                (verdict.promote ? results.promoted : results.held).push(
+                    verdict.promote ? `${issue.repo}#${issue.number}` : { issue: `${issue.repo}#${issue.number}`, reasons: verdict.reasons },
+                );
                 results.drafted++;
             } catch (e) {
                 results.errors.push(`draft failed for ${issue.repo}#${issue.number}: ${e.message}`);

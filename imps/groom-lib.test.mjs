@@ -14,6 +14,7 @@ import {
     DRAFT_MARK,
     NEEDS_BRIEF_LABEL,
     runGroom,
+    postGroomed,
 } from './groom-lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { mkdtempSync } from 'node:fs';
@@ -148,4 +149,84 @@ test('runGroom attempts each issue once even when search leaks other repos', asy
     const tried = results.errors.filter((e) => e.startsWith('draft failed for')).map((e) => e.split(' ')[3].replace(/:$/, ''));
     assert.deepEqual(tried.sort(), ['repo-a#1', 'repo-b#2']);
     assert.equal(results.candidates, 2);
+});
+
+test('postGroomed: comment ok, label ok -> ok true, no DELETE', async () => {
+    const calls = [];
+    const gh = (args) => {
+        calls.push(args);
+        if (args[0] === 'issue' && args[1] === 'comment') return 'https://github.com/owner/repo/issues/1#issuecomment-123456789';
+        return '';
+    };
+    const res = await postGroomed({ gh, owner: 'owner', repo: 'repo', number: 1, commentBody: 'body', label: 'imp:ready' });
+    assert.equal(res.ok, true);
+    assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'comment').length, 1);
+    assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'edit').length, 1);
+    assert.deepEqual(calls.filter(c => c[0] === 'api' && c[1] === '-X' && c[2] === 'DELETE').length, 0);
+});
+
+test('postGroomed: comment ok, label fails once then succeeds -> ok true, label tried twice, no DELETE', async () => {
+    const calls = [];
+    let labelAttempt = 0;
+    const gh = (args) => {
+        calls.push(args);
+        if (args[0] === 'issue' && args[1] === 'comment') return 'https://github.com/owner/repo/issues/1#issuecomment-123456789';
+        if (args[0] === 'issue' && args[1] === 'edit') {
+            labelAttempt++;
+            if (labelAttempt === 1) throw new Error('rate limited');
+            return '';
+        }
+        return '';
+    };
+    const res = await postGroomed({ gh, owner: 'owner', repo: 'repo', number: 1, commentBody: 'body', label: 'imp:ready' });
+    assert.equal(res.ok, true);
+    assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'edit').length, 2);
+    assert.deepEqual(calls.filter(c => c[0] === 'api' && c[1] === '-X' && c[2] === 'DELETE').length, 0);
+});
+
+test('postGroomed: comment ok, label fails twice -> ok false, DELETE called with parsed comment id', async () => {
+    const calls = [];
+    let labelAttempt = 0;
+    const gh = (args) => {
+        calls.push(args);
+        if (args[0] === 'issue' && args[1] === 'comment') return 'https://github.com/owner/repo/issues/1#issuecomment-123456789';
+        if (args[0] === 'issue' && args[1] === 'edit') {
+            labelAttempt++;
+            throw new Error('rate limited');
+        }
+        if (args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE') {
+            assert.match(args[3], /repos\/owner\/repo\/issues\/comments\/123456789$/);
+            return '';
+        }
+        return '';
+    };
+    const res = await postGroomed({ gh, owner: 'owner', repo: 'repo', number: 1, commentBody: 'body', label: 'imp:ready' });
+    assert.equal(res.ok, false);
+    assert.match(res.error, /comment removed so the next run regrooms it/);
+    assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'edit').length, 2);
+    assert.deepEqual(calls.filter(c => c[0] === 'api' && c[1] === '-X' && c[2] === 'DELETE').length, 1);
+});
+
+test('postGroomed: comment ok, label fails twice, DELETE throws -> ok false, error mentions removal failed', async () => {
+    const calls = [];
+    let labelAttempt = 0;
+    let deleteAttempt = 0;
+    const gh = (args) => {
+        calls.push(args);
+        if (args[0] === 'issue' && args[1] === 'comment') return 'https://github.com/owner/repo/issues/1#issuecomment-123456789';
+        if (args[0] === 'issue' && args[1] === 'edit') {
+            labelAttempt++;
+            throw new Error('rate limited');
+        }
+        if (args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE') {
+            deleteAttempt++;
+            throw new Error('not found');
+        }
+        return '';
+    };
+    const res = await postGroomed({ gh, owner: 'owner', repo: 'repo', number: 1, commentBody: 'body', label: 'imp:ready' });
+    assert.equal(res.ok, false);
+    assert.match(res.error, /comment removal failed too/);
+    assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'edit').length, 2);
+    assert.deepEqual(calls.filter(c => c[0] === 'api' && c[1] === '-X' && c[2] === 'DELETE').length, 1);
 });

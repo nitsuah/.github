@@ -13,7 +13,7 @@ export const PROMOTE_INTRO = 'Groomed brief, auto-promoted to `imp:ready` (trust
 
 // Words that mean a person should read the brief before an imp runs it.
 // Matched on the issue title, body and labels, and on the brief itself.
-export const SENSITIVE = /\b(?:security|vuln\w*|cve|auth(?!or)\w*|oauth|login|logout|passw\w*|secret\w*|tokens?|credential\w*|api[ _-]?keys?|webhooks?|signatures?|signing|stripe|payments?|billing|checkout|crypt\w*|encrypt\w*|decrypt\w*|sessions?|cookies?|csrf|cors|permissions?|rbac|acl|sandbox\w*|injection|sql|xss|ssrf|deserializ\w*|privacy|pii|gdpr)\b/i;
+export const SENSITIVE = /\b(?:security|vuln\w*|cve|auth(?!or(?:s|ed|ing|ship)?\b)\w*|oauth|login|logout|passw\w*|secret\w*|tokens?|credential\w*|api[ _-]?keys?|webhooks?|signatures?|signing|stripe|payments?|billing|checkout|crypt\w*|encrypt\w*|decrypt\w*|sessions?|cookies?|csrf|cors|permissions?|rbac|acl|sandbox\w*|injection|sql|xss|ssrf|deserializ\w*|privacy|pii|gdpr)\b/i;
 
 const SENSITIVE_LABELS = new Set(['security', 'audit', 'investigate', 'needs-human', 'imp:needs-human']);
 
@@ -28,7 +28,8 @@ const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Null when `cmd` is a sandboxed Docker command the groomer may promote, else why not.
- * Only this exact shape passes: the worktree at /app, optionally the repo's own
+ * Only this exact shape passes: the worktree at /app (the mount may be double-quoted so a
+ * worktree path with spaces stays one argument; the runner substitutes {wt} unquoted), optionally the repo's own
  * node_modules volume, an allowlisted image, then either `sh -c "<no expansions>"`
  * or plain argument tokens. No other mounts, flags, env, network or host commands.
  */
@@ -37,7 +38,7 @@ export function unsafeCommand(cmd, repo) {
     if (!c) return 'empty command';
     const vol = `imp-nm-${escapeRe(repo)}`;
     const re = new RegExp(
-        String.raw`^docker run --rm -v \{wt\}:/{1,2}app(?: -v ${vol}:/{1,2}app/node_modules)? -w /{1,2}app ${IMAGE} (?:sh -c "${INNER}"|${TOKENS})$`,
+        String.raw`^docker run --rm -v (?:\{wt\}:/{1,2}app|"\{wt\}:/{1,2}app")(?: -v ${vol}:/{1,2}app/node_modules)? -w /{1,2}app ${IMAGE} (?:sh -c "${INNER}"|${TOKENS})$`,
     );
     if (!re.test(c)) return 'not the sandboxed docker shape (worktree at /app, repo node_modules volume, allowlisted image, no host expansions)';
     if (/\bdocker\b/.test(c.slice('docker run'.length))) return 'nested docker call';
