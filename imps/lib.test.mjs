@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, impTouchedPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -1982,4 +1982,19 @@ test('agentNotes prefers the full result event, then streamed assistant text, ke
     writeFileSync(noResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding one' }] } }), JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding two' }] } })].join(nl));
     assert.equal(agentNotes(noResult), 'finding one' + nl + 'finding two');
     assert.equal(agentNotes(join(dir, 'missing.jsonl'), 'fallback'), 'fallback');
+});
+
+test('gate exempts human-only paths from scope but not from deny (fire#527)', () => {
+    const log = '\0nitsuah\n\ndocs/CHANGELOG.md\n\0nitsuah\n\napp/lib/css/layout.css\n\0' + '9router imp\n\napp/lib/tables/dashboard.js\napp/index.html\n';
+    const impPaths = impTouchedPaths(log);
+    assert.deepEqual(impPaths.sort(), ['app/index.html', 'app/lib/tables/dashboard.js']);
+    const numstat = '1\t0\tapp/index.html\n3\t91\tapp/lib/tables/dashboard.js\n5\t6\tapp/lib/css/layout.css\n2\t0\tdocs/CHANGELOG.md';
+    const base = { numstat, commits: [ok], testExit: 0, allow: ['app/lib/tables/', 'app/index.html'] };
+    // Without impPaths (first run) every path is scoped, as before.
+    assert.ok(gate(base).reasons.includes('outside scope docs/CHANGELOG.md'));
+    assert.equal(gate({ ...base, impPaths }).pass, true);
+    // An imp-touched path outside allow still fails.
+    assert.ok(gate({ ...base, impPaths: [...impPaths, 'docs/CHANGELOG.md'] }).reasons.includes('outside scope docs/CHANGELOG.md'));
+    // A human commit to a denied path still fails the gate.
+    assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', impPaths }).reasons.includes('denied path package-lock.json'));
 });

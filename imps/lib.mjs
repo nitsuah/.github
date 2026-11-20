@@ -423,7 +423,26 @@ export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
     return 2 * effectiveMaxLines(metaMax) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false }) {
+/**
+ * Paths touched by the imp's own commits, from
+ * `git log --no-renames --name-only --format=%x00%an <base>..HEAD`.
+ * The runner's style commit is authored by the imp too, so it counts.
+ */
+export function impTouchedPaths(log, impAuthor = '9router imp') {
+    const paths = new Set();
+    for (const chunk of String(log || '').split('\0')) {
+        const [author, ...files] = chunk.split('\n');
+        if (author.trim() !== impAuthor) continue;
+        for (const f of files) if (f.trim()) paths.add(f.trim());
+    }
+    return [...paths];
+}
+
+// impPaths (optional): paths the imp's own commits touched. A path changed only
+// by a human/hypervisor commit pushed to the PR branch between fix rounds (a
+// CHANGELOG line added for merge, fire#527) is not the imp leaving its scope, so
+// the scope check skips it. Deny paths still apply to the whole diff.
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, impPaths = null }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -443,7 +462,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     else if (!commits.length) reasons.push('no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
-        if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
+        const byImp = !impPaths || impPaths.includes(f.path);
+        if (allow.length && byImp && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
