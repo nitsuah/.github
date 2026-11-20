@@ -424,30 +424,31 @@ export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
 }
 
 /**
- * Paths touched by the imp's own commits, from
- * `git log --no-renames --name-only --format=%x00%an <base>..HEAD`.
- * The runner's style commit is authored by the imp too, so it counts.
+ * Paths a human or the hypervisor changed on the PR branch and the imp never did,
+ * which the scope check may skip (fire#527: a CHANGELOG line pushed for merge
+ * failed the next fix round as "outside scope").
+ *
+ * `pushedLog` is `git log --no-renames --name-only --format=%x00%an <base>..origin/<branch>`:
+ * only commits already on the pushed branch can be a human's. `localPaths` is
+ * every path changed since that pushed head in this run, and it always counts as
+ * the imp's whatever the commit author says, so `git commit --author` cannot
+ * dodge scope. Fails closed: a name that does not match numstat exactly is
+ * simply not exempt.
  */
-export function impTouchedPaths(log, impAuthor = '9router imp') {
-    const paths = new Set();
-    for (const chunk of String(log || '').split('\0')) {
+export function humanOnlyPaths(pushedLog, localPaths = [], impAuthor = '9router imp') {
+    const human = new Set();
+    const imp = new Set(localPaths);
+    for (const chunk of String(pushedLog || '').split('\0')) {
         const [author, ...files] = chunk.split('\n');
-        if (author.trim() !== impAuthor) continue;
-        // Keep names exactly as git prints them (numstat does not trim either):
-        // trimming " stray.js" would make an imp-authored path dodge the scope check.
-        for (const f of files) {
-            const name = f.endsWith('\r') ? f.slice(0, -1) : f;
-            if (name) paths.add(name);
-        }
+        const into = author.trim() === impAuthor ? imp : human;
+        for (const f of files) if (f) into.add(f);
     }
-    return [...paths];
+    return [...human].filter((p) => !imp.has(p));
 }
 
-// impPaths (optional): paths the imp's own commits touched. A path changed only
-// by a human/hypervisor commit pushed to the PR branch between fix rounds (a
-// CHANGELOG line added for merge, fire#527) is not the imp leaving its scope, so
-// the scope check skips it. Deny paths still apply to the whole diff.
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, impPaths = null }) {
+// humanOnlyPaths (optional, see above) are skipped by the scope check only.
+// Deny paths still apply to the whole diff.
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, humanOnlyPaths: humanOnly = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -467,8 +468,7 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     else if (!commits.length) reasons.push('no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
-        const byImp = !impPaths || impPaths.includes(f.path);
-        if (allow.length && byImp && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
+        if (allow.length && !humanOnly.includes(f.path) &&!allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.

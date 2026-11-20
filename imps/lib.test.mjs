@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, impTouchedPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -1985,20 +1985,24 @@ test('agentNotes prefers the full result event, then streamed assistant text, ke
 });
 
 test('gate exempts human-only paths from scope but not from deny (fire#527)', () => {
-    const log = '\0nitsuah\n\ndocs/CHANGELOG.md\n\0nitsuah\n\napp/lib/css/layout.css\n\0' + '9router imp\n\napp/lib/tables/dashboard.js\napp/index.html\n';
-    const impPaths = impTouchedPaths(log);
-    assert.deepEqual(impPaths.sort(), ['app/index.html', 'app/lib/tables/dashboard.js']);
+    // Pushed branch: the imp's first commit, then two maintainer commits.
+    const pushedLog = '\0' + '9router imp\n\napp/lib/tables/dashboard.js\napp/index.html\n\0nitsuah\n\napp/lib/css/layout.css\n\0nitsuah\n\ndocs/CHANGELOG.md\n';
+    const humanOnly = humanOnlyPaths(pushedLog, ['app/lib/tables/dashboard.js']);
+    assert.deepEqual(humanOnly.sort(), ['app/lib/css/layout.css', 'docs/CHANGELOG.md']);
     const numstat = '1\t0\tapp/index.html\n3\t91\tapp/lib/tables/dashboard.js\n5\t6\tapp/lib/css/layout.css\n2\t0\tdocs/CHANGELOG.md';
     const base = { numstat, commits: [ok], testExit: 0, allow: ['app/lib/tables/', 'app/index.html'] };
-    // Without impPaths (first run) every path is scoped, as before.
+    // Nothing exempt (first run, before any push): every path is scoped, as before.
     assert.ok(gate(base).reasons.includes('outside scope docs/CHANGELOG.md'));
-    assert.equal(gate({ ...base, impPaths }).pass, true);
-    // An imp-touched path outside allow still fails.
-    assert.ok(gate({ ...base, impPaths: [...impPaths, 'docs/CHANGELOG.md'] }).reasons.includes('outside scope docs/CHANGELOG.md'));
-    // Whitespace in an imp-authored name is kept, so it still fails scope.
-    const spaced = impTouchedPaths('\0' + '9router imp\n\n stray.js\n');
-    assert.deepEqual(spaced, [' stray.js']);
-    assert.ok(gate({ ...base, numstat: '1\t0\t stray.js', impPaths: spaced }).reasons.includes('outside scope  stray.js'));
+    assert.equal(gate({ ...base, humanOnlyPaths: humanOnly }).pass, true);
+    // A path the imp changed locally this round counts as the imp's, whoever the
+    // commit claims as author: `git commit --author` cannot dodge scope.
+    const touched = humanOnlyPaths(pushedLog, ['docs/CHANGELOG.md']);
+    assert.deepEqual(touched, ['app/lib/css/layout.css']);
+    assert.ok(gate({ ...base, humanOnlyPaths: touched }).reasons.includes('outside scope docs/CHANGELOG.md'));
+    // A path the imp also touched on the pushed branch is never exempt.
+    assert.deepEqual(humanOnlyPaths(pushedLog + '\0' + '9router imp\n\ndocs/CHANGELOG.md\n'), ['app/lib/css/layout.css']);
+    // Fails closed: a name that does not match numstat exactly is not exempt.
+    assert.ok(gate({ ...base, numstat: '1\t0\t stray.js', humanOnlyPaths: ['stray.js'] }).reasons.includes('outside scope  stray.js'));
     // A human commit to a denied path still fails the gate.
-    assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', impPaths }).reasons.includes('denied path package-lock.json'));
+    assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', humanOnlyPaths: [...humanOnly, 'package-lock.json'] }).reasons.includes('denied path package-lock.json'));
 });
