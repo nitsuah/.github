@@ -51,6 +51,7 @@ test('namedPaths: repo paths in order, no URLs, no .github or .env, capped', () 
     assert.deepEqual(namedPaths(text), ['app/lib/tables/dashboard.js', 'app/lib/css/layout.css', 'tests/e2e-ui/a.spec.js', 'docs/x.md']);
     assert.deepEqual(namedPaths('dashboard.js only, no dir'), []);
     assert.deepEqual(namedPaths('a/b.js a/b.js'), ['a/b.js']);
+    assert.deepEqual(namedPaths('config/secrets.json certs/server.pem keys/id_rsa.pub app/token-store.js data/credentials.yml src/ok.js'), ['src/ok.js']);
 });
 
 test('fetchNamedFiles: decodes, truncates and skips missing files', () => {

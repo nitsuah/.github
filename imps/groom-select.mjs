@@ -53,6 +53,9 @@ export function groomEligible(issue = {}, { owner = '', trustedAuthors = [] } = 
     return { ok: true, reason: '' };
 }
 
+// Never sent to the drafting model, whoever names them.
+const SECRET_PATH = /(^|\/)(secrets?|credentials?|private)(\/|[._-])|\.(pem|key|p12|pfx|crt|cer|keystore|jks|asc|gpg)$|(^|\/)id_(rsa|ed25519|ecdsa)|token|passw/i;
+
 // Repo-relative paths named in issue text: `dir/file.ext` (not URLs).
 const PATH_RE = /(?<![\w./:@-])(?:[\w@.-]+\/)+[\w.@-]+\.[A-Za-z][A-Za-z0-9]{0,7}\b/g;
 
@@ -63,7 +66,7 @@ export function namedPaths(text = '', max = 4) {
         const p = m[0].replace(/^\.\//, '');
         const before = String(text).slice(Math.max(0, m.index - 8), m.index);
         if (/https?:\/\/\S*$/.test(before) || /^(www\.|[\w-]+\.(com|org|io|dev|app)\/)/i.test(p)) continue;
-        if (p.startsWith('.github/') || /(^|\/)\.env/.test(p)) continue;
+        if (p.startsWith('.github/') || /(^|\/)\.env/.test(p) || SECRET_PATH.test(p)) continue;
         if (!out.includes(p)) out.push(p);
         if (out.length >= max) break;
     }
