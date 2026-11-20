@@ -1656,6 +1656,49 @@ test('extractFailureDiagnostic strips ANSI and does not guess assertion causes',
     assert.equal(formatFailureDiagnostic(unknown), 'diagnostic summary unavailable');
 });
 
+test('extractFailureDiagnostic reads indented Vitest FAIL lines and Playwright failures', () => {
+    // motor-pool#150 (imp_2611200844_150): Vitest indents FAIL with one space.
+    const vitest = extractFailureDiagnostic(
+        ' ❯ test/a.test.mjs (6 tests | 2 failed) 10ms\n\n FAIL  test/a.test.mjs > compose contract > networks are isolated\nAssertionError: must have environment',
+        'run-vitest',
+    );
+    assert.deepEqual(vitest, { kind: 'test', runId: 'run-vitest', test: 'networks are isolated', error: 'assertion failure' });
+
+    // fire#482 (imp_2611200843_482): Playwright list reporter, first failure header and summary.
+    const pwOutput = [
+        '  1) [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar ───────',
+        '',
+        '    Error: expect(locator).toBeVisible() failed',
+        '',
+        '  2 failed',
+        '    [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar',
+        '  5 passed (42.8s)',
+    ].join('\n');
+    assert.deepEqual(extractFailureDiagnostic(pwOutput, 'run-pw'), {
+        kind: 'test', runId: 'run-pw', test: 'Summary bar › shows only the bar', error: 'assertion failure',
+    });
+    const summaryOnly = extractFailureDiagnostic('  1 failed\n    [webkit] › e2e/x.spec.ts:9:3 › loads', 'run-pw2');
+    assert.deepEqual(summaryOnly, { kind: 'test', runId: 'run-pw2', test: 'loads', error: 'test failure' });
+
+    // Unnamed project: Playwright omits the "[project] ›" prefix.
+    const unnamed = extractFailureDiagnostic('  1) e2e/x.spec.ts:9:3 › loads ───\n\n    Error: expect(page).toHaveTitle() failed\n\n  1 failed\n    e2e/x.spec.ts:9:3 › loads', 'run-pw4');
+    assert.deepEqual(unnamed, { kind: 'test', runId: 'run-pw4', test: 'loads', error: 'assertion failure' });
+
+    // Mixed failures: a timeout picked first is not labelled by the second test's expect().
+    const mixed = extractFailureDiagnostic([
+        '  1) [chromium] › e2e/a.spec.ts:3:1 › times out ───',
+        '    Test timeout of 30000ms exceeded.',
+        '  2) [chromium] › e2e/b.spec.ts:5:1 › asserts ───',
+        '    Error: expect(received).toBe(expected)',
+        '  2 failed',
+    ].join('\n'), 'run-pw5');
+    assert.deepEqual(mixed, { kind: 'test', runId: 'run-pw5', test: 'times out', error: 'test failure' });
+
+    // Passed Playwright lines are not failures.
+    const passed = extractFailureDiagnostic('  ✓  1 [chromium] › e2e/x.spec.ts:9:3 › loads (1.2s)\n  1 passed', 'run-pw3');
+    assert.equal(passed.kind, 'unknown');
+});
+
 test('formatFailureDiagnostic keeps raw HTML and mentions inert', () => {
     const output = formatFailureDiagnostic({
         kind: 'test',

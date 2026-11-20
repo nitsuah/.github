@@ -1476,7 +1476,8 @@ export function extractFailureDiagnostic(output = '', runId = '', worktree = '')
     if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
 
     // Node TAP / Vitest: strip terminal colors before matching anchored output.
-    const tapFail = plain.match(/^(?:not ok \d+ - |FAIL .+ > )(.+)$/m);
+    // Vitest indents its FAIL lines (" FAIL  file > suite > test"), so allow leading whitespace.
+    const tapFail = plain.match(/^[ \t]*(?:not ok \d+ - |FAIL\s+.+ > )(.+)$/m);
     if (tapFail) {
         const assertion = /\bAssertionError\b|\bERR_ASSERTION\b|\bassert(?:ion)?\s+(?:failed|failure|error)\b/i.test(plain);
         return {
@@ -1488,8 +1489,20 @@ export function extractFailureDiagnostic(output = '', runId = '', worktree = '')
     }
 
     // Vitest suite/error summary: "FAIL file.test.ts" or similar.
-    const vitestFail = plain.match(/^FAIL\s+(\S+)/m);
+    const vitestFail = plain.match(/^[ \t]*FAIL\s+(\S+)/m);
     if (vitestFail) return { kind: 'test', runId, test: vitestFail[1].slice(0, 120), error: 'test failure' };
+
+    // Playwright: "  1) [chromium] › tests/x.spec.js:12:5 › suite › test ───" or the
+    // "N failed" summary line "    [chromium] › tests/x.spec.js:12:5 › suite › test".
+    // The "[project] ›" prefix is omitted when the project has no name.
+    const playwrightFail = plain.match(/^[ \t]*(?:\d+\)[ \t]+)?(?:\[[^\]\n]+\][ \t]+›[ \t]+)?\S+:\d+:\d+[ \t]+›[ \t]+(.+?)(?:[ \t]+─+)?[ \t]*$/m);
+    if (playwrightFail) {
+        // Classify only the selected failure's block: it ends at the next "N) " header or the "N failed" summary.
+        const rest = plain.slice(playwrightFail.index + playwrightFail[0].length);
+        const end = rest.search(/^[ \t]*(?:\d+\)[ \t]+\S|\d+ failed\b)/m);
+        const assertion = /^\s*Error: expect\(/m.test(end < 0 ? rest : rest.slice(0, end));
+        return { kind: 'test', runId, test: playwrightFail[1].slice(0, 120), error: assertion ? 'assertion failure' : 'test failure' };
+    }
 
     // ESLint: "error  'x' is defined but never used  no-unused-vars".
     const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
