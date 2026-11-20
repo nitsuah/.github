@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -387,6 +387,16 @@ async function runGate(id) {
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
+    // Fix rounds: paths only a human pushed to the PR branch are exempt from scope.
+    // Before the first push there is no origin/<branch>, so nothing is exempt, and
+    // anything changed since the pushed head counts as the imp's (lib.humanOnlyPaths).
+    const pushed = r.branch ? git(r.worktree, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${r.branch}`).out : '';
+    const humanOnly = pushed
+        ? humanOnlyPaths(
+            git(r.worktree, 'log', '--no-renames', '--name-only', '--format=%x00%an', `${r.baseSha}..${pushed}`).out,
+            git(r.worktree, 'diff', '--no-renames', '--name-only', `${pushed}..HEAD`).out.split('\n').filter(Boolean),
+        )
+        : [];
     const dirtyBeforeChecks = git(r.worktree, 'status', '--porcelain').out;
     let testExit = null;
     let lintExit = null;
@@ -409,6 +419,7 @@ async function runGate(id) {
         maxTestLines: effectiveMaxTestLines(meta.maxTestLines, meta.maxLines, o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
+        humanOnlyPaths: humanOnly,
     });
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);

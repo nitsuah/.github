@@ -423,7 +423,32 @@ export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
     return 2 * effectiveMaxLines(metaMax) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false }) {
+/**
+ * Paths a human or the hypervisor changed on the PR branch and the imp never did,
+ * which the scope check may skip (fire#527: a CHANGELOG line pushed for merge
+ * failed the next fix round as "outside scope").
+ *
+ * `pushedLog` is `git log --no-renames --name-only --format=%x00%an <base>..origin/<branch>`:
+ * only commits already on the pushed branch can be a human's. `localPaths` is
+ * every path changed since that pushed head in this run, and it always counts as
+ * the imp's whatever the commit author says, so `git commit --author` cannot
+ * dodge scope. Fails closed: a name that does not match numstat exactly is
+ * simply not exempt.
+ */
+export function humanOnlyPaths(pushedLog, localPaths = [], impAuthor = '9router imp') {
+    const human = new Set();
+    const imp = new Set(localPaths);
+    for (const chunk of String(pushedLog || '').split('\0')) {
+        const [author, ...files] = chunk.split('\n');
+        const into = author.trim() === impAuthor ? imp : human;
+        for (const f of files) if (f) into.add(f);
+    }
+    return [...human].filter((p) => !imp.has(p));
+}
+
+// humanOnlyPaths (optional, see above) are skipped by the scope check only.
+// Deny paths still apply to the whole diff.
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, humanOnlyPaths: humanOnly = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -443,7 +468,7 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     else if (!commits.length) reasons.push('no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
-        if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
+        if (allow.length && !humanOnly.includes(f.path) &&!allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
