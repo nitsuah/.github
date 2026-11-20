@@ -45,7 +45,7 @@ GitHub issues are the queue; labels are the state.
 
 | Label | Set by | Meaning |
 | --- | --- | --- |
-| `imp:ready` | Opus triage (daily) | A valid current brief is present, declared dependencies are closed/merged, and no known issue-level gate blocks it; eligible for dispatcher selection (global caps may still defer) |
+| `imp:ready` | owner, or `groom.mjs` every 3 h when a draft passes `groom-promote.mjs` (the daily Opus triage was retired 2026-10-30) | A valid current brief is present, declared dependencies are closed/merged, and no known issue-level gate blocks it; eligible for dispatcher selection (global caps may still defer) |
 | `imp:working` | dispatcher | An imp is on it now |
 | `imp:pr` | dispatcher | An imp PR is open (the issue comment links it) |
 | `imp:failed` | dispatcher | Gate failed; reasons are commented. It needs a new brief or a human |

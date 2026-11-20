@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // groomer: draft-first triage for untriaged issues. Finds open issues without imp:*
-// labels, screens for PR-shaped work, drafts briefs via 9router, lints them,
-// and posts as draft comments with `imp:needs-brief` for human promotion.
+// labels, screens for PR-shaped work, drafts briefs via 9router and lints them.
+// A brief that passes every check in groom-promote.mjs (trusted author, sandboxed
+// Docker commands, brieflint, no security terms) is posted as a real brief with
+// `imp:ready`; anything else is posted as a held draft with `imp:needs-brief`.
 //
 //   node groom.mjs [--dry-run] [--owner nitsuah] [--json]
 //
@@ -77,7 +79,7 @@ for (const name of Object.keys(repos)) {
     } catch { /* ignore */ }
 }
 
-const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.rsiDailyIssueCap;
+const dailyCap = config.groomDailyIssueCap ?? DEFAULTS.groomDailyIssueCap;
 const quietHours = config.groomQuietHours ?? DEFAULTS.quietHours;
 const maxLines = config.groomMaxLines ?? DEFAULTS.maxLines;
 
@@ -96,7 +98,9 @@ const results = await runGroom({
 
 if (o.json) console.log(JSON.stringify(results, null, 2));
 else {
-    console.log(`groom: ${results.drafted} drafted, ${results.skipped} skipped, ${results.candidates} candidates`);
+    console.log(`groom ${new Date().toISOString()}: ${results.drafted} drafted (${results.promoted.length} promoted to imp:ready, ${results.held.length} held), ${results.skipped} skipped, ${results.candidates} candidates`);
+    for (const p of results.promoted) console.log(`  + ${p}`);
+    for (const h of results.held) console.log(`  ~ ${h.issue}: ${h.reasons.join('; ')}`);
     if (results.errors.length) {
         console.log('errors:');
         for (const e of results.errors) console.log(`  - ${e}`);

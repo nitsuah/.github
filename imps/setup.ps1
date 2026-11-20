@@ -464,9 +464,9 @@ node imps\groom.mjs >> "%IMPS_HOME%\groom.log" 2>&1
         Set-Content -LiteralPath $groom -Value $groomBody -Encoding ascii
         Write-Ok "wrote $groom"
 
-        # Run daily at 06:07 (one hour after the hourly task)
-        & schtasks /Create /TN $GroomName /SC DAILY /ST 06:07 /TR "conhost.exe --headless cmd.exe /d /c $q$groom$q" /RL LIMITED /F | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$GroomName' (daily at 06:07)" }
+        # Every 3 hours from 06:07, so new issues reach imp:ready the same day
+        & schtasks /Create /TN $GroomName /SC HOURLY /MO 3 /ST 06:07 /TR "conhost.exe --headless cmd.exe /d /c $q$groom$q" /RL LIMITED /F | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$GroomName' (every 3 h from 06:07)" }
         else { Write-Bad "could not register '$GroomName'" }
     } else {
         Write-Ok "skipped '$GroomName' (opt-in: pass -WithGroomer to register it)"

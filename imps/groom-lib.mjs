@@ -5,9 +5,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
+import { promotionVerdict, groomedComment } from './groom-promote.mjs';
 
 export const DRAFT_MARK = '<!-- imp-brief-draft -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
+export const READY_LABEL = 'imp:ready';
 
 /** Parse ~/.imps/config.json text. Missing/invalid → {}. */
 export function parseGroomConfig(text = '') {
@@ -86,19 +88,41 @@ export async function fetchRepoContext(gh, owner, repo) {
     return out;
 }
 
+/** The newest trusted brief posted in `repo`, as a style and test-command example (or null). */
+export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
+    try {
+        const hits = ghJson([
+            'search', 'issues', '--owner', owner, '--limit', '5', '--sort', 'updated', '--json', 'number',
+            '--', `repo:${owner}/${repo} "imp-brief" in:comments`,
+        ]) || [];
+        for (const h of hits) {
+            if (h.number === exclude) continue;
+            const comments = ghJson(['issue', 'view', String(h.number), '-R', `${owner}/${repo}`, '--json', 'comments'])?.comments || [];
+            const b = briefFromComments(comments, { allowedAuthors: [owner] });
+            if (b) return b;
+        }
+    } catch { /* no example: the prompt's template still applies */ }
+    return null;
+}
+
 /** Draft a brief via 9router chat completion. */
-export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow }) {
+export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow, example }) {
     const sys = `You are an imps groomer. Write a brief in the STANDARD.md format for an imp to implement.
 
 The brief MUST be valid front-matter + body:
-- Front matter keys: repo, issue, test, maxLines, allow (lint optional)
-- repo: ${owner}/${repo}
+- Front matter keys: repo, issue, test, maxLines, allow (lint and format optional)
+- repo: ${repo}
 - issue: ${issue}
-- test: the exact command to run (e.g., "npm test", "cargo test", "go test ./...")
-- maxLines: ${maxLines} (do not exceed)
-- allow: comma-separated paths the imp may touch (e.g., "src/,tests/")
-- The imp must NOT touch .github/, lockfiles, or secrets
-
+- test: one Docker command, exactly this shape (the gate runs it literally on the host):
+  docker run --rm -v {wt}:/app -v imp-nm-${repo}:/app/node_modules -w /app node:22 sh -c "npm ci --no-audit --no-fund && <focused test command>"
+  Use python:3.12-slim, golang:1.23 or rust:1 instead of node:22 when the repo is not Node (then drop the node_modules volume).
+  Never use $, backticks, %, ! or backslashes inside the quotes. Add "npx tsc --noEmit &&" before the tests for TypeScript repos.
+- maxLines: at most ${maxLines}
+- allow: comma-separated repo-relative path prefixes the imp may touch (e.g. "src/lib/,tests/lib/,CHANGELOG.md"); no globs
+- no inline # comments in the front matter; no depends: line unless the issue names an unmerged dependency
+- The imp must NOT touch .github/, lockfiles, .env files, or secrets
+- Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
+${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
 ${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, 3000)}`).join('\n\n')}
 
@@ -121,17 +145,16 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
             model: 'MAX',
             max_tokens: 4000,
             stream: false,
-            messages: [
-                { role: 'system', content: sys },
-                { role: 'user', content: 'Write the brief.' },
-            ],
+            system: sys,
+            messages: [{ role: 'user', content: 'Write the brief.' }],
         }),
     });
 
     if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
     const data = await res.json();
     const text = data.content?.[0]?.text || '';
-    const m = text.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
+    // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
+    const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
     return (m ? m[1] : text).trim();
 }
 
@@ -183,7 +206,7 @@ export async function runGroom({
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
 } = {}) {
-    const results = { candidates: 0, drafted: 0, skipped: 0, errors: [] };
+    const results = { candidates: 0, drafted: 0, skipped: 0, promoted: [], held: [], errors: [] };
 
     // Track daily count
     const filedPath = join(process.env.IMPS_HOME || join(homedir(), '.imps'), 'groom-filed.json');
@@ -206,15 +229,18 @@ export async function runGroom({
     for (const repo of Object.keys(repos)) {
         if (results.drafted >= remaining) break;
 
+        // Drafting and promoting never touch a repo; the dispatcher already keeps one imp
+        // per repo and skips repos with an open imp PR. Quiet-only grooming is opt-in.
         const repoInfo = repos[repo];
-        if (!isQuietRepo(repoInfo, quietHours)) continue;
+        if (config.groomRequireQuiet === true && !isQuietRepo(repoInfo, quietHours)) continue;
+        let example;
 
         // Search for untriaged issues in this repo
         let issues = [];
         try {
             issues = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
-                '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt',
+                '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt,author',
                 '--', `repo:${owner}/${repo} -label:imp:*`
             ]).map((i) => ({
                 repo: i.repository.name,
@@ -223,6 +249,7 @@ export async function runGroom({
                 body: i.body || '',
                 labels: labelNames(i.labels),
                 createdAt: i.createdAt,
+                author: i.author?.login || '',
             }));
         } catch (e) {
             results.errors.push(`search failed for ${repo}: ${e.message}`);
@@ -247,10 +274,11 @@ export async function runGroom({
             try {
                 const context = await fetchRepoContext(gh, owner, issue.repo);
                 const allowGuess = 'src/,lib/,app/,tests/,pkg/'; // generic default
+                if (example === undefined) example = recentBrief(ghJson, owner, issue.repo, { exclude: issue.number });
                 const briefText = await draftBrief({
                     router, owner, repo: issue.repo, issue: issue.number,
                     title: issue.title, body: issue.body, context,
-                    maxLines, allow: allowGuess,
+                    maxLines, allow: allowGuess, example,
                 });
 
                 const lint = lintBrief(briefText, maxLines);
@@ -260,14 +288,23 @@ export async function runGroom({
                     continue;
                 }
 
-                // Post as draft
+                const verdict = promotionVerdict({
+                    issue, briefText, owner, maxLines,
+                    trustedAuthors: config.groomTrustedAuthors || [],
+                    enabled: config.groomAutoPromote !== false,
+                });
+                const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
+                (verdict.promote ? results.promoted : results.held).push(
+                    verdict.promote ? `${issue.repo}#${issue.number}` : { issue: `${issue.repo}#${issue.number}`, reasons: verdict.reasons },
+                );
+
                 if (!dryRun) {
-                    // Ensure label exists
-                    gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
-                    const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
+                    if (!verdict.promote) {
+                        gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
+                    }
+                    const commentBody = groomedComment({ briefText, verdict, draftMark: DRAFT_MARK });
                     gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
-                    // Add label
-                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);
+                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', label]);
 
                     // Track
                     filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
