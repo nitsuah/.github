@@ -5,9 +5,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
+import { promotionVerdict, groomedComment } from './groom-promote.mjs';
 
 export const DRAFT_MARK = '<!-- imp-brief-draft -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
+export const READY_LABEL = 'imp:ready';
 
 /** Parse ~/.imps/config.json text. Missing/invalid → {}. */
 export function parseGroomConfig(text = '') {
@@ -86,19 +88,41 @@ export async function fetchRepoContext(gh, owner, repo) {
     return out;
 }
 
-/** Draft a brief via 9router chat completion. */
-export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow }) {
+/** The newest trusted brief posted in `repo`, as a style and test-command example (or null). */
+export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
+    try {
+        const hits = ghJson([
+            'search', 'issues', '--owner', owner, '--limit', '5', '--sort', 'updated', '--json', 'number',
+            '--', `repo:${owner}/${repo} "imp-brief" in:comments`,
+        ]) || [];
+        for (const h of hits) {
+            if (h.number === exclude) continue;
+            const comments = ghJson(['issue', 'view', String(h.number), '-R', `${owner}/${repo}`, '--json', 'comments'])?.comments || [];
+            const b = briefFromComments(comments, { allowedAuthors: [owner] });
+            if (b) return b;
+        }
+    } catch { /* no example: the prompt's template still applies */ }
+    return null;
+}
+
+/** Draft a brief via 9router chat completion. Retry once after 2s; use [::1] for localhost. */
+export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow, example }) {
     const sys = `You are an imps groomer. Write a brief in the STANDARD.md format for an imp to implement.
 
 The brief MUST be valid front-matter + body:
-- Front matter keys: repo, issue, test, maxLines, allow (lint optional)
-- repo: ${owner}/${repo}
+- Front matter keys: repo, issue, test, maxLines, allow (lint and format optional)
+- repo: ${repo}
 - issue: ${issue}
-- test: the exact command to run (e.g., "npm test", "cargo test", "go test ./...")
-- maxLines: ${maxLines} (do not exceed)
-- allow: comma-separated paths the imp may touch (e.g., "src/,tests/")
-- The imp must NOT touch .github/, lockfiles, or secrets
-
+- test: one Docker command, exactly this shape (the gate runs it literally on the host):
+  docker run --rm -v "{wt}:/app" -v imp-nm-${repo}:/app/node_modules -w /app node:22 sh -c "npm ci --no-audit --no-fund && <focused test command>"
+  Use python:3.12-slim, golang:1.23 or rust:1 instead of node:22 when the repo is not Node (then drop the node_modules volume).
+  Never use $, backticks, %, ! or backslashes inside the quotes. Add "npx tsc --noEmit &&" before the tests for TypeScript repos.
+- maxLines: at most ${maxLines}
+- allow: comma-separated repo-relative path prefixes the imp may touch (e.g. "src/lib/,tests/lib/,CHANGELOG.md"); no globs
+- no inline # comments in the front matter; no depends: line unless the issue names an unmerged dependency
+- The imp must NOT touch .github/, lockfiles, .env files, or secrets
+- Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
+${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
 ${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, 3000)}`).join('\n\n')}
 
@@ -109,30 +133,43 @@ ${body || '(no description)'}
 
 Output ONLY the brief as a fenced markdown block. No explanation.`;
 
-    const res = await fetch(`${router.baseUrl}/messages`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(60_000),
-        headers: {
-            'content-type': 'application/json',
-            'x-api-key': router.key || '',
-            'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-            model: 'MAX',
-            max_tokens: 4000,
-            stream: false,
-            messages: [
-                { role: 'system', content: sys },
-                { role: 'user', content: 'Write the brief.' },
-            ],
-        }),
-    });
+    const url = new URL(router.baseUrl);
+    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    const targetUrl = isLocalhost ? router.baseUrl.replace('localhost', '[::1]').replace('127.0.0.1', '[::1]') : router.baseUrl;
 
-    if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
-    const data = await res.json();
-    const text = data.content?.[0]?.text || '';
-    const m = text.match(/```(?:markdown|md)?\n([\s\S]*?)\n```/);
-    return (m ? m[1] : text).trim();
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const res = await fetch(`${targetUrl}/messages`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(60_000),
+                headers: {
+                    'content-type': 'application/json',
+                    'x-api-key': router.key || '',
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify({
+                    model: 'MAX',
+                    max_tokens: 8000,
+                    stream: false,
+                    system: sys,
+                    messages: [{ role: 'user', content: 'Write the brief.' }],
+                }),
+            });
+
+            if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
+            const data = await res.json();
+            // 9router models often lead with a thinking block: join the text blocks, not content[0].
+            const text = (data.content || []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
+            // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
+            const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
+            return (m ? m[1] : text).trim();
+        } catch (e) {
+            lastErr = e;
+            if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+    throw lastErr;
 }
 
 /** Lint a brief: validate required fields, scope, size. Returns { ok, errors, briefMeta }. */
@@ -170,6 +207,48 @@ export function alreadyGroomed(comments = []) {
     return hasDraft || hasBrief;
 }
 
+/**
+ * Post a groomed comment and add the label atomically.
+ * If label fails after comment succeeds, deletes the comment so the issue can be regroomed.
+ * Returns { ok: true } on success, { ok: false, error } on failure.
+ */
+export async function postGroomed({ gh, owner, repo, number, commentBody, label }) {
+    // Post comment and capture URL to extract comment ID
+    let commentId;
+    try {
+        const commentOut = gh(['issue', 'comment', String(number), '-R', `${owner}/${repo}`, '--body', commentBody]);
+        // gh prints URL like: https://github.com/owner/repo/issues/123#issuecomment-123456789
+        const m = String(commentOut).match(/#issuecomment-(\d+)$/);
+        if (m) commentId = m[1];
+    } catch (e) {
+        return { ok: false, error: `comment failed: ${e.message}` };
+    }
+
+    // Try to add label up to 2 times
+    let labelErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            gh(['issue', 'edit', String(number), '-R', `${owner}/${repo}`, '--add-label', label]);
+            return { ok: true };
+        } catch (e) {
+            labelErr = e;
+            if (attempt === 0) await new Promise(r => setTimeout(r, 500));
+        }
+    }
+
+    // Both label attempts failed - delete the comment
+    if (commentId) {
+        try {
+            gh(['api', '-X', 'DELETE', `repos/${owner}/${repo}/issues/comments/${commentId}`]);
+            return { ok: false, error: `label failed for ${owner}/${repo}#${number}; comment removed so the next run regrooms it` };
+        } catch (e) {
+            return { ok: false, error: `label failed for ${owner}/${repo}#${number}; comment removal failed too` };
+        }
+    }
+
+    return { ok: false, error: `label failed for ${owner}/${repo}#${number}; could not parse comment ID for cleanup` };
+}
+
 /** Main groomer logic: find candidate issues, draft briefs, post as drafts. */
 export async function runGroom({
     gh,
@@ -182,8 +261,11 @@ export async function runGroom({
     quietHours = DEFAULTS.quietHours,
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
+    singleRepo = null,
+    poster = null,
+    briefAuthors = ['nitsuah'],
 } = {}) {
-    const results = { candidates: 0, drafted: 0, skipped: 0, errors: [] };
+    const results = { candidates: 0, drafted: 0, skipped: 0, promoted: [], held: [], errors: [] };
 
     // Track daily count
     const filedPath = join(process.env.IMPS_HOME || join(homedir(), '.imps'), 'groom-filed.json');
@@ -203,27 +285,39 @@ export async function runGroom({
         return results;
     }
 
-    for (const repo of Object.keys(repos)) {
-        if (results.drafted >= remaining) break;
+    // Set of repo#number already considered in this run (cross-repo dedupe)
+    const seen = new Set();
 
+    const repoKeys = singleRepo ? [singleRepo] : Object.keys(repos);
+    for (const repo of repoKeys) {
+        if (results.drafted >= remaining) break;
+        if (!repos[repo]) continue;
+
+        // Drafting and promoting never touch a repo; the dispatcher already keeps one imp
+        // per repo and skips repos with an open imp PR. Quiet-only grooming is opt-in.
         const repoInfo = repos[repo];
-        if (!isQuietRepo(repoInfo, quietHours)) continue;
+        if (config.groomRequireQuiet === true && !isQuietRepo(repoInfo, quietHours)) continue;
+        let example;
 
         // Search for untriaged issues in this repo
         let issues = [];
         try {
-            issues = ghJson([
+            const searchResults = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
-                '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt',
+                '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt,author',
                 '--', `repo:${owner}/${repo} -label:imp:*`
-            ]).map((i) => ({
-                repo: i.repository.name,
-                number: i.number,
-                title: i.title,
-                body: i.body || '',
-                labels: labelNames(i.labels),
-                createdAt: i.createdAt,
-            }));
+            ]);
+            issues = searchResults
+                .filter((i) => i.repository?.name === repo) // keep only results for this repo
+                .map((i) => ({
+                    repo: i.repository.name,
+                    number: i.number,
+                    title: i.title,
+                    body: i.body || '',
+                    labels: labelNames(i.labels),
+                    createdAt: i.createdAt,
+                    author: i.author?.login || '',
+                }));
         } catch (e) {
             results.errors.push(`search failed for ${repo}: ${e.message}`);
             continue;
@@ -231,6 +325,12 @@ export async function runGroom({
 
         for (const issue of issues) {
             if (results.drafted >= remaining) break;
+
+            // Cross-repo dedupe: skip if already seen this repo#number
+            const key = `${issue.repo}#${issue.number}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
             results.candidates++;
 
             // Skip if already has imp label or is groomed
@@ -247,33 +347,49 @@ export async function runGroom({
             try {
                 const context = await fetchRepoContext(gh, owner, issue.repo);
                 const allowGuess = 'src/,lib/,app/,tests/,pkg/'; // generic default
+                if (example === undefined) example = recentBrief(ghJson, owner, issue.repo, { exclude: issue.number });
                 const briefText = await draftBrief({
                     router, owner, repo: issue.repo, issue: issue.number,
                     title: issue.title, body: issue.body, context,
-                    maxLines, allow: allowGuess,
+                    maxLines, allow: allowGuess, example,
                 });
 
                 const lint = lintBrief(briefText, maxLines);
                 if (!lint.ok) {
-                    results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}`);
+                    const preview = briefText.replace(/\n/g, ' ').slice(0, 160);
+                    results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}; model output: ${preview}`);
                     results.skipped++;
                     continue;
                 }
 
-                // Post as draft
+                const verdict = promotionVerdict({
+                    issue, briefText, owner, maxLines,
+                    trustedAuthors: config.groomTrustedAuthors || [],
+                    enabled: config.groomAutoPromote !== false,
+                    poster, briefAuthors,
+                });
+                const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {
-                    // Ensure label exists
-                    gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
-                    const commentBody = DRAFT_MARK + '\n```markdown\n' + briefText + '\n```';
-                    gh(['issue', 'comment', String(issue.number), '-R', `${owner}/${issue.repo}`, '--body', commentBody]);
-                    // Add label
-                    gh(['issue', 'edit', String(issue.number), '-R', `${owner}/${issue.repo}`, '--add-label', NEEDS_BRIEF_LABEL]);
+                    if (!verdict.promote) {
+                        gh(['label', 'create', NEEDS_BRIEF_LABEL, '-R', `${owner}/${issue.repo}`, '-c', 'fbca04', '-d', 'Groomed brief awaiting human promotion', '--force']);
+                    }
+                    const commentBody = groomedComment({ briefText, verdict, draftMark: DRAFT_MARK });
+                    const pg = await postGroomed({ gh, owner, repo: issue.repo, number: issue.number, commentBody, label });
+                    if (!pg.ok) {
+                        results.errors.push(pg.error);
+                        results.skipped++;
+                        continue;
+                    }
 
                     // Track
                     filedState.keys.push(`groom:${issue.repo}#${issue.number}`);
                     filedState.count++;
                 }
 
+                // Counted only once posted: a failed label rolls the post back.
+                (verdict.promote ? results.promoted : results.held).push(
+                    verdict.promote ? `${issue.repo}#${issue.number}` : { issue: `${issue.repo}#${issue.number}`, reasons: verdict.reasons },
+                );
                 results.drafted++;
             } catch (e) {
                 results.errors.push(`draft failed for ${issue.repo}#${issue.number}: ${e.message}`);

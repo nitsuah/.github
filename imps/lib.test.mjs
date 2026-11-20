@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
@@ -1656,6 +1656,49 @@ test('extractFailureDiagnostic strips ANSI and does not guess assertion causes',
     assert.equal(formatFailureDiagnostic(unknown), 'diagnostic summary unavailable');
 });
 
+test('extractFailureDiagnostic reads indented Vitest FAIL lines and Playwright failures', () => {
+    // motor-pool#150 (imp_2611200844_150): Vitest indents FAIL with one space.
+    const vitest = extractFailureDiagnostic(
+        ' ❯ test/a.test.mjs (6 tests | 2 failed) 10ms\n\n FAIL  test/a.test.mjs > compose contract > networks are isolated\nAssertionError: must have environment',
+        'run-vitest',
+    );
+    assert.deepEqual(vitest, { kind: 'test', runId: 'run-vitest', test: 'networks are isolated', error: 'assertion failure' });
+
+    // fire#482 (imp_2611200843_482): Playwright list reporter, first failure header and summary.
+    const pwOutput = [
+        '  1) [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar ───────',
+        '',
+        '    Error: expect(locator).toBeVisible() failed',
+        '',
+        '  2 failed',
+        '    [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar',
+        '  5 passed (42.8s)',
+    ].join('\n');
+    assert.deepEqual(extractFailureDiagnostic(pwOutput, 'run-pw'), {
+        kind: 'test', runId: 'run-pw', test: 'Summary bar › shows only the bar', error: 'assertion failure',
+    });
+    const summaryOnly = extractFailureDiagnostic('  1 failed\n    [webkit] › e2e/x.spec.ts:9:3 › loads', 'run-pw2');
+    assert.deepEqual(summaryOnly, { kind: 'test', runId: 'run-pw2', test: 'loads', error: 'test failure' });
+
+    // Unnamed project: Playwright omits the "[project] ›" prefix.
+    const unnamed = extractFailureDiagnostic('  1) e2e/x.spec.ts:9:3 › loads ───\n\n    Error: expect(page).toHaveTitle() failed\n\n  1 failed\n    e2e/x.spec.ts:9:3 › loads', 'run-pw4');
+    assert.deepEqual(unnamed, { kind: 'test', runId: 'run-pw4', test: 'loads', error: 'assertion failure' });
+
+    // Mixed failures: a timeout picked first is not labelled by the second test's expect().
+    const mixed = extractFailureDiagnostic([
+        '  1) [chromium] › e2e/a.spec.ts:3:1 › times out ───',
+        '    Test timeout of 30000ms exceeded.',
+        '  2) [chromium] › e2e/b.spec.ts:5:1 › asserts ───',
+        '    Error: expect(received).toBe(expected)',
+        '  2 failed',
+    ].join('\n'), 'run-pw5');
+    assert.deepEqual(mixed, { kind: 'test', runId: 'run-pw5', test: 'times out', error: 'test failure' });
+
+    // Passed Playwright lines are not failures.
+    const passed = extractFailureDiagnostic('  ✓  1 [chromium] › e2e/x.spec.ts:9:3 › loads (1.2s)\n  1 passed', 'run-pw3');
+    assert.equal(passed.kind, 'unknown');
+});
+
 test('formatFailureDiagnostic keeps raw HTML and mentions inert', () => {
     const output = formatFailureDiagnostic({
         kind: 'test',
@@ -1939,4 +1982,27 @@ test('agentNotes prefers the full result event, then streamed assistant text, ke
     writeFileSync(noResult, [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding one' }] } }), JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'finding two' }] } })].join(nl));
     assert.equal(agentNotes(noResult), 'finding one' + nl + 'finding two');
     assert.equal(agentNotes(join(dir, 'missing.jsonl'), 'fallback'), 'fallback');
+});
+
+test('gate exempts human-only paths from scope but not from deny (fire#527)', () => {
+    // Pushed branch: the imp's first commit, then two maintainer commits.
+    const pushedLog = '\0' + '9router imp\n\napp/lib/tables/dashboard.js\napp/index.html\n\0nitsuah\n\napp/lib/css/layout.css\n\0nitsuah\n\ndocs/CHANGELOG.md\n';
+    const humanOnly = humanOnlyPaths(pushedLog, ['app/lib/tables/dashboard.js']);
+    assert.deepEqual(humanOnly.sort(), ['app/lib/css/layout.css', 'docs/CHANGELOG.md']);
+    const numstat = '1\t0\tapp/index.html\n3\t91\tapp/lib/tables/dashboard.js\n5\t6\tapp/lib/css/layout.css\n2\t0\tdocs/CHANGELOG.md';
+    const base = { numstat, commits: [ok], testExit: 0, allow: ['app/lib/tables/', 'app/index.html'] };
+    // Nothing exempt (first run, before any push): every path is scoped, as before.
+    assert.ok(gate(base).reasons.includes('outside scope docs/CHANGELOG.md'));
+    assert.equal(gate({ ...base, humanOnlyPaths: humanOnly }).pass, true);
+    // A path the imp changed locally this round counts as the imp's, whoever the
+    // commit claims as author: `git commit --author` cannot dodge scope.
+    const touched = humanOnlyPaths(pushedLog, ['docs/CHANGELOG.md']);
+    assert.deepEqual(touched, ['app/lib/css/layout.css']);
+    assert.ok(gate({ ...base, humanOnlyPaths: touched }).reasons.includes('outside scope docs/CHANGELOG.md'));
+    // A path the imp also touched on the pushed branch is never exempt.
+    assert.deepEqual(humanOnlyPaths(pushedLog + '\0' + '9router imp\n\ndocs/CHANGELOG.md\n'), ['app/lib/css/layout.css']);
+    // Fails closed: a name that does not match numstat exactly is not exempt.
+    assert.ok(gate({ ...base, numstat: '1\t0\t stray.js', humanOnlyPaths: ['stray.js'] }).reasons.includes('outside scope  stray.js'));
+    // A human commit to a denied path still fails the gate.
+    assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', humanOnlyPaths: [...humanOnly, 'package-lock.json'] }).reasons.includes('denied path package-lock.json'));
 });

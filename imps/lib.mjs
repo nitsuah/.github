@@ -518,7 +518,32 @@ export function effectiveMaxTestLines(metaMaxTest, metaMax, slack = 0) {
     return 2 * effectiveMaxLines(metaMax) + Number(slack);
 }
 
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false }) {
+/**
+ * Paths a human or the hypervisor changed on the PR branch and the imp never did,
+ * which the scope check may skip (fire#527: a CHANGELOG line pushed for merge
+ * failed the next fix round as "outside scope").
+ *
+ * `pushedLog` is `git log --no-renames --name-only --format=%x00%an <base>..origin/<branch>`:
+ * only commits already on the pushed branch can be a human's. `localPaths` is
+ * every path changed since that pushed head in this run, and it always counts as
+ * the imp's whatever the commit author says, so `git commit --author` cannot
+ * dodge scope. Fails closed: a name that does not match numstat exactly is
+ * simply not exempt.
+ */
+export function humanOnlyPaths(pushedLog, localPaths = [], impAuthor = '9router imp') {
+    const human = new Set();
+    const imp = new Set(localPaths);
+    for (const chunk of String(pushedLog || '').split('\0')) {
+        const [author, ...files] = chunk.split('\n');
+        const into = author.trim() === impAuthor ? imp : human;
+        for (const f of files) if (f) into.add(f);
+    }
+    return [...human].filter((p) => !imp.has(p));
+}
+
+// humanOnlyPaths (optional, see above) are skipped by the scope check only.
+// Deny paths still apply to the whole diff.
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, humanOnlyPaths: humanOnly = [] }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -538,7 +563,7 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     else if (!commits.length) reasons.push('no commits');
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
-        if (allow.length && !allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
+        if (allow.length && !humanOnly.includes(f.path) &&!allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
@@ -1597,7 +1622,8 @@ export function extractFailureDiagnostic(output = '', runId = '', worktree = '')
     if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
 
     // Node TAP / Vitest: strip terminal colors before matching anchored output.
-    const tapFail = plain.match(/^(?:not ok \d+ - |FAIL .+ > )(.+)$/m);
+    // Vitest indents its FAIL lines (" FAIL  file > suite > test"), so allow leading whitespace.
+    const tapFail = plain.match(/^[ \t]*(?:not ok \d+ - |FAIL\s+.+ > )(.+)$/m);
     if (tapFail) {
         const assertion = /\bAssertionError\b|\bERR_ASSERTION\b|\bassert(?:ion)?\s+(?:failed|failure|error)\b/i.test(plain);
         return {
@@ -1609,8 +1635,20 @@ export function extractFailureDiagnostic(output = '', runId = '', worktree = '')
     }
 
     // Vitest suite/error summary: "FAIL file.test.ts" or similar.
-    const vitestFail = plain.match(/^FAIL\s+(\S+)/m);
+    const vitestFail = plain.match(/^[ \t]*FAIL\s+(\S+)/m);
     if (vitestFail) return { kind: 'test', runId, test: vitestFail[1].slice(0, 120), error: 'test failure' };
+
+    // Playwright: "  1) [chromium] › tests/x.spec.js:12:5 › suite › test ───" or the
+    // "N failed" summary line "    [chromium] › tests/x.spec.js:12:5 › suite › test".
+    // The "[project] ›" prefix is omitted when the project has no name.
+    const playwrightFail = plain.match(/^[ \t]*(?:\d+\)[ \t]+)?(?:\[[^\]\n]+\][ \t]+›[ \t]+)?\S+:\d+:\d+[ \t]+›[ \t]+(.+?)(?:[ \t]+─+)?[ \t]*$/m);
+    if (playwrightFail) {
+        // Classify only the selected failure's block: it ends at the next "N) " header or the "N failed" summary.
+        const rest = plain.slice(playwrightFail.index + playwrightFail[0].length);
+        const end = rest.search(/^[ \t]*(?:\d+\)[ \t]+\S|\d+ failed\b)/m);
+        const assertion = /^\s*Error: expect\(/m.test(end < 0 ? rest : rest.slice(0, end));
+        return { kind: 'test', runId, test: playwrightFail[1].slice(0, 120), error: assertion ? 'assertion failure' : 'test failure' };
+    }
 
     // ESLint: "error  'x' is defined but never used  no-unused-vars".
     const eslintMatch = plain.match(/^\s*\d+:\d+\s+(error|warning)\s+(.+?)\s{2,}(\S+)$/m);
