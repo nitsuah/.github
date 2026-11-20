@@ -28,6 +28,7 @@ const { values: o } = parseArgs({
         'dry-run': { type: 'boolean', default: false },
         owner: { type: 'string', default: DEFAULTS.owner },
         json: { type: 'boolean', default: false },
+        repo: { type: 'string' },
     },
 });
 
@@ -94,6 +95,7 @@ const results = await runGroom({
     quietHours,
     maxLines,
     dryRun: o['dry-run'],
+    singleRepo: o.repo,
 });
 
 if (o.json) console.log(JSON.stringify(results, null, 2));

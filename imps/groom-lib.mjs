@@ -105,7 +105,7 @@ export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
     return null;
 }
 
-/** Draft a brief via 9router chat completion. */
+/** Draft a brief via 9router chat completion. Retry once after 2s; use [::1] for localhost. */
 export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow, example }) {
     const sys = `You are an imps groomer. Write a brief in the STANDARD.md format for an imp to implement.
 
@@ -133,29 +133,42 @@ ${body || '(no description)'}
 
 Output ONLY the brief as a fenced markdown block. No explanation.`;
 
-    const res = await fetch(`${router.baseUrl}/messages`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(60_000),
-        headers: {
-            'content-type': 'application/json',
-            'x-api-key': router.key || '',
-            'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-            model: 'MAX',
-            max_tokens: 4000,
-            stream: false,
-            system: sys,
-            messages: [{ role: 'user', content: 'Write the brief.' }],
-        }),
-    });
+    const url = new URL(router.baseUrl);
+    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    const targetUrl = isLocalhost ? router.baseUrl.replace('localhost', '[::1]').replace('127.0.0.1', '[::1]') : router.baseUrl;
 
-    if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
-    const data = await res.json();
-    const text = data.content?.[0]?.text || '';
-    // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
-    const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
-    return (m ? m[1] : text).trim();
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const res = await fetch(`${targetUrl}/messages`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(60_000),
+                headers: {
+                    'content-type': 'application/json',
+                    'x-api-key': router.key || '',
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify({
+                    model: 'MAX',
+                    max_tokens: 4000,
+                    stream: false,
+                    system: sys,
+                    messages: [{ role: 'user', content: 'Write the brief.' }],
+                }),
+            });
+
+            if (!res.ok) throw new Error(`9router draft failed: ${res.status} ${await res.text()}`);
+            const data = await res.json();
+            const text = data.content?.[0]?.text || '';
+            // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
+            const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
+            return (m ? m[1] : text).trim();
+        } catch (e) {
+            lastErr = e;
+            if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+    throw lastErr;
 }
 
 /** Lint a brief: validate required fields, scope, size. Returns { ok, errors, briefMeta }. */
@@ -205,6 +218,7 @@ export async function runGroom({
     quietHours = DEFAULTS.quietHours,
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
+    singleRepo = null,
 } = {}) {
     const results = { candidates: 0, drafted: 0, skipped: 0, promoted: [], held: [], errors: [] };
 
@@ -226,8 +240,13 @@ export async function runGroom({
         return results;
     }
 
-    for (const repo of Object.keys(repos)) {
+    // Set of repo#number already considered in this run (cross-repo dedupe)
+    const seen = new Set();
+
+    const repoKeys = singleRepo ? [singleRepo] : Object.keys(repos);
+    for (const repo of repoKeys) {
         if (results.drafted >= remaining) break;
+        if (!repos[repo]) continue;
 
         // Drafting and promoting never touch a repo; the dispatcher already keeps one imp
         // per repo and skips repos with an open imp PR. Quiet-only grooming is opt-in.
@@ -238,19 +257,22 @@ export async function runGroom({
         // Search for untriaged issues in this repo
         let issues = [];
         try {
-            issues = ghJson([
+            const searchResults = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
                 '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt,author',
                 '--', `repo:${owner}/${repo} -label:imp:*`
-            ]).map((i) => ({
-                repo: i.repository.name,
-                number: i.number,
-                title: i.title,
-                body: i.body || '',
-                labels: labelNames(i.labels),
-                createdAt: i.createdAt,
-                author: i.author?.login || '',
-            }));
+            ]);
+            issues = searchResults
+                .filter((i) => i.repository?.name === repo) // keep only results for this repo
+                .map((i) => ({
+                    repo: i.repository.name,
+                    number: i.number,
+                    title: i.title,
+                    body: i.body || '',
+                    labels: labelNames(i.labels),
+                    createdAt: i.createdAt,
+                    author: i.author?.login || '',
+                }));
         } catch (e) {
             results.errors.push(`search failed for ${repo}: ${e.message}`);
             continue;
@@ -258,6 +280,12 @@ export async function runGroom({
 
         for (const issue of issues) {
             if (results.drafted >= remaining) break;
+
+            // Cross-repo dedupe: skip if already seen this repo#number
+            const key = `${issue.repo}#${issue.number}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
             results.candidates++;
 
             // Skip if already has imp label or is groomed
@@ -283,7 +311,8 @@ export async function runGroom({
 
                 const lint = lintBrief(briefText, maxLines);
                 if (!lint.ok) {
-                    results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}`);
+                    const preview = briefText.replace(/\n/g, ' ').slice(0, 160);
+                    results.errors.push(`lint failed for ${issue.repo}#${issue.number}: ${lint.errors.join(', ')}; model output: ${preview}`);
                     results.skipped++;
                     continue;
                 }
