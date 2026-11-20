@@ -1656,6 +1656,35 @@ test('extractFailureDiagnostic strips ANSI and does not guess assertion causes',
     assert.equal(formatFailureDiagnostic(unknown), 'diagnostic summary unavailable');
 });
 
+test('extractFailureDiagnostic reads indented Vitest FAIL lines and Playwright failures', () => {
+    // motor-pool#150 (imp_2611200844_150): Vitest indents FAIL with one space.
+    const vitest = extractFailureDiagnostic(
+        ' ❯ test/a.test.mjs (6 tests | 2 failed) 10ms\n\n FAIL  test/a.test.mjs > compose contract > networks are isolated\nAssertionError: must have environment',
+        'run-vitest',
+    );
+    assert.deepEqual(vitest, { kind: 'test', runId: 'run-vitest', test: 'networks are isolated', error: 'assertion failure' });
+
+    // fire#482 (imp_2611200843_482): Playwright list reporter, first failure header and summary.
+    const pwOutput = [
+        '  1) [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar ───────',
+        '',
+        '    Error: expect(locator).toBeVisible() failed',
+        '',
+        '  2 failed',
+        '    [chromium] › tests/e2e-ui/dashboard-layout.spec.js:623:5 › Summary bar › shows only the bar',
+        '  5 passed (42.8s)',
+    ].join('\n');
+    assert.deepEqual(extractFailureDiagnostic(pwOutput, 'run-pw'), {
+        kind: 'test', runId: 'run-pw', test: 'Summary bar › shows only the bar', error: 'assertion failure',
+    });
+    const summaryOnly = extractFailureDiagnostic('  1 failed\n    [webkit] › e2e/x.spec.ts:9:3 › loads', 'run-pw2');
+    assert.deepEqual(summaryOnly, { kind: 'test', runId: 'run-pw2', test: 'loads', error: 'test failure' });
+
+    // Passed Playwright lines are not failures.
+    const passed = extractFailureDiagnostic('  ✓  1 [chromium] › e2e/x.spec.ts:9:3 › loads (1.2s)\n  1 passed', 'run-pw3');
+    assert.equal(passed.kind, 'unknown');
+});
+
 test('formatFailureDiagnostic keeps raw HTML and mentions inert', () => {
     const output = formatFailureDiagnostic({
         kind: 'test',
