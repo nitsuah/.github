@@ -307,3 +307,47 @@ export function sweepCandidates(prs = [], { skipRepos = BUGBOT_DEFAULTS.skipRepo
 export function reviewsInLastDay(events = [], prUrl, now = Date.now()) {
     return events.filter((e) => e && e.event === 'bugbot-review' && !e.dryRun && e.pr === prUrl && now - ts(e.at) < 24 * 3600_000).length;
 }
+
+const prName = (url = '') => {
+    const m = String(url).match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
+    return m ? `${m[1]}#${m[2]}` : String(url);
+};
+
+/**
+ * What the status line shows for bugbot, from bugbot.jsonl events only (no network).
+ * `blocked` lists PRs whose latest bugbot verdict on a head asks for changes (or was partial)
+ * and was not cleared since.
+ */
+export function bugbotSummary(events = [], now = Date.now(), { open = null } = {}) {
+    const day = events.filter((e) => e && !e.dryRun && now - ts(e.at) < 24 * 3600_000);
+    const reviews = day.filter((e) => e.event === 'bugbot-review');
+    const threads = day.filter((e) => e.event === 'bugbot-thread');
+    const latest = new Map(); // pr -> { verdict, partial, sha, at, counts }
+    for (const e of day) {
+        if (e.event === 'bugbot-review') latest.set(e.pr, { verdict: e.verdict, partial: !!e.partial, sha: e.sha, at: e.at, counts: e.counts || {} });
+        if (e.event === 'bugbot-verdict-cleared' && latest.get(e.pr)?.sha === e.sha) latest.set(e.pr, { ...latest.get(e.pr), verdict: 'comment', partial: false });
+    }
+    const blocked = [...latest.entries()]
+        .filter(([pr, v]) => (v.verdict === 'request_changes' || v.partial) && (!open || open.has(pr)))
+        .map(([pr, v]) => ({ pr: prName(pr), why: v.partial ? 'partial' : `${(v.counts.blocker || 0) + (v.counts.major || 0)} blocking` }));
+    // A sweep heartbeat is not activity: it only shows bugbot is alive.
+    const last = events.filter((e) => e && !e.dryRun && /^bugbot-/.test(e.event || '') && e.event !== 'bugbot-sweep').reduce((t, e) => Math.max(t, ts(e.at)), 0);
+    const lastSweep = events.filter((e) => e && e.event === 'bugbot-sweep').reduce((t, e) => Math.max(t, ts(e.at)), 0);
+    return {
+        reviews: reviews.length,
+        changes: reviews.filter((e) => e.verdict === 'request_changes').length,
+        passed: reviews.filter((e) => e.verdict !== 'request_changes' && !e.partial).length,
+        partial: reviews.filter((e) => e.partial).length,
+        accepted: threads.filter((e) => e.decision === 'accept').length,
+        kept: threads.filter((e) => e.decision === 'keep').length,
+        lifted: day.filter((e) => e.event === 'bugbot-dismiss').length,
+        errorsLastHour: events.filter((e) => e && e.event === 'bugbot-error' && now - ts(e.at) < 3600_000).length,
+        blocked,
+        lastAt: last || null,
+        lastSweepAt: lastSweep || null,
+        lastReview: reviews.length ? { pr: prName(reviews[reviews.length - 1].pr), verdict: reviews[reviews.length - 1].verdict } : null,
+    };
+}
+
+/** Full rows while something is happening or blocked; otherwise the dim idle line. */
+export const bugbotActive = (s, now = Date.now()) => !!s && (s.blocked.length > 0 || s.errorsLastHour > 0 || (s.lastAt && now - s.lastAt < 30 * 60_000));

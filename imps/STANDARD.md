@@ -375,6 +375,8 @@ Per PR, each tick, decided by the pure functions in `bugbot-lib.mjs`:
 
 **The review gate for merging** (`reviewGate`, `node imps/bugbot.mjs status <owner/repo#n>` prints it and exits 0 only when it passes): checks green, no open thread, and either CodeRabbit approved the head or, while CodeRabbit is stalled, bugbot passed the head. This is the "clean independent review" the hypervisor and swarm require before merging a non-imp PR; imp PRs keep demonguard's rules and gain bugbot's threads on top.
 
+**In the status line** (`statusline.mjs`, read-only from `bugbot.jsonl`): one dim `○ bugbot idle · 24h N reviews · N lifted · last … · swept …` line when quiet, or full rows while it is busy, blocks a PR or erred in the last hour: `● bugbot · 24h N reviews · N ⛔ · N ✓ · N partial · threads N✓ N✗ · N CodeRabbit blocks lifted`, then `✗ repo#n 2 blocking │ repo#n partial`. Each sweep logs a `bugbot-sweep` heartbeat and writes `~/.imps/bugbot-open.json` so the line only lists PRs still open.
+
 Events go to `~/.imps/bugbot.jsonl` (`bugbot-review` with verdict, counts, inline count, served model and tokens; `bugbot-dismiss`; `bugbot-skip`; `bugbot-error`). Kill switch: `IMPS_BUGBOT=0`. By hand: `node imps/bugbot.mjs review <owner/repo#n> [--force] [--dry-run]` (`--force` reviews even when CodeRabbit is not stalled), `node imps/bugbot.mjs sweep --dry-run`.
 
 ## One retry with the failing output
