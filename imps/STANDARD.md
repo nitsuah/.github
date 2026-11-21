@@ -346,6 +346,35 @@ Before commit recovery and before its verification, the runner deletes untracked
 
 Each tick logs one `demonguard` event with the counts. It never uses `--admin`. Kill switch: `IMPS_DEMONGUARD=0`; manual: `node imps/demonguard.mjs --dry-run`.
 
+## Bugbot (fallback review when CodeRabbit stalls)
+
+CodeRabbit is the primary reviewer on every PR. Its free tier runs out often (review quota, hourly chat limit), and a PR then waits an hour or more with nothing reviewing its latest commit (2026-11-21: most of a day's swarm wait was this). `bugbot.mjs` runs on every dispatch tick, after demonguard, over **every open PR in the owner's repos** (imp, swarm and human PRs alike; not drafts, not bot-authored, not `security-program`/`9router`, not labelled `bugbot:skip`).
+
+**It only reviews.** It never edits code, pushes or merges. Fixing stays with the PR's owner: on an imp PR the fix-sweep takes the threads one by one (fix, pushback or skip, `FIX.md`); on any other PR the hypervisor answers them the same way it answers CodeRabbit.
+
+Per PR, each tick, decided by the pure functions in `bugbot-lib.mjs`:
+
+| CodeRabbit on the head commit (`codeRabbitStatus`) | Bugbot |
+| --- | --- |
+| `reviewed`: it reviewed this exact commit, or says it already did | nothing; CodeRabbit is working |
+| `working`: its check is still pending (under 45 min) | nothing yet |
+| `waiting`: the head is younger than the grace period (20 min) | nothing yet |
+| `rate-limited`: its latest note after the push is a rate-limit / review-limit / paused notice | reviews now |
+| `silent`: no review of the head after the grace period | reviews |
+| `absent`: CodeRabbit never touched the PR | reviews |
+
+**The review:** one 9router completion with `BUGBOT.md` (adversarial: bugs, security, tests a wrong implementation would still pass, broken callers, leftovers), the PR description, its linked issues and the diff, answering in `REVIEW.md`'s JSON. The verdict is recomputed by `parseReview` (any blocker or major means `request_changes`). Findings above nit that point at a line in the diff are posted as **inline review threads**, like CodeRabbit's; the rest go in the summary. The summary carries `<!-- bugbot sha=<head> verdict=<v> -->`, and a **`bugbot` commit status** goes on the head: failure for `request_changes`, success otherwise. The threads carry no `<!-- imp-` marker, so the fix round picks them up as feedback. One review per head commit; a new push gets a new review if CodeRabbit is still stalled. Limits: 2 reviews per sweep, 6 per PR per 24 h (`~/.imps/config.json` → `bugbot`: `graceMinutes`, `pendingMaxMinutes`, `maxPerSweep`, `perPrPerDay`, `skipRepos`, `skipLabel`).
+
+**Lifting CodeRabbit's block** (`shouldDismissCodeRabbit`): CodeRabbit's last `CHANGES_REQUESTED` is dismissed through the API only when all of these hold. A working CodeRabbit is never overridden.
+- CodeRabbit is stalled on the head (`rate-limited`, `silent` or `absent`).
+- Bugbot reviewed that exact head and did not request changes.
+- No review thread is open (bugbot's, CodeRabbit's or anyone's).
+- Every check is green (bugbot's own status and CodeRabbit's check are left out).
+
+**The review gate for merging** (`reviewGate`, `node imps/bugbot.mjs status <owner/repo#n>` prints it and exits 0 only when it passes): checks green, no open thread, and either CodeRabbit approved the head or, while CodeRabbit is stalled, bugbot passed the head. This is the "clean independent review" the hypervisor and swarm require before merging a non-imp PR; imp PRs keep demonguard's rules and gain bugbot's threads on top.
+
+Events go to `~/.imps/bugbot.jsonl` (`bugbot-review` with verdict, counts, inline count, served model and tokens; `bugbot-dismiss`; `bugbot-skip`; `bugbot-error`). Kill switch: `IMPS_BUGBOT=0`. By hand: `node imps/bugbot.mjs review <owner/repo#n> [--force] [--dry-run]` (`--force` reviews even when CodeRabbit is not stalled), `node imps/bugbot.mjs sweep --dry-run`.
+
 ## One retry with the failing output
 
 A first gate failure used to end the attempt and wait for a human re-brief, even though the gate now records the exact test or lint output. When a run fails only on `tests exit N`, `lint exit N` and/or `edits left uncommitted` and that output was recorded, the dispatcher puts the issue back on `imp:ready` once (`retry-feedback` event) and the second attempt's brief gets a "Previous attempt failed" block with that output, framed as data, fenced, redacted and capped. Scope, trailer, size and "did nothing" failures are not retried. The per-issue attempt cap (2) and the daily cap still bound it. Kill switch: `IMPS_RETRY_FEEDBACK=0`.

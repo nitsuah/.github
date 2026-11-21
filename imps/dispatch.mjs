@@ -708,6 +708,19 @@ if (!overflow) {
         }
     }
 
+    // bugbot: the fallback reviewer for every open PR (not just imp ones) whose head CodeRabbit cannot review
+    // (rate-limited, silent past the grace period, or absent). It posts inline threads and a `bugbot` status,
+    // never edits code, and lifts CodeRabbit's stale block only once its own review passed with every thread
+    // resolved and checks green. A PR CodeRabbit is handling costs only gh calls. Kill switch: IMPS_BUGBOT=0.
+    if (process.env.IMPS_BUGBOT !== '0' && !dry) {
+        try {
+            const bb = await node(['bugbot', 'sweep'], 'bugbot.mjs');
+            if (bb.code) log({ event: 'bugbot-error', code: bb.code, out: String(bb.out || '').slice(-300) });
+        } catch (e) {
+            log({ event: 'bugbot-error', error: String(e.message).slice(0, 200) });
+        }
+    }
+
     // Release stale imp:working claims whose heartbeat is older than 90 min (#69).
     for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
         const slug = `${o.owner}/${w.repository.name}`;

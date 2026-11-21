@@ -1,0 +1,165 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+    codeRabbitStatus, parseBugbotMarker, bugbotVerdictFor, rightSideLines, buildBugbotReview,
+    shouldDismissCodeRabbit, reviewGate, sweepCandidates, reviewsInLastDay, CR_STALL_TEXT,
+} from './bugbot-lib.mjs';
+
+const HEAD = 'a'.repeat(40);
+const NOW = Date.parse('2026-11-21T12:00:00Z');
+const minsAgo = (m) => new Date(NOW - m * 60_000).toISOString();
+
+test('codeRabbitStatus: a CodeRabbit review of the head means it is working', () => {
+    const s = codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(60), now: NOW, reviews: [{ author: 'coderabbitai[bot]', commit: HEAD, state: 'COMMENTED' }] });
+    assert.equal(s.state, 'reviewed');
+    assert.equal(s.stalled, false);
+});
+
+test('codeRabbitStatus: a review of an older commit does not count for the head', () => {
+    const s = codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(60), now: NOW, reviews: [{ author: 'coderabbitai', commit: 'b'.repeat(40), state: 'CHANGES_REQUESTED' }] });
+    assert.equal(s.state, 'silent');
+    assert.equal(s.stalled, true);
+});
+
+test('codeRabbitStatus: its rate-limit notices after the head mean stalled at once', () => {
+    for (const body of [
+        'Review rate limited.',
+        '## Review limit reached\nYou\'ve used all free OSS reviews for now.',
+        '### Rate Limit Exceeded\n@nitsuah have exceeded the limit for the number of chat messages per hour.',
+        '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->',
+    ]) {
+        const s = codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(2), now: NOW, comments: [{ author: 'coderabbitai', createdAt: minsAgo(1), body }] });
+        assert.equal(s.state, 'rate-limited', body);
+        assert.equal(s.stalled, true);
+    }
+});
+
+test('codeRabbitStatus: a rate-limit notice from before the head push does not count', () => {
+    const s = codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(5), now: NOW, comments: [{ author: 'coderabbitai', createdAt: minsAgo(30), body: 'Review rate limited.' }] });
+    assert.equal(s.state, 'waiting');
+    assert.equal(s.stalled, false);
+});
+
+test('codeRabbitStatus: a pending CodeRabbit check gets time, then counts as stalled', () => {
+    const checks = [{ name: 'CodeRabbit', state: 'PENDING' }];
+    assert.equal(codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(30), now: NOW, checks }).state, 'working');
+    assert.equal(codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(90), now: NOW, checks }).state, 'silent');
+});
+
+test('codeRabbitStatus: grace period, then silent; never-present CodeRabbit is absent', () => {
+    const touched = [{ author: 'coderabbitai', createdAt: minsAgo(200), body: 'Walkthrough …' }];
+    assert.equal(codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(5), now: NOW, comments: touched }).state, 'waiting');
+    assert.equal(codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(25), now: NOW, comments: touched }).state, 'silent');
+    assert.equal(codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(25), now: NOW }).state, 'absent');
+});
+
+test('codeRabbitStatus: "already reviewed the last commit" means reviewed', () => {
+    const s = codeRabbitStatus({ headSha: HEAD, headAt: minsAgo(40), now: NOW, comments: [{ author: 'coderabbitai', createdAt: minsAgo(1), body: 'Already reviewed the last commit.' }] });
+    assert.equal(s.state, 'reviewed');
+});
+
+test('CR_STALL_TEXT does not match an ordinary review', () => {
+    assert.equal(CR_STALL_TEXT.test('Actionable comments posted: 3'), false);
+});
+
+test('parseBugbotMarker / bugbotVerdictFor pick the latest verdict for the exact head', () => {
+    assert.deepEqual(parseBugbotMarker(`<!-- bugbot sha=${HEAD} verdict=approve -->\nbody`), { sha: HEAD, verdict: 'approve' });
+    assert.equal(parseBugbotMarker('<!-- imp-review -->'), null);
+    const reviews = [
+        { body: `<!-- bugbot sha=${HEAD} verdict=request_changes -->`, submittedAt: minsAgo(30), url: 'u1' },
+        { body: `<!-- bugbot sha=${'b'.repeat(40)} verdict=approve -->`, submittedAt: minsAgo(20), url: 'u2' },
+        { body: `<!-- bugbot sha=${HEAD} verdict=approve -->`, submittedAt: minsAgo(10), url: 'u3' },
+    ];
+    assert.deepEqual(bugbotVerdictFor(reviews, HEAD), { sha: HEAD, verdict: 'approve', url: 'u3' });
+    assert.equal(bugbotVerdictFor(reviews, 'c'.repeat(40)), null);
+});
+
+const DIFF = [
+    'diff --git a/src/a.js b/src/a.js',
+    'index 1..2 100644',
+    '--- a/src/a.js',
+    '+++ b/src/a.js',
+    '@@ -10,4 +10,5 @@ function x() {',
+    ' keep10',
+    '-old11',
+    '+new11',
+    '+new12',
+    ' keep13',
+    '\\ No newline at end of file',
+    'diff --git a/gone.js b/gone.js',
+    '--- a/gone.js',
+    '+++ /dev/null',
+    '@@ -1,1 +0,0 @@',
+    '-x',
+].join('\n');
+
+test('rightSideLines maps the new-side lines of each hunk and skips deleted files', () => {
+    const m = rightSideLines(DIFF);
+    assert.deepEqual([...m.get('src/a.js')], [10, 11, 12, 13]);
+    assert.equal(m.has('gone.js'), false);
+});
+
+test('buildBugbotReview: inline threads only on diff lines, no imp- marker, nits summarised', () => {
+    const rv = {
+        verdict: 'request_changes', summary: 'S',
+        findings: [
+            { severity: 'major', file: 'src/a.js', line: 11, title: 'Off by one', detail: 'D1' },
+            { severity: 'minor', file: 'src/a.js', line: 99, title: 'Outside diff', detail: 'D2' },
+            { severity: 'nit', file: 'src/a.js', line: 12, title: 'Naming', detail: '' },
+        ],
+    };
+    const out = buildBugbotReview(rv, { diff: DIFF, headSha: HEAD, reason: 'rate-limited' });
+    assert.equal(out.comments.length, 1);
+    assert.deepEqual({ path: out.comments[0].path, line: out.comments[0].line, side: out.comments[0].side }, { path: 'src/a.js', line: 11, side: 'RIGHT' });
+    assert.doesNotMatch(out.comments[0].body, /<!-- imp-/);
+    assert.match(out.body, new RegExp(`<!-- bugbot sha=${HEAD} verdict=request_changes -->`));
+    assert.match(out.body, /Outside diff/);
+    assert.match(out.body, /Nits: Naming/);
+    assert.equal(out.statusState, 'failure');
+    assert.equal(buildBugbotReview({ verdict: 'approve', findings: [] }, { diff: DIFF, headSha: HEAD }).statusState, 'success');
+});
+
+test('shouldDismissCodeRabbit: only when stalled, bugbot passed the head, no threads, green', () => {
+    const base = { crLatestState: 'CHANGES_REQUESTED', crStatus: { state: 'rate-limited', stalled: true }, bugbot: { verdict: 'approve' }, openThreads: 0, checksGreen: true };
+    assert.equal(shouldDismissCodeRabbit(base).ok, true);
+    assert.equal(shouldDismissCodeRabbit({ ...base, crStatus: { state: 'reviewed', stalled: false } }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, crStatus: { state: 'working', stalled: false } }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, bugbot: null }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, bugbot: { verdict: 'request_changes' } }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, openThreads: 1 }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, checksGreen: false }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ ...base, crLatestState: 'APPROVED' }).ok, false);
+});
+
+test('reviewGate: CodeRabbit approval, or bugbot pass while CodeRabbit is stalled', () => {
+    assert.equal(reviewGate({ crApprovedHead: true, checksGreen: true }).ok, true);
+    assert.equal(reviewGate({ crApprovedHead: true, checksGreen: false }).ok, false);
+    assert.equal(reviewGate({ crApprovedHead: true, checksGreen: true, openThreads: 2 }).ok, false);
+    assert.equal(reviewGate({ crStatus: { state: 'silent', stalled: true }, bugbot: { verdict: 'comment' }, checksGreen: true }).ok, true);
+    assert.equal(reviewGate({ crStatus: { state: 'silent', stalled: true }, bugbot: { verdict: 'request_changes' }, checksGreen: true }).ok, false);
+    assert.equal(reviewGate({ crStatus: { state: 'silent', stalled: true }, checksGreen: true }).ok, false);
+    // a working CodeRabbit is waited for, even with a bugbot pass on record
+    assert.equal(reviewGate({ crStatus: { state: 'working', stalled: false }, bugbot: { verdict: 'approve' }, checksGreen: true }).ok, false);
+});
+
+test('sweepCandidates drops drafts, bot authors, skipped repos and skip-labelled PRs', () => {
+    const prs = [
+        { number: 1, repository: { name: 'fire' }, author: { login: 'nitsuah' }, labels: [] },
+        { number: 2, repository: { name: 'fire' }, author: { login: 'nitsuah' }, isDraft: true, labels: [] },
+        { number: 3, repository: { name: 'fire' }, author: { login: 'app/dependabot' }, labels: [] },
+        { number: 4, repository: { name: 'security-program' }, author: { login: 'nitsuah' }, labels: [] },
+        { number: 5, repository: { name: 'vhs' }, author: { login: 'nitsuah' }, labels: [{ name: 'bugbot:skip' }] },
+    ];
+    assert.deepEqual(sweepCandidates(prs).map((p) => p.number), [1]);
+});
+
+test('reviewsInLastDay counts only this PR in the last 24 h', () => {
+    const ev = [
+        { event: 'bugbot-review', pr: 'p1', at: minsAgo(60) },
+        { event: 'bugbot-review', pr: 'p1', at: minsAgo(25 * 60) },
+        { event: 'bugbot-review', pr: 'p2', at: minsAgo(60) },
+        { event: 'bugbot-skip', pr: 'p1', at: minsAgo(10) },
+        { event: 'bugbot-review', pr: 'p1', at: minsAgo(5), dryRun: true },
+    ];
+    assert.equal(reviewsInLastDay(ev, 'p1', NOW), 1);
+});
