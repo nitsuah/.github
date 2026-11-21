@@ -429,6 +429,10 @@ async function main() {
     if (cmd !== 'sweep') throw new Error(`unknown command ${cmd}`);
     const prs = sweepCandidates(ghJson(['search', 'prs', '--owner', owner, '--state', 'open', '--limit', '100',
         '--json', 'number,repository,author,labels,isDraft,url']), { skipRepos: C.skipRepos, skipLabel: C.skipLabel });
+    // For the status line, which never calls GitHub: which PRs are still open as of this sweep.
+    try {
+        writeFileSync(join(HOME, 'bugbot-open.json'), JSON.stringify({ at: new Date().toISOString(), prs: prs.map((p) => p.url) }));
+    } catch { /* best effort */ }
     const budget = { left: Number(o.max ?? C.maxPerSweep) };
     const results = [];
     for (const p of prs) {
@@ -439,6 +443,8 @@ async function main() {
         }
     }
     const acted = results.filter((r) => !['wait', 'none', 'reviewed'].includes(r.action));
+    // Heartbeat for the status line, even when nothing needed doing.
+    log({ event: 'bugbot-sweep', prs: prs.length, acted: acted.length });
     console.log(`bugbot sweep: ${prs.length} PR(s), ${acted.length} acted${acted.length ? `: ${acted.map((r) => `${r.pr} ${r.action}`).join('; ')}` : ''}`);
 }
 
