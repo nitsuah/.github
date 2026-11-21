@@ -25,7 +25,7 @@ import { HOME, sh, chat } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
-    ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict,
+    ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -387,6 +387,18 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         if (!done) return { pr: pr.url, action: 'review-failed' };
         if (o['dry-run']) return { pr: pr.url, action: 'reviewed', verdict: done.verdict };
         a = assess(loadPr(slug, number));
+    }
+    // CodeRabbit reviewed the head and only its stale block remains: ask it to approve, once per head.
+    const ask = shouldAskCodeRabbitApproval({
+        crStatus: a.crStatus, crLatestState: pr.crLatestState, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
+        headSha: pr.headSha, comments: pr.comments, isImpPr: pr.labels.some((l) => (l.name || l) === 'imp'),
+    });
+    if (ask.ok) {
+        if (!o['dry-run']) {
+            const res = gh(['pr', 'comment', String(pr.number), '-R', pr.slug, '--body', `@coderabbitai approve\n\n${APPROVE_ASK_MARK(pr.headSha)}`]);
+            log({ event: res.code ? 'bugbot-error' : 'bugbot-approve-ask', pr: pr.url, sha: pr.headSha, error: res.code ? res.err.slice(0, 200) : undefined });
+        }
+        return { pr: pr.url, action: 'asked-coderabbit-approve', gate: a.gate };
     }
     if (a.dismiss.ok) {
         dismissCodeRabbit(pr, a.crStatus.state);

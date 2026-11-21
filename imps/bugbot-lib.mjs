@@ -351,3 +351,20 @@ export function bugbotSummary(events = [], now = Date.now(), { open = null } = {
 
 /** Full rows while something is happening or blocked; otherwise the dim idle line. */
 export const bugbotActive = (s, now = Date.now()) => !!s && (s.blocked.length > 0 || s.errorsLastHour > 0 || (s.lastAt && now - s.lastAt < 30 * 60_000));
+
+// Hidden after the command, so CodeRabbit still parses `@coderabbitai approve` and bugbot can see it asked.
+export const APPROVE_ASK_MARK = (sha) => `<!-- bugbot-approve-ask sha=${sha} -->`;
+
+/**
+ * CodeRabbit reviewed the head and its old CHANGES_REQUESTED is the only thing left: ask it once per head
+ * to approve. Imp PRs are left to the fix round, which already does this for them.
+ */
+export function shouldAskCodeRabbitApproval({ crStatus, crLatestState, openThreads = 0, checksGreen = false, headSha, comments = [], isImpPr = false } = {}) {
+    if (isImpPr) return { ok: false, reason: 'imp PR: the fix round asks' };
+    if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
+    if (crStatus?.state !== 'reviewed') return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head` };
+    if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
+    if (!checksGreen) return { ok: false, reason: 'checks are not green' };
+    if (comments.some((c) => String(c.body || '').includes(APPROVE_ASK_MARK(headSha)))) return { ok: false, reason: 'already asked for this head' };
+    return { ok: true, reason: 'CodeRabbit reviewed the head, nothing is open and checks are green' };
+}
