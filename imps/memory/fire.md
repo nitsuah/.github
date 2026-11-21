@@ -1,2 +1,3 @@
 - `config/eslint.config.mjs` is not part of any fix: make the code pass lint instead. fire#483 edited it, and the runner threw the edit away.
 - Unit tests are `tests/unit/*.test.mjs`, run by vitest with `config/vitest.config.ts`; RUNTEST runs only the files the brief names.
+- Never sha256-hash a secret (e.g. `FIRE_API_KEY`, a bearer token) to compare it: CodeQL fails the PR with `js/insufficient-password-hash` (high), as on fire#542. Compare raw buffers with a length check first: `const a = Buffer.from(token), b = Buffer.from(key); if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) → 401` (the pattern in `app/routes/sync.js`).
