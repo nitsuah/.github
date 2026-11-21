@@ -1,2 +1,6 @@
 - Playwright specs in `tests_playwright/` mock `/api/*` with `page.route` and serve the app with `tests/journeys/serve.js`. A tape fixture with `photo_face` or `photo_spine` set pins that photo and hides its "Find artwork" button (vhs#169 spent turns on this).
 - Journey screenshot baselines are not imp work: never regenerate or edit `*.png` snapshots.
+- 6 of 12 recent runs here ended with work not committed. Commit (rule 5) as soon as RUNTEST passes; uncommitted work is lost.
+- 6 runs here hit the turn cap or went 20+ tool calls without an edit. Open the file "The fix" names first and make the edit within the first few turns.
+- Commands were denied 21 times recently: one allowed command per Bash call; tests only through RUNTEST.
+- 4 tool calls hit missing paths: use repo-relative forward-slash paths and Glob before Read when unsure.
