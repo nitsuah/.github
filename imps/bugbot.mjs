@@ -243,14 +243,16 @@ async function answerThreads(pr, budget) {
 }
 
 /** HTML comments out (repeated until stable, then any stray opener or closer), for prompt text. */
+/**
+ * Thread text for the judge prompt. It only goes to the model, never to HTML, so instead of parsing HTML
+ * comments (CodeQL flags every regex attempt as incomplete) it drops the markers bugbot and the imps add
+ * and then every remaining angle bracket.
+ */
 function stripComments(text = '') {
-    let out = String(text);
-    let prev;
-    do {
-        prev = out;
-        out = out.replace(/<!--[\s\S]*?-->/g, '');
-    } while (out !== prev);
-    return out.replace(/<!--|-->/g, '').trim();
+    return String(text)
+        .split(THREAD_MARK).join('')
+        .replace(/[<>]/g, '')
+        .trim();
 }
 
 /**
@@ -323,6 +325,12 @@ async function main() {
         const a = assess(pr);
         console.log(JSON.stringify({ pr: pr.url, head: pr.headSha, coderabbit: a.crStatus, bugbot: a.bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen, gate: a.gate, dismissCodeRabbit: a.dismiss }, null, 2));
         process.exit(a.gate.ok ? 0 : 3);
+    }
+    // Without its own identity bugbot cannot tell its reviews from pasted markers, so none would ever count:
+    // stop loudly instead of posting reviews that can never pass the gate.
+    if (!trustedAuthors().length) {
+        log({ event: 'bugbot-error', error: 'cannot identify the gh account (gh api user failed) and no bugbot.trustedAuthors set' });
+        process.exit(2);
     }
     if (cmd === 'review') {
         const [slug, n] = parseTarget(target);
