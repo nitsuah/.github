@@ -1791,3 +1791,32 @@ export function agentNotes(file, fallback = '') {
     const text = result || texts.join('\n') || String(fallback || '');
     return text.slice(-6000);
 }
+
+/**
+ * Fold OpenAI-style server-sent events into a chat result. `buffer` is the text
+ * received so far; returns the updated state and the unfinished tail to keep.
+ * Pure, so `chat({ stream: true })` can be tested without a network.
+ */
+export function foldChatStream(state, buffer) {
+    const next = { content: '', finish: null, model: null, usage: null, ...state };
+    const lines = String(buffer).split('\n');
+    const rest = lines.pop(); // possibly a partial line
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        let ev;
+        try {
+            ev = JSON.parse(data);
+        } catch {
+            continue;
+        }
+        const choice = ev.choices?.[0];
+        if (choice?.delta?.content) next.content += choice.delta.content;
+        if (choice?.finish_reason) next.finish = choice.finish_reason;
+        if (ev.model) next.model = ev.model;
+        if (ev.usage) next.usage = ev.usage;
+    }
+    return { state: next, rest };
+}

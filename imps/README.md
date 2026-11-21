@@ -94,6 +94,10 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
                                          │
                                     earned trust + every check green? → squash merge
                                          else leave open
+                                         │
+                                    demonguard (lingering imp PRs) → bugbot (any PR CodeRabbit
+                                    can't review: inline threads + `bugbot` status; lifts CodeRabbit's
+                                    stale block only after its own review passed)
 ```
 
 | Signal | Behaviour |
