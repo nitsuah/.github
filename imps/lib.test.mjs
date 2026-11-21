@@ -2038,3 +2038,21 @@ test('gate exempts human-only paths from scope but not from deny (fire#527)', ()
     // A human commit to a denied path still fails the gate.
     assert.ok(gate({ ...base, numstat: numstat + '\n1\t0\tpackage-lock.json', humanOnlyPaths: [...humanOnly, 'package-lock.json'] }).reasons.includes('denied path package-lock.json'));
 });
+
+test('foldChatStream accumulates deltas across chunk boundaries and keeps usage and model', async () => {
+    const { foldChatStream } = await import('./lib.mjs');
+    const ev = (o) => `data: ${JSON.stringify(o)}\n`;
+    const all = ev({ model: 'm1', choices: [{ delta: { content: 'Hel' } }] }) + ev({ choices: [{ delta: { content: 'lo' } }] })
+        + ev({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + ev({ usage: { prompt_tokens: 5, completion_tokens: 2 }, choices: [] }) + 'data: [DONE]\n';
+    // split mid-line to prove partial lines are carried over
+    let state = {};
+    let rest = '';
+    for (const piece of [all.slice(0, 17), all.slice(17, 60), all.slice(60)]) {
+        ({ state, rest } = foldChatStream(state, rest + piece));
+    }
+    assert.equal(state.content, 'Hello');
+    assert.equal(state.finish, 'stop');
+    assert.equal(state.model, 'm1');
+    assert.deepEqual(state.usage, { prompt_tokens: 5, completion_tokens: 2 });
+    assert.equal(rest, '');
+});

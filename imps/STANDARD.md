@@ -241,7 +241,7 @@ So the reviewer judges *meaning*: does it fix the issue, does it break callers, 
 2. **Filter the noise** (`feedbackItems`, tested): bot summaries, "review skipped" and rate-limit notices, deploy previews and Netlify's deploy checks, confirmations, and anything carrying an `<!-- imp-` marker (our own replies) never become items. **No items means no model runs.**
 3. **Clear a stale CodeRabbit block:** if CodeRabbit's old `CHANGES_REQUESTED` is the only blocker, CI is green and every thread is resolved, post `@coderabbitai approve` once (`shouldAskCodeRabbitApprove`).
 4. **Otherwise the imp decides each item** using `FIX.md`: **fix** (small and in scope), **pushback** (wrong, with evidence), or **skip** (right but out of scope; make it its own issue). It works in the PR's own worktree, fast-forwarded to the PR branch first. Then the gate runs again with `--slack 30` extra lines. Only the imp's own commits need the imp trailer, so a fix pushed by a human or the hypervisor doesn't fail it.
-5. **Gate passes:** push to the PR branch, reply on every thread (`<!-- imp-fix -->`), and resolve the fixed and skipped threads. Pushback threads stay open for the reviewer to answer. **Gate fails:** reset the worktree, label `imp:needs-human`, and comment the reasons.
+5. **Gate passes:** push to the PR branch, reply on every thread (`<!-- imp-fix -->`), and resolve the fixed and skipped threads. Pushback threads stay open for the reviewer to answer (bugbot answers its own; see § Bugbot). **Gate fails:** reset the worktree, label `imp:needs-human`, and comment the reasons.
 6. **After 2 rounds, or on a merge conflict:** label `imp:needs-human` and do nothing else.
 
 Every round is appended to the run's `fixes[]` in the ledger: items, decisions with replies, gate result, turns, tokens and served model. **That's the training data for 9router's comment judgment.** The hypervisor reads the decisions, overrides any it disagrees with (by replying on the thread), and turns recurring misjudgements into `FIX.md` lines, the same RSI loop as `PREAMBLE.md` and `REVIEW.md`.
@@ -345,6 +345,37 @@ Before commit recovery and before its verification, the runner deletes untracked
 | `wait` / `wait-fix` | too young (< 30 min), checks pending, or the fix-sweep is on it | nothing |
 
 Each tick logs one `demonguard` event with the counts. It never uses `--admin`. Kill switch: `IMPS_DEMONGUARD=0`; manual: `node imps/demonguard.mjs --dry-run`.
+
+## Bugbot (fallback review when CodeRabbit stalls)
+
+CodeRabbit is the primary reviewer on every PR. Its free tier runs out often (review quota, hourly chat limit), and a PR then waits an hour or more with nothing reviewing its latest commit (2026-11-21: most of a day's swarm wait was this). `bugbot.mjs` runs on every dispatch tick, after demonguard, over **every open PR in the owner's repos** (imp, swarm and human PRs alike; not drafts, not bot-authored, not `security-program`/`9router`, not labelled `bugbot:skip`).
+
+**It only reviews.** It never edits code, pushes or merges. Fixing stays with the PR's owner: on an imp PR the fix-sweep takes the threads one by one (fix, pushback or skip, `FIX.md`); on any other PR the hypervisor answers them the same way it answers CodeRabbit.
+
+Per PR, each tick, decided by the pure functions in `bugbot-lib.mjs`:
+
+| CodeRabbit on the head commit (`codeRabbitStatus`) | Bugbot |
+| --- | --- |
+| `reviewed`: it reviewed this exact commit, or says it already did | nothing; CodeRabbit is working |
+| `working`: its check is still pending (under 45 min) | nothing yet |
+| `waiting`: the head is younger than the grace period (20 min) | nothing yet |
+| `rate-limited`: its latest note after the push is a rate-limit / review-limit / paused notice | reviews now |
+| `silent`: no review of the head after the grace period | reviews |
+| `absent`: CodeRabbit never touched the PR | reviews |
+
+**The review:** one streamed 9router completion (`chat({ stream: true })`: a non-streamed completion over 5 minutes dies on Node's 300 s headers timeout as `fetch failed`) with `BUGBOT.md` (adversarial: bugs, security, tests a wrong implementation would still pass, broken callers, leftovers), the PR description, its linked issues and the diff, answering in `REVIEW.md`'s JSON. The verdict is recomputed by `parseReview` (any blocker or major means `request_changes`). Findings above nit that point at a line in the diff are posted as **inline review threads**, like CodeRabbit's; the rest go in the summary. The summary carries `<!-- bugbot sha=<head> verdict=<v> -->`, and a **`bugbot` commit status** goes on the head: failure for `request_changes`, success otherwise. The threads carry no `<!-- imp-` marker, so the fix round picks them up as feedback. One review per head commit; a new push gets a new review if CodeRabbit is still stalled. **Guards (from CodeRabbit's review of #320):** a marker only counts on a review written by the bugbot account (the `gh` user, plus `bugbot.trustedAuthors`) and submitted on the head commit, so a pasted marker cannot pass the gate. A diff over 60 KB is reviewed but marked `scope=partial`, and its status stays failure, so a truncated review never counts as a pass. A failed `gh pr diff` posts nothing. Checks or threads beyond one page fail closed. A status write that failed is restored from the posted review on the next sweep. A running CodeRabbit check wins over any rate-limit notice. Dismissal touches only the CodeRabbit reviews the assessment saw (older commits), each re-read first. `status` exits non-zero when bugbot is disabled. Limits: 2 reviews per sweep, 6 per PR per 24 h (`~/.imps/config.json` → `bugbot`: `graceMinutes`, `pendingMaxMinutes`, `maxPerSweep`, `perPrPerDay`, `skipRepos`, `skipLabel`).
+
+**Answering replies on its own threads** (`threadsAwaitingBugbot`): each sweep, before any new review, bugbot reads its unresolved threads where someone else had the last word (a fix round's "Fixed in …" or "Pushing back", or a human). One small 9router judgement per thread, given the file's change between the finding's original commit and the head (where any claimed fix must be) plus its current diff, decides **accept** (reply and resolve: the fix is in, or the pushback holds) or **keep** (reply and leave it open). Its comments carry `<!-- bugbot-thread -->` so it knows its own last word; a pushback no longer waits for a human just because bugbot raised it. These judgements share the sweep's budget.
+
+**Lifting CodeRabbit's block** (`shouldDismissCodeRabbit`): CodeRabbit's last `CHANGES_REQUESTED` is dismissed through the API only when all of these hold. A working CodeRabbit is never overridden.
+- CodeRabbit is stalled on the head (`rate-limited`, `silent` or `absent`).
+- Bugbot reviewed that exact head and did not request changes.
+- No review thread is open (bugbot's, CodeRabbit's or anyone's).
+- Every check is green (bugbot's own status and CodeRabbit's check are left out).
+
+**The review gate for merging** (`reviewGate`, `node imps/bugbot.mjs status <owner/repo#n>` prints it and exits 0 only when it passes): checks green, no open thread, and either CodeRabbit approved the head or, while CodeRabbit is stalled, bugbot passed the head. This is the "clean independent review" the hypervisor and swarm require before merging a non-imp PR; imp PRs keep demonguard's rules and gain bugbot's threads on top.
+
+Events go to `~/.imps/bugbot.jsonl` (`bugbot-review` with verdict, counts, inline count, served model and tokens; `bugbot-dismiss`; `bugbot-skip`; `bugbot-error`). Kill switch: `IMPS_BUGBOT=0`. By hand: `node imps/bugbot.mjs review <owner/repo#n> [--force] [--dry-run]` (`--force` reviews even when CodeRabbit is not stalled), `node imps/bugbot.mjs sweep --dry-run`.
 
 ## One retry with the failing output
 

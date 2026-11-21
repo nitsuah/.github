@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { memorySection } from './memory.mjs';
-import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive } from './lib.mjs';
+import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive, foldChatStream } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -415,16 +415,32 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
 // One plain chat completion through 9router (OpenAI format): no agent loop, no tools, no
 // 30k-token session resent every turn. For read-only work whose whole input fits in one prompt
 // (reviews). Returns the same shape the review path reads from runClaude.
-export async function chat({ prompt, model = 'MAX', maxTokens = 6000, minutes = 6 }) {
+export async function chat({ prompt, model = 'MAX', maxTokens = 6000, minutes = 6, stream = false }) {
     const env = cleanEnv();
     const t0 = Date.now();
     try {
         const res = await fetch(`${env.ANTHROPIC_BASE_URL.replace(/\/$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.ANTHROPIC_API_KEY}` },
-            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream: false }),
+            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream, ...(stream ? { stream_options: { include_usage: true } } : {}) }),
             signal: AbortSignal.timeout(Number(minutes) * 60_000),
         });
+        // Streaming: headers arrive at once, so Node's 300 s headers timeout cannot kill a long completion
+        // (a 60 KB bugbot review took over 5 min and ended "fetch failed", 2026-11-21).
+        if (stream && res.ok && res.body) {
+            let state = {};
+            let rest = '';
+            const decoder = new TextDecoder();
+            for await (const chunk of res.body) ({ state, rest } = foldChatStream(state, rest + decoder.decode(chunk, { stream: true })));
+            ({ state } = foldChatStream(state, `${rest}\n`));
+            const u = state.usage || {};
+            return {
+                end: state.finish === 'length' ? 'length' : 'success',
+                finalText: state.content || '',
+                served: state.model ? [state.model] : [], turns: 1, toolErrors: 0, durationMs: Date.now() - t0,
+                tokens: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cacheRead: u.prompt_tokens_details?.cached_tokens || 0, cacheWrite: 0 },
+            };
+        }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) return { end: `http-${res.status}`, finalText: '', served: [], turns: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, durationMs: Date.now() - t0, toolErrors: 0 };
         const u = body.usage || {};
