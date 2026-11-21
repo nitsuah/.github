@@ -1192,6 +1192,8 @@ export function parseReview(text = '') {
 export const IMP_MARK = /<!-- imp-[a-z-]+ -->/;
 const botLogin = (login = '') => /\[bot\]$|^app\/|^(coderabbitai|netlify|dependabot|github-actions|copilot-pull-request-reviewer)$/i.test(login);
 const norm = (login = '') => login.replace(/\[bot\]$/, '').toLowerCase();
+// Feedback is acted on only from the same trusted logins as briefs (plus the review bots on threads).
+const reviewBot = (login = '') => /^(coderabbitai|copilot-pull-request-reviewer)$/.test(norm(login));
 
 // Turn a PR's raw state into the items a fix round should act on. Pure.
 //   threads: [{ id, isResolved, isOutdated, path, line, comments: [{ databaseId, author, body }] }]
@@ -1199,16 +1201,20 @@ const norm = (login = '') => login.replace(/\[bot\]$/, '').toLowerCase();
 //   checks: [{ name, state }]   impReview: the run's ledger review (or null)
 // Noise (bot summaries, skip/rate-limit notices, deploy previews, confirmations,
 // our own replies) never becomes an item: no model is woken for it.
-export function feedbackItems({ threads = [], comments = [], checks = [], impReview = null, since = null }) {
+export function feedbackItems({ threads = [], comments = [], checks = [], impReview = null, since = null, allowedAuthors = ['nitsuah'] }) {
     const items = [];
+    const trusted = new Set(allowedAuthors.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
+    const trustedThread = (login) => trusted.has(norm(login)) || reviewBot(login);
     for (const t of threads) {
         if (t.isResolved || t.isOutdated || !t.comments?.length) continue;
         const last = t.comments[t.comments.length - 1];
         if (IMP_MARK.test(last.body || '')) continue; // we answered it last; waiting on them
-        const first = t.comments[0];
+        const voices = t.comments.filter((c) => trustedThread(c.author));
+        if (!voices.length) continue;
+        const first = voices[0];
         items.push({
             kind: 'thread', id: t.id, commentId: first.databaseId, author: norm(first.author), path: t.path, line: t.line,
-            text: t.comments.map((c) => {
+            text: voices.map((c) => {
                 let cleaned = c.body || '';
                 let prev;
                 do { prev = cleaned; cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, ''); } while (cleaned !== prev);
@@ -1217,7 +1223,7 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
         });
     }
     for (const c of comments) {
-        if (botLogin(c.author) || IMP_MARK.test(c.body || '')) continue;
+        if (botLogin(c.author) || IMP_MARK.test(c.body || '') || !trusted.has(norm(c.author))) continue;
         if (since && c.createdAt <= since) continue;
         if (!(c.body || '').trim() || /^@coderabbitai\b/i.test(c.body.trim())) continue;
         items.push({ kind: 'comment', id: `c${c.id}`, author: norm(c.author), text: c.body.slice(0, 4000) });
