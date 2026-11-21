@@ -96,5 +96,5 @@ export const DRAFT_CHECKLIST = `Before writing "## The fix", check the files sho
 - If an element, id, class or block is removed or moved: whether CSS selects it by position (:first-child, :nth-child, :last-child) and which tests or journeys assert it; put those files in allow: and say how they change.
 - Which imports the new code needs, and that every package it imports is already a dependency in package.json (never add a dependency).
 - Which existing elements, exports or behaviours must stay unchanged, by name.
-- The test command must pass on the unchanged base except for the behaviour the issue changes.
+- The test command must pass on the unchanged base except for the behaviour the issue changes, and the lint command must exit 0 on the unchanged base and lint only files in allow:.
 - New or edited files end with a newline.`;
