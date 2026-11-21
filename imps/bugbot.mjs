@@ -132,8 +132,9 @@ let trusted = null;
 function trustedAuthors() {
     if (trusted) return trusted;
     const me = gh(['api', 'user', '--jq', '.login']);
-    trusted = [...(me.code ? [] : [me.out.trim()]), ...(C.trustedAuthors || [])].filter(Boolean);
-    return trusted;
+    const list = [...(me.code ? [] : [me.out.trim()]), ...(C.trustedAuthors || [])].filter(Boolean);
+    if (!me.code) trusted = list; // cache only a successful lookup, so a transient gh failure is retried
+    return list;
 }
 
 const statusDescription = (verdict, partial) => (partial ? 'Diff too large for a complete fallback review'
@@ -228,8 +229,15 @@ async function answerThreads(pr, budget) {
         const since = t.comments[0]?.originalCommit;
         let delta = '(could not compute the change since the finding)';
         if (since && since !== pr.headSha) {
-            const cmp = gh(['api', `repos/${pr.slug}/compare/${since}...${pr.headSha}`, '--jq', `.files[] | select(.filename == "${t.path}") | .patch`]);
-            if (!cmp.code) delta = cmp.out.trim() ? cmp.out.slice(0, 30_000) : '(no change to this file since the finding)';
+            // Filter in JS: a path with quotes or backslashes must never become part of a jq program.
+            const cmp = gh(['api', `repos/${pr.slug}/compare/${since}...${pr.headSha}`]);
+            if (!cmp.code) {
+                let patch = '';
+                try {
+                    patch = (JSON.parse(cmp.out).files || []).find((f) => f.filename === t.path)?.patch || '';
+                } catch { /* unreadable compare: keep the fallback text */ }
+                delta = patch.trim() ? patch.slice(0, 30_000) : '(no change to this file since the finding)';
+            }
         } else if (since === pr.headSha) delta = '(no new commit since the finding)';
         const conversation = t.comments.map((c) => `**${c.author}:** ${stripComments(c.body)}`).join('\n\n');
         const ask = `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## Changes to ${t.path} since the finding was posted (where a claimed fix must be)\n\n\`\`\`diff\n${delta}\n\`\`\`\n\n## The PR's current diff of ${t.path} (context, may be cut)\n\n\`\`\`diff\n${fileDiff}\n\`\`\``;
