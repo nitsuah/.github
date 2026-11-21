@@ -1743,9 +1743,12 @@ export function formatFailureDiagnostic(diag) {
 
 export function failureDiagnosticSummary(gate) {
     const parts = [];
+    // Ledger rows written before testExit was recorded carry the exit only on the step end
+    // (gate.testEnd.exitCode); an explicit null still means "not run".
+    const exitOf = (exit, end) => exit === undefined ? end?.exitCode : exit;
     const failedStep = (exit, end) => exit != null ? exit !== 0 : Boolean(end?.signal || end?.error);
-    const testDiag = failedStep(gate?.testExit, gate?.testEnd) ? gate?.testEnd?.diagnostic : null;
-    const lintDiag = failedStep(gate?.lintExit, gate?.lintEnd) ? gate?.lintEnd?.diagnostic : null;
+    const testDiag = failedStep(exitOf(gate?.testExit, gate?.testEnd), gate?.testEnd) ? gate?.testEnd?.diagnostic : null;
+    const lintDiag = failedStep(exitOf(gate?.lintExit, gate?.lintEnd), gate?.lintEnd) ? gate?.lintEnd?.diagnostic : null;
     if (testDiag?.kind === 'test') parts.push('test: ' + formatFailureDiagnostic(testDiag));
     if (lintDiag?.kind === 'lint') parts.push('lint: ' + formatFailureDiagnostic(lintDiag));
     if (!parts.length) return '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';

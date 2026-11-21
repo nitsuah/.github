@@ -535,7 +535,7 @@ async function runGate(id) {
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, (current) => ({
         ...(current.outcome === COMMIT_RECOVERY_FAILED ? { outcome: null } : {}),
-        gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
+        gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), testExit, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
     }));
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
     console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
