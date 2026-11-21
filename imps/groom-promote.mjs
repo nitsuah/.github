@@ -9,7 +9,7 @@
 import { BRIEF_MARK, parseBrief } from './lib.mjs';
 import { lintBrief as kitLint } from './brieflint.mjs';
 
-export const PROMOTE_INTRO = 'Groomed brief, auto-promoted to `imp:ready` (trusted author, Docker-only commands, no security terms). Remove `imp:ready` to stop it.';
+export const PROMOTE_INTRO = 'Groomed brief, auto-promoted to `imp:ready` (trusted author, Docker-only commands, no security label; security terms only from the owner). Remove `imp:ready` to stop it.';
 
 // Words that mean a person should read the brief before an imp runs it.
 // Matched on the issue title, body and labels, and on the brief itself.
@@ -55,7 +55,7 @@ export function sensitiveTerm(text) {
  * Decide whether a groomed brief may be promoted to imp:ready.
  * Returns { promote, reasons } where reasons lists every failed check (empty when promoted).
  */
-export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'] } = {}) {
+export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'], ownerKeywordHold = false } = {}) {
     const reasons = [];
     if (!enabled) reasons.push('auto-promote is off (config groomAutoPromote: false)');
     // The dispatcher only reads briefs posted by IMPS_BRIEF_AUTHORS; a brief from any other
@@ -70,10 +70,17 @@ export function promotionVerdict({ issue = {}, briefText = '', owner = '', trust
     const labels = (issue.labels || []).map((l) => String(l).toLowerCase());
     const badLabel = labels.find((l) => SENSITIVE_LABELS.has(l));
     if (badLabel) reasons.push(`label ${badLabel}`);
-    const issueTerm = sensitiveTerm(`${issue.title || ''}\n${issue.body || ''}\n${labels.join(' ')}`);
-    if (issueTerm) reasons.push(`issue mentions "${issueTerm}"`);
-    const briefTerm = sensitiveTerm(briefText);
-    if (briefTerm) reasons.push(`brief mentions "${briefTerm}"`);
+    // The owner chose to file this issue (and to leave off a `security` label), so security words in it
+    // or in its brief no longer hold it: 5 of 9 owner-filed QA issues sat held for "auth" or "privacy"
+    // (2026-11-21). Labels, untrusted authors and every command check still hold. Config
+    // groomOwnerKeywordHold: true brings the hold back for the owner too.
+    const ownerWrote = !!owner && author === String(owner).trim().toLowerCase();
+    if (!ownerWrote || ownerKeywordHold) {
+        const issueTerm = sensitiveTerm(`${issue.title || ''}\n${issue.body || ''}\n${labels.join(' ')}`);
+        if (issueTerm) reasons.push(`issue mentions "${issueTerm}"`);
+        const briefTerm = sensitiveTerm(briefText);
+        if (briefTerm) reasons.push(`brief mentions "${briefTerm}"`);
+    }
 
     const posted = `${BRIEF_MARK}\n\`\`\`markdown\n${String(briefText).trim()}\n\`\`\``;
     const lint = kitLint(posted);
