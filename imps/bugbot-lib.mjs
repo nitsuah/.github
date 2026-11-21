@@ -12,6 +12,8 @@
 
 export const BUGBOT_MARK = '<!-- bugbot';
 export const STATUS_CONTEXT = 'bugbot';
+// On every inline comment and thread reply bugbot writes, so it can find its own threads and its own last word.
+export const THREAD_MARK = '<!-- bugbot-thread -->';
 
 export const BUGBOT_DEFAULTS = {
     graceMinutes: 20, // how long CodeRabbit gets to review a new head before it counts as silent
@@ -144,7 +146,7 @@ export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model =
             path: f.file,
             line: f.line,
             side: 'RIGHT',
-            body: `**${f.severity}** · ${f.title}\n\n${f.detail}\n\n<sub>bugbot: fallback review while CodeRabbit is unavailable. Fix it, or reply with evidence and resolve.</sub>`,
+            body: `${THREAD_MARK}\n**${f.severity}** · ${f.title}\n\n${f.detail}\n\n<sub>bugbot: fallback review while CodeRabbit is unavailable. Fix it, or reply with evidence; bugbot reads the reply and resolves the thread if it holds.</sub>`,
         });
     }
     const nits = (rv.findings || []).filter((f) => f.severity === 'nit').slice(0, 3);
@@ -193,6 +195,32 @@ export function reviewGate({ crApprovedHead = false, crStatus, bugbot, openThrea
     if (crStatus?.stalled && bugbot && bugbot.verdict !== 'request_changes') return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
     if (crStatus?.stalled) return { ok: false, reason: bugbot ? 'bugbot requests changes on the head' : 'CodeRabbit stalled and bugbot has not reviewed the head' };
     return { ok: false, reason: `waiting for CodeRabbit (${crStatus?.state || 'unknown'})` };
+}
+
+/**
+ * Bugbot threads waiting for bugbot: unresolved, opened by bugbot, and the last
+ * word is someone else's (a fix round's "Fixed in …" / "Pushing back", or a human).
+ */
+export function threadsAwaitingBugbot(threads = []) {
+    return threads.filter((t) => {
+        const cs = t.comments || [];
+        if (t.isResolved || cs.length < 2) return false;
+        if (!String(cs[0].body || '').includes(THREAD_MARK)) return false;
+        return !String(cs[cs.length - 1].body || '').includes(THREAD_MARK);
+    });
+}
+
+/** Read bugbot's answer to a reply: `{"decision":"accept|keep","reply":"…"}` in a json block. */
+export function parseThreadJudgement(text = '') {
+    const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
+    if (!blocks.length) return { error: 'no json block' };
+    try {
+        const raw = JSON.parse(blocks[blocks.length - 1][1]);
+        if (!['accept', 'keep'].includes(raw.decision)) return { error: `bad decision ${raw.decision}` };
+        return { decision: raw.decision, reply: String(raw.reply || '').trim() || (raw.decision === 'accept' ? 'Agreed.' : 'This still applies.') };
+    } catch (e) {
+        return { error: `unparseable json: ${e.message}` };
+    }
 }
 
 /** Open PRs bugbot may look at: not drafts, not bot-authored, not skipped repos or labelled bugbot:skip. */

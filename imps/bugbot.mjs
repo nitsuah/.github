@@ -24,7 +24,7 @@ import { DEFAULTS } from './defaults.mjs';
 import { HOME, sh, chat } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
-    reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit,
+    reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,7 +86,7 @@ const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
   reviews(last:60){nodes{author{login} state submittedAt body url commit{oid}}}
   comments(last:60){nodes{author{login} createdAt body}}
-  reviewThreads(first:100){nodes{isResolved isOutdated}}
+  reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt}}}}
 }}}`;
 
 /** Everything bugbot decides on, for one PR. */
@@ -99,7 +99,8 @@ function loadPr(slug, number) {
         : { name: c.context, state: c.state });
     const reviews = d.reviews.nodes.map((r) => ({ author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
-    const openThreads = d.reviewThreads.nodes.filter((t) => !t.isResolved && !t.isOutdated).length;
+    const threads = d.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes.map((c) => ({ author: c.author?.login || '', body: c.body, createdAt: c.createdAt })) }));
+    const openThreads = threads.filter((t) => !t.isResolved && !t.isOutdated).length;
     // Our own status and CodeRabbit's check do not decide "green": a stalled CodeRabbit must not hold the gate.
     const gateChecks = checks.filter((c) => c.name !== STATUS_CONTEXT && !/coderabbit/i.test(c.name || ''));
     let crLatestState = null;
@@ -107,7 +108,7 @@ function loadPr(slug, number) {
         if (isCodeRabbit(r.author) && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state)) crLatestState = r.state;
     return {
         slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, isDraft: d.isDraft, labels: d.labels.nodes,
-        issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: head.committedDate, checks, reviews, comments, openThreads,
+        issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: head.committedDate, checks, reviews, comments, threads, openThreads,
         checksGreen: evaluateChecks(gateChecks).green, crLatestState,
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
     };
@@ -172,6 +173,44 @@ async function runReview(pr, reason) {
     return { verdict: rv.verdict, url };
 }
 
+const JUDGE = `You are bugbot. Earlier you raised the review finding below on a pull request. Someone has since replied: a fix ("Fixed in <sha>"), a pushback with evidence, or a "not in this PR". Decide whether the thread can be resolved.
+
+- **accept**: the reply shows the finding was wrong, or the current diff (below) shows it is fixed, or it is reasonably out of scope and the reply says where it will be handled.
+- **keep**: the reply does not answer the finding, the claimed fix is not in the current diff, or the evidence does not hold.
+
+Be fair: you were wrong sometimes, and a correct pushback should be accepted. Do not keep a thread just to be safe. Reply in one or two sentences.
+
+Finish with exactly one fenced json block: {"decision":"accept|keep","reply":"..."}`;
+
+/** Answer replies on bugbot's own threads: resolve the ones whose reply holds, keep the rest open. */
+async function answerThreads(pr, budget) {
+    const waiting = threadsAwaitingBugbot(pr.threads);
+    if (!waiting.length) return 0;
+    const fullDiff = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]).out;
+    let answered = 0;
+    for (const t of waiting) {
+        if (budget.left <= 0) break;
+        budget.left--;
+        // Only the current diff of the thread's file: the judge checks "Fixed in …" against the code as it is now.
+        const fileDiff = (fullDiff.split(/^(?=diff --git )/m).find((part) => part.includes(` b/${t.path}\n`)) || '(this file is no longer in the diff)').slice(0, 20_000);
+        const conversation = t.comments.map((c) => `**${c.author}:** ${String(c.body || '').replace(/<!--[\s\S]*?-->/g, '').trim()}`).join('\n\n');
+        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 4, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
+        const j = parseThreadJudgement(metrics.finalText);
+        if (j.error) {
+            log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}` });
+            continue;
+        }
+        if (!o['dry-run']) {
+            const body = `${THREAD_MARK}\n${j.decision === 'accept' ? '**Resolved:**' : '**Still open:**'} ${j.reply}\n\n<sub>bugbot</sub>`;
+            gh(['api', 'graphql', '-f', 'query=mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}', '-f', `t=${t.id}`, '-f', `b=${body}`]);
+            if (j.decision === 'accept') gh(['api', 'graphql', '-f', 'query=mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}', '-f', `t=${t.id}`]);
+        }
+        log({ event: 'bugbot-thread', pr: pr.url, thread: t.id, path: t.path, decision: j.decision, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
+        answered++;
+    }
+    return answered;
+}
+
 function dismissCodeRabbit(pr, why) {
     const reviews = ghJson(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '--paginate']);
     const blocking = reviews.filter((r) => isCodeRabbit(r.user?.login) && r.state === 'CHANGES_REQUESTED');
@@ -188,8 +227,10 @@ function dismissCodeRabbit(pr, why) {
 
 /** One PR: review if CodeRabbit is stalled on the head, then lift its block if our gate passed. */
 async function handle(slug, number, { force = false, budget = { left: Infinity } } = {}) {
-    const pr = loadPr(slug, number);
+    let pr = loadPr(slug, number);
     if (pr.state !== 'OPEN' || pr.isDraft) return { pr: pr.url, action: 'none', reason: pr.isDraft ? 'draft' : pr.state.toLowerCase() };
+    // Replies on our own threads first: they unblock a PR sooner than a new review does.
+    if (await answerThreads(pr, budget) && !o['dry-run']) pr = loadPr(slug, number);
     let a = assess(pr);
     if (!a.bugbot && (a.crStatus.stalled || force)) {
         if (reviewsInLastDay(events(), pr.url) >= C.perPrPerDay) {

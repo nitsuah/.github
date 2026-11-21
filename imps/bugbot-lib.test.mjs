@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     codeRabbitStatus, parseBugbotMarker, bugbotVerdictFor, rightSideLines, buildBugbotReview,
     shouldDismissCodeRabbit, reviewGate, sweepCandidates, reviewsInLastDay, CR_STALL_TEXT,
+    THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
 } from './bugbot-lib.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -99,6 +100,19 @@ test('rightSideLines maps the new-side lines of each hunk and skips deleted file
     assert.equal(m.has('gone.js'), false);
 });
 
+test('rightSideLines handles several hunks, context-only hunks and new files', () => {
+    const diff = [
+        'diff --git a/m.js b/m.js', '--- a/m.js', '+++ b/m.js',
+        '@@ -1,2 +1,2 @@', ' a', ' b',
+        '@@ -20,3 +20,4 @@', ' c', '-d', '+e', '+f', ' g',
+        'diff --git a/new.js b/new.js', 'new file mode 100644', '--- /dev/null', '+++ b/new.js',
+        '@@ -0,0 +1,2 @@', '+x', '+y',
+    ].join('\n');
+    const m = rightSideLines(diff);
+    assert.deepEqual([...m.get('m.js')], [1, 2, 20, 21, 22, 23]);
+    assert.deepEqual([...m.get('new.js')], [1, 2]);
+});
+
 test('buildBugbotReview: inline threads only on diff lines, no imp- marker, nits summarised', () => {
     const rv = {
         verdict: 'request_changes', summary: 'S',
@@ -117,6 +131,30 @@ test('buildBugbotReview: inline threads only on diff lines, no imp- marker, nits
     assert.match(out.body, /Nits: Naming/);
     assert.equal(out.statusState, 'failure');
     assert.equal(buildBugbotReview({ verdict: 'approve', findings: [] }, { diff: DIFF, headSha: HEAD }).statusState, 'success');
+});
+
+test('inline comments carry the bugbot thread mark', () => {
+    const out = buildBugbotReview({ verdict: 'comment', findings: [{ severity: 'minor', file: 'src/a.js', line: 12, title: 'T', detail: 'D' }] }, { diff: DIFF, headSha: HEAD });
+    assert.match(out.comments[0].body, new RegExp(THREAD_MARK));
+});
+
+test('threadsAwaitingBugbot: only open bugbot threads where someone replied last', () => {
+    const mine = { body: `${THREAD_MARK}\n**major** · X` };
+    const threads = [
+        { id: 'waiting', isResolved: false, comments: [mine, { body: '<!-- imp-fix -->\n**Pushing back:** covered by test Y' }] },
+        { id: 'answered', isResolved: false, comments: [mine, { body: 'reply' }, { body: `${THREAD_MARK}\nStill applies.` }] },
+        { id: 'fresh', isResolved: false, comments: [mine] },
+        { id: 'resolved', isResolved: true, comments: [mine, { body: 'fixed' }] },
+        { id: 'coderabbit', isResolved: false, comments: [{ body: 'CodeRabbit finding' }, { body: 'reply' }] },
+    ];
+    assert.deepEqual(threadsAwaitingBugbot(threads).map((t) => t.id), ['waiting']);
+});
+
+test('parseThreadJudgement reads accept/keep and rejects anything else', () => {
+    assert.deepEqual(parseThreadJudgement('ok\n```json\n{"decision":"accept","reply":"Right, the test covers it."}\n```'), { decision: 'accept', reply: 'Right, the test covers it.' });
+    assert.equal(parseThreadJudgement('```json\n{"decision":"keep"}\n```').decision, 'keep');
+    assert.ok(parseThreadJudgement('```json\n{"decision":"maybe"}\n```').error);
+    assert.ok(parseThreadJudgement('no block').error);
 });
 
 test('shouldDismissCodeRabbit: only when stalled, bugbot passed the head, no threads, green', () => {
