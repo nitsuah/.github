@@ -61,15 +61,26 @@ test('promotionVerdict promotes a clean brief from the owner', () => {
     assert.equal(v.promote, true);
 });
 
-test('promotionVerdict holds untrusted authors, security issues and security briefs', () => {
+test('promotionVerdict holds untrusted authors, security labels, and security words from anyone but the owner', () => {
     assert.match(verdict({ author: 'stranger' }).reasons.join(), /not trusted/);
     assert.match(verdict({ author: '' }).reasons.join(), /not trusted/);
     assert.match(verdict({ labels: ['enhancement', 'security'] }).reasons.join(), /label security/);
-    assert.match(verdict({ body: 'Verify the session cookie first.' }).reasons.join(), /session|cookie/);
-    assert.match(verdict({}, brief({ allow: 'src/auth/, CHANGELOG.md' })).reasons.join(), /brief mentions "auth/);
-    assert.match(verdict({ title: 'Fix authorization checks' }).reasons.join(), /issue mentions "authorization/);
     const trusted = promotionVerdict({ issue: issue({ author: 'helper-bot' }), briefText: brief(), owner: 'nitsuah', trustedAuthors: ['helper-bot'], poster: 'nitsuah' });
     assert.equal(trusted.promote, true);
+    // A trusted non-owner author still gets the keyword hold.
+    const helper = (over, text = brief()) => promotionVerdict({ issue: issue({ author: 'helper-bot', ...over }), briefText: text, owner: 'nitsuah', trustedAuthors: ['helper-bot'], poster: 'nitsuah' });
+    assert.match(helper({ body: 'Verify the session cookie first.' }).reasons.join(), /session|cookie/);
+    assert.match(helper({}, brief({ allow: 'src/auth/, CHANGELOG.md' })).reasons.join(), /brief mentions "auth/);
+    assert.match(helper({ title: 'Fix authorization checks' }).reasons.join(), /issue mentions "authorization/);
+});
+
+test('promotionVerdict: an issue the owner wrote is not held for security words, unless configured', () => {
+    assert.deepEqual(verdict({ title: 'Fix authorization checks', body: 'Verify the session cookie first.' }).reasons, []);
+    assert.deepEqual(verdict({}, brief({ allow: 'src/auth/, CHANGELOG.md' })).reasons, []);
+    // a security label still holds the owner's issue
+    assert.match(verdict({ title: 'Fix authorization checks', labels: ['security'] }).reasons.join(), /label security/);
+    const held = promotionVerdict({ issue: issue({ title: 'Fix authorization checks' }), briefText: brief(), owner: 'nitsuah', poster: 'nitsuah', ownerKeywordHold: true });
+    assert.match(held.reasons.join(), /issue mentions "authorization/);
 });
 
 test('promotionVerdict holds unsafe commands, brieflint problems, size, mismatches and depends', () => {

@@ -381,6 +381,7 @@ export async function runGroom({
                     trustedAuthors: config.groomTrustedAuthors || [],
                     enabled: config.groomAutoPromote !== false,
                     poster, briefAuthors,
+                    ownerKeywordHold: config.groomOwnerKeywordHold === true,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {

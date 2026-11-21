@@ -264,8 +264,10 @@ Write-Ok "preflight: $RunnerPath is a real kit"
 
 # Pointer file for stash wrappers (IMPS_KIT_PATH / .imps/kit-path.txt)
 $env:IMPS_KIT_PATH = $RunnerPath
-$kitPointer = Join-Path $HomePath 'kit-path.txt'
-Set-Content -LiteralPath $kitPointer -Value $RunnerPath -Encoding utf8
+# Resolve to a filesystem path: .NET resolves relative paths against the process directory, not the PowerShell location.
+$kitPointer = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $HomePath 'kit-path.txt'))
+# No BOM: Windows PowerShell 5.1's -Encoding utf8 writes one, and shell readers (git -C "$(cat …)") choke on it.
+[System.IO.File]::WriteAllText($kitPointer, $RunnerPath, [System.Text.UTF8Encoding]::new($false))
 Write-Ok "kit pointer → $kitPointer (stash can copy to <repo>/.imps/kit-path.txt)"
 
 # ── CODE/.github: first-class clone for kit self-work (worktrees only) ────
