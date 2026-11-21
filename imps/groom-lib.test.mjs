@@ -144,7 +144,7 @@ test('runGroom attempts each issue once even when search leaks other repos', asy
     // Port 9 refuses at once, so each draft fails fast and shows up once in errors per attempt.
     const results = await runGroom({
         gh, ghJson, owner: 'nitsuah', repos: { 'repo-a': {}, 'repo-b': {}, 'repo-c': {} },
-        router: { baseUrl: 'http://127.0.0.1:9/v1', key: 'k' }, dryRun: true, dailyCap: 10,
+        router: { baseUrl: 'http://127.0.0.1:9/v1', key: 'k' }, dryRun: true, dailyCap: 10, searchPaceMs: 0,
     });
     const tried = results.errors.filter((e) => e.startsWith('draft failed for')).map((e) => e.split(' ')[3].replace(/:$/, ''));
     assert.deepEqual(tried.sort(), ['repo-a#1', 'repo-b#2']);

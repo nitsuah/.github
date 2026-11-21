@@ -265,6 +265,7 @@ export async function runGroom({
     maxLines = DEFAULTS.maxLines,
     dryRun = false,
     singleRepo = null,
+    searchPaceMs = 2100,
     poster = null,
     briefAuthors = ['nitsuah'],
 } = {}) {
@@ -305,6 +306,9 @@ export async function runGroom({
         // Search for untriaged issues in this repo
         let issues = [];
         try {
+            // GitHub allows 30 search calls a minute; one search per repo across
+            // ~70 repos tripped it (403), so pace them.
+            if (searchPaceMs > 0) await new Promise((r) => setTimeout(r, searchPaceMs));
             const searchResults = ghJson([
                 'search', 'issues', '--owner', owner, '--state', 'open',
                 '--limit', '50', '--json', 'repository,number,title,labels,body,createdAt,author',

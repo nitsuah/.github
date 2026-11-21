@@ -65,8 +65,11 @@ try {
     process.exit(1);
 }
 
-// Check each repo for open human PRs and recent commits
-for (const name of Object.keys(repos)) {
+// Check each repo for open human PRs and recent commits. Only the opt-in
+// quiet-repo filter reads these, so skip ~2 API calls per repo otherwise
+// (the groomer hit GitHub's rate limit on 2026-11-20).
+const quietNames = config.groomRequireQuiet === true ? (o.repo ? [o.repo] : Object.keys(repos)) : [];
+for (const name of quietNames) {
     try {
         const prs = ghJson(['pr', 'list', '-R', `${o.owner}/${name}`, '--state', 'open', '--json', 'author']);
         repos[name].humanPRs = prs.filter((p) => String(p.author?.type || '').toLowerCase() !== 'bot').length;
