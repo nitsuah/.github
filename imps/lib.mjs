@@ -1615,10 +1615,12 @@ export function noopRetryOk(rows = [], repo, issue, sinceMs = 0) {
 // Recognizes known test/lint output shapes and returns a bounded summary.
 // Never invents a cause; unknown output is explicitly unavailable.
 export function extractFailureDiagnostic(output = '', runId = '', worktree = '') {
-    const safeOutput = sanitizeDiagnostic({ output: String(output || '') }, worktree).output;
-    const plain = String(safeOutput || '')
+    // Strip ANSI before redacting: a token split by a colour sequence would otherwise slip past
+    // redactSecrets and be reassembled when the sequence is removed.
+    const stripped = String(output || '')
         .replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b[\\])?)/g, '')
         .replace(/\r/g, '');
+    const plain = String(sanitizeDiagnostic({ output: stripped }, worktree).output || '');
     if (!plain.trim()) return { kind: 'unknown', runId, note: 'diagnostic summary unavailable' };
 
     // Node TAP / Vitest: strip terminal colors before matching anchored output.
@@ -1710,7 +1712,8 @@ export function sanitizeDiagnostic(diag, worktree = '') {
 }
 
 function diagnosticAtom(value) {
-    return String(value)
+    // Redact again at post time: ledger rows written before redact-after-strip may hold a raw token.
+    return redactSecrets(String(value))
         .replace(/[\r\n\t]+/g, ' ')
         .replace(/\s+/g, ' ')
         .replace(/&/g, '&amp;')
@@ -1743,9 +1746,12 @@ export function formatFailureDiagnostic(diag) {
 
 export function failureDiagnosticSummary(gate) {
     const parts = [];
+    // Ledger rows written before testExit was recorded carry the exit only on the step end
+    // (gate.testEnd.exitCode); an explicit null still means "not run".
+    const exitOf = (exit, end) => exit === undefined ? end?.exitCode : exit;
     const failedStep = (exit, end) => exit != null ? exit !== 0 : Boolean(end?.signal || end?.error);
-    const testDiag = failedStep(gate?.testExit, gate?.testEnd) ? gate?.testEnd?.diagnostic : null;
-    const lintDiag = failedStep(gate?.lintExit, gate?.lintEnd) ? gate?.lintEnd?.diagnostic : null;
+    const testDiag = failedStep(exitOf(gate?.testExit, gate?.testEnd), gate?.testEnd) ? gate?.testEnd?.diagnostic : null;
+    const lintDiag = failedStep(exitOf(gate?.lintExit, gate?.lintEnd), gate?.lintEnd) ? gate?.lintEnd?.diagnostic : null;
     if (testDiag?.kind === 'test') parts.push('test: ' + formatFailureDiagnostic(testDiag));
     if (lintDiag?.kind === 'lint') parts.push('lint: ' + formatFailureDiagnostic(lintDiag));
     if (!parts.length) return '\n\n**Diagnostic summary unavailable** — run ID retained for debugging.';
