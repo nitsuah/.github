@@ -239,3 +239,31 @@ test('reviewsInLastDay counts only this PR in the last 24 h', () => {
     ];
     assert.equal(reviewsInLastDay(ev, 'p1', NOW), 1);
 });
+
+test('acceptedButOpen finds bugbot threads it accepted that are still unresolved', async () => {
+    const { acceptedButOpen, ACCEPTED_MARK } = await import('./bugbot-lib.mjs');
+    const mine = { body: `${THREAD_MARK}\n**major** · X` };
+    const threads = [
+        { id: 'stuck', isResolved: false, comments: [mine, { body: 'pushback' }, { body: `${THREAD_MARK}${ACCEPTED_MARK}\n**Resolved:** ok` }] },
+        { id: 'kept', isResolved: false, comments: [mine, { body: 'pushback' }, { body: `${THREAD_MARK}\n**Still open:** no` }] },
+        { id: 'done', isResolved: true, comments: [mine, { body: 'x' }, { body: `${THREAD_MARK}${ACCEPTED_MARK}` }] },
+    ];
+    assert.deepEqual(acceptedButOpen(threads).map((t) => t.id), ['stuck']);
+});
+
+test('headArrival takes the later of the commit date and first sighting', async () => {
+    const { headArrival } = await import('./bugbot-lib.mjs');
+    assert.equal(headArrival({ committedAt: minsAgo(120), firstSeenAt: minsAgo(3) }), minsAgo(3), 'old commit pushed now gets the grace period');
+    assert.equal(headArrival({ committedAt: minsAgo(5), firstSeenAt: minsAgo(10) }), minsAgo(5));
+});
+
+test('canClearVerdict: only request_changes, full scope, every bugbot thread answered, no unplaced blocker/major', async () => {
+    const { canClearVerdict } = await import('./bugbot-lib.mjs');
+    assert.equal(canClearVerdict({ verdict: 'request_changes', openBugbotThreads: 0, reviewBody: 'all inline' }), true);
+    assert.equal(canClearVerdict({ verdict: 'request_changes', openBugbotThreads: 1 }), false);
+    assert.equal(canClearVerdict({ verdict: 'request_changes', scope: 'partial' }), false);
+    assert.equal(canClearVerdict({ verdict: 'comment' }), false);
+    const unplaced = 'x\n**Findings outside the diff lines:**\n\n| | Finding | Where |\n| --- | --- | --- |\n| **major** | Bad | `a.js:9` |';
+    assert.equal(canClearVerdict({ verdict: 'request_changes', reviewBody: unplaced }), false);
+    assert.equal(canClearVerdict({ verdict: 'request_changes', reviewBody: unplaced.replace('**major**', '**minor**') }), true);
+});

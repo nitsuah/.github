@@ -237,6 +237,41 @@ export function threadsAwaitingBugbot(threads = []) {
     });
 }
 
+// On a reply where bugbot accepted the answer, so a resolve that failed is retried without another judgement.
+export const ACCEPTED_MARK = '<!-- bugbot-accepted -->';
+
+/** Bugbot threads it already accepted (its own last reply says so) that are still unresolved. */
+export function acceptedButOpen(threads = []) {
+    return threads.filter((t) => {
+        const cs = t.comments || [];
+        if (t.isResolved || cs.length < 2 || !String(cs[0].body || '').includes(THREAD_MARK)) return false;
+        return String(cs[cs.length - 1].body || '').includes(ACCEPTED_MARK);
+    });
+}
+
+/**
+ * When did this head reach the PR? GitHub does not expose push time, so use the
+ * later of the commit date and when bugbot first saw the SHA: an old commit
+ * pushed now still gets the full grace period.
+ */
+export function headArrival({ committedAt, firstSeenAt } = {}) {
+    const c = ts(committedAt);
+    const f = ts(firstSeenAt);
+    return new Date(Math.max(c, f) || Date.now()).toISOString();
+}
+
+/**
+ * A `request_changes` head verdict whose findings were all answered on threads
+ * (every bugbot thread resolved) may be cleared to `comment` without a new
+ * commit, unless the review also carried blocker/major findings it could not
+ * place inline: those were never answerable on a thread.
+ */
+export function canClearVerdict({ verdict, scope = 'full', openBugbotThreads = 0, reviewBody = '' } = {}) {
+    if (verdict !== 'request_changes' || scope === 'partial' || openBugbotThreads > 0) return false;
+    const outside = String(reviewBody).split('**Findings outside the diff lines:**')[1] || '';
+    return !/\| \*\*(blocker|major)\*\* \|/.test(outside);
+}
+
 /** Read bugbot's answer to a reply: `{"decision":"accept|keep","reply":"…"}` in a json block. */
 export function parseThreadJudgement(text = '') {
     const blocks = [...String(text).matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map((m) => m[1]);

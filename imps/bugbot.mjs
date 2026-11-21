@@ -14,7 +14,7 @@
 //   3. If bugbot passed this head, every thread is resolved and checks are green, dismiss CodeRabbit's stale
 //      CHANGES_REQUESTED through the API so it no longer blocks the merge.
 // Kill switch: IMPS_BUGBOT=0. Events go to ~/.imps/bugbot.jsonl. Contract: imps/STANDARD.md § Bugbot.
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -25,6 +25,7 @@ import { HOME, sh, chat } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
+    ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,8 +87,30 @@ const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
   reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
   comments(last:100){nodes{author{login} createdAt body}}
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt originalCommit{oid}}}}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line
+    first: comments(first:1){nodes{id author{login} body createdAt originalCommit{oid}}}
+    latest: comments(last:30){nodes{id author{login} body createdAt originalCommit{oid}}}}}
 }}}`;
+
+/** When bugbot first saw each PR head (GitHub has no push time). Kept in ~/.imps/bugbot-heads.json. */
+const HEADS = join(HOME, 'bugbot-heads.json');
+function firstSeen(prUrl, sha) {
+    let seen = {};
+    try {
+        seen = JSON.parse(readFileSync(HEADS, 'utf8'));
+    } catch { /* first run */ }
+    const key = `${prUrl}@${sha}`;
+    if (!seen[key]) {
+        seen[key] = new Date().toISOString();
+        // Keep the file small: drop sightings older than two weeks.
+        const cutoff = Date.now() - 14 * 24 * 3600_000;
+        for (const [k, v] of Object.entries(seen)) if (Date.parse(v) < cutoff) delete seen[k];
+        try {
+            writeFileSync(HEADS, JSON.stringify(seen));
+        } catch { /* best effort; the commit date is the fallback */ }
+    }
+    return seen[key];
+}
 
 /** Everything bugbot decides on, for one PR. */
 function loadPr(slug, number) {
@@ -99,11 +122,18 @@ function loadPr(slug, number) {
         : { name: c.context, state: c.state });
     const reviews = d.reviews.nodes.map((r) => ({ id: r.databaseId, author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
-    const threads = d.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes.map((c) => ({ author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid })) }));
+    // The original finding plus the latest replies (a long thread's newest word is what bugbot must read).
+    const toComment = (c) => ({ id: c.id, author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid });
+    const threads = d.reviewThreads.nodes.map(({ first, latest, ...t }) => {
+        const head0 = first.nodes[0];
+        const rest = latest.nodes.filter((c) => !head0 || c.id !== head0.id);
+        return { ...t, comments: [...(head0 ? [head0] : []), ...rest].map(toComment) };
+    });
     // Fail closed past one page: an unseen check could be red and an unseen thread could be open.
     const moreThreads = Boolean(d.reviewThreads.pageInfo?.hasNextPage);
     const moreChecks = Boolean(head.statusCheckRollup?.contexts?.pageInfo?.hasNextPage);
-    const openThreads = threads.filter((t) => !t.isResolved && !t.isOutdated).length + (moreThreads ? 1 : 0);
+    // Outdated is not resolved: a thread on changed lines still needs an answer.
+    const openThreads = threads.filter((t) => !t.isResolved).length + (moreThreads ? 1 : 0);
     // Our own status and CodeRabbit's check do not decide "green": a stalled CodeRabbit must not hold the gate.
     const gateChecks = checks.filter((c) => c.name !== STATUS_CONTEXT && !/coderabbit/i.test(c.name || ''));
     let crLatestState = null;
@@ -111,7 +141,7 @@ function loadPr(slug, number) {
         if (isCodeRabbit(r.author) && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state)) crLatestState = r.state;
     return {
         slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, isDraft: d.isDraft, labels: d.labels.nodes,
-        issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: head.committedDate, checks, reviews, comments, threads, openThreads,
+        issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: headArrival({ committedAt: head.committedDate, firstSeenAt: firstSeen(d.url, head.oid) }), checks, reviews, comments, threads, openThreads,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
     };
@@ -215,11 +245,22 @@ Be fair: you were wrong sometimes, and a correct pushback should be accepted. Do
 Finish with exactly one fenced json block: {"decision":"accept|keep","reply":"..."}`;
 
 /** Answer replies on bugbot's own threads: resolve the ones whose reply holds, keep the rest open. */
+const resolveThread = (id) => !gh(['api', 'graphql', '-f', 'query=mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}', '-f', `t=${id}`]).code;
+
 async function answerThreads(pr, budget) {
-    const waiting = threadsAwaitingBugbot(pr.threads);
-    if (!waiting.length) return 0;
-    const fullDiff = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]).out;
     let answered = 0;
+    // Accepted earlier but the resolve failed: just resolve again, no new judgement.
+    if (!o['dry-run']) {
+        for (const t of acceptedButOpen(pr.threads)) {
+            if (resolveThread(t.id)) {
+                log({ event: 'bugbot-thread-resolved', pr: pr.url, thread: t.id, retry: true });
+                answered++;
+            }
+        }
+    }
+    const waiting = threadsAwaitingBugbot(pr.threads);
+    if (!waiting.length) return answered;
+    const fullDiff = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]).out;
     for (const t of waiting) {
         if (budget.left <= 0) break;
         budget.left--;
@@ -253,12 +294,20 @@ async function answerThreads(pr, budget) {
             log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}`, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : String(metrics.finalText || '').slice(0, 200) });
             continue;
         }
+        let resolved = false;
         if (!o['dry-run']) {
-            const body = `${THREAD_MARK}\n${j.decision === 'accept' ? '**Resolved:**' : '**Still open:**'} ${j.reply}\n\n<sub>bugbot</sub>`;
-            gh(['api', 'graphql', '-f', 'query=mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}', '-f', `t=${t.id}`, '-f', `b=${body}`]);
-            if (j.decision === 'accept') gh(['api', 'graphql', '-f', 'query=mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}', '-f', `t=${t.id}`]);
+            const mark = j.decision === 'accept' ? `${THREAD_MARK}${ACCEPTED_MARK}` : THREAD_MARK;
+            const body = `${mark}\n${j.decision === 'accept' ? '**Resolved:**' : '**Still open:**'} ${j.reply}\n\n<sub>bugbot</sub>`;
+            const reply = gh(['api', 'graphql', '-f', 'query=mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}', '-f', `t=${t.id}`, '-f', `b=${body}`]);
+            if (reply.code) {
+                // Nothing written: the thread is still waiting and the next sweep judges it again.
+                log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `reply failed: ${reply.err.slice(0, 200)}` });
+                continue;
+            }
+            // A failed resolve is retried next sweep (acceptedButOpen), without another judgement.
+            if (j.decision === 'accept') resolved = resolveThread(t.id);
         }
-        log({ event: 'bugbot-thread', pr: pr.url, thread: t.id, path: t.path, decision: j.decision, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
+        log({ event: 'bugbot-thread', pr: pr.url, thread: t.id, path: t.path, decision: j.decision, resolved: j.decision === 'accept' ? resolved : undefined, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
         answered++;
     }
     return answered;
@@ -303,6 +352,24 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
     // Replies on our own threads first: they unblock a PR sooner than a new review does.
     if (await answerThreads(pr, budget) && !o['dry-run']) pr = loadPr(slug, number);
     let a = assess(pr);
+    // Every finding of a request_changes head verdict answered on its thread (fixed or accepted pushback):
+    // record a cleared verdict for the same head instead of waiting for a new commit.
+    if (a.bugbot?.verdict === 'request_changes' && !o['dry-run']) {
+        const review = pr.reviews.find((r) => r.url === a.bugbot.url);
+        const openBugbot = pr.threads.filter((t) => !t.isResolved && String(t.comments[0]?.body || '').includes(THREAD_MARK)).length;
+        if (canClearVerdict({ verdict: a.bugbot.verdict, scope: a.bugbot.scope, openBugbotThreads: openBugbot, reviewBody: review?.body })) {
+            const body = `<!-- bugbot sha=${pr.headSha} verdict=comment scope=full -->\n### Bugbot review: 💬 Findings answered\n\nEvery finding from the [earlier review](${a.bugbot.url}) of this commit was answered on its thread and resolved, so the verdict is cleared.\n\n<sub>bugbot</sub>`;
+            const post = gh(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '-X', 'POST', '--input', '-', '--jq', '.html_url'], {
+                input: JSON.stringify({ commit_id: pr.headSha, event: 'COMMENT', body }),
+            });
+            if (!post.code) {
+                writeStatus(pr, 'success', 'Findings answered (fallback review)', post.out);
+                log({ event: 'bugbot-verdict-cleared', pr: pr.url, sha: pr.headSha, url: post.out });
+                pr = loadPr(slug, number);
+                a = assess(pr);
+            }
+        }
+    }
     // A bugbot review whose status write failed: restore the status from the review instead of reviewing again.
     if (a.bugbot && !pr.hasBugbotStatus && !o['dry-run']) {
         const failing = a.bugbot.verdict === 'request_changes' || a.bugbot.scope === 'partial';
