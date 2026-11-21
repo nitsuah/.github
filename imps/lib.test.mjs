@@ -1897,6 +1897,18 @@ test('failureDiagnosticSummary reads the exit from testEnd when the ledger row h
     assert.doesNotMatch(passed, /stale/);
 });
 
+test('failure diagnostics redact a token that ANSI codes split, in new and stored rows', () => {
+    const tok = 'ghp_' + 'A'.repeat(20) + 'B'.repeat(16);
+    const split = tok.slice(0, 12) + '\u001b[31m' + tok.slice(12);
+    const fresh = extractFailureDiagnostic('not ok 1 - leaks ' + split + '\n', 'run-ansi');
+    assert.equal(fresh.kind, 'test');
+    assert.doesNotMatch(fresh.test, /ghp_A/);
+    assert.match(fresh.test, /\[redacted\]/);
+
+    const stored = failureDiagnosticSummary({ testEnd: { exitCode: 1, diagnostic: { kind: 'test', test: 'leaks ' + tok, error: 'test failure' } } });
+    assert.doesNotMatch(stored, /ghp_A/);
+});
+
 test('exitHint names the command-not-found / docker-failure classes and nothing for an ordinary failure', async () => {
     const { exitHint } = await import('./lib.mjs');
     assert.match(exitHint(127), /command not found/);
