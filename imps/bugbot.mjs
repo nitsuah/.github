@@ -167,7 +167,7 @@ async function runReview(pr, reason) {
     let metrics;
     let rv;
     for (const [maxTokens, extra] of [[6000, ''], [16000, RETRY]]) {
-        metrics = await chat({ model: o.model, maxTokens, minutes: 8, prompt: prompt + extra });
+        metrics = await chat({ model: o.model, maxTokens, minutes: 12, stream: true, prompt: prompt + extra });
         rv = parseReview(metrics.finalText);
         if (!rv.error) break;
     }
@@ -225,7 +225,7 @@ async function answerThreads(pr, budget) {
         // Only the current diff of the thread's file: the judge checks "Fixed in …" against the code as it is now.
         const fileDiff = (fullDiff.split(/^(?=diff --git )/m).find((part) => part.includes(` b/${t.path}\n`)) || '(this file is no longer in the diff)').slice(0, 20_000);
         const conversation = t.comments.map((c) => `**${c.author}:** ${stripComments(c.body)}`).join('\n\n');
-        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 6, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
+        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 6, stream: true, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
         const j = parseThreadJudgement(metrics.finalText);
         if (j.error) {
             log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}`, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : undefined });
