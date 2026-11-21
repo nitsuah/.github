@@ -239,10 +239,15 @@ export function threadsAwaitingBugbot(threads = []) {
 
 /** Read bugbot's answer to a reply: `{"decision":"accept|keep","reply":"…"}` in a json block. */
 export function parseThreadJudgement(text = '') {
-    const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
+    const blocks = [...String(text).matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+    // Models sometimes answer with a bare object: take the last {...} that names a decision.
+    if (!blocks.length) {
+        const bare = String(text).match(/\{[^{}]*"decision"\s*:[^{}]*\}/g);
+        if (bare) blocks.push(bare[bare.length - 1]);
+    }
     if (!blocks.length) return { error: 'no json block' };
     try {
-        const raw = JSON.parse(blocks[blocks.length - 1][1]);
+        const raw = JSON.parse(blocks[blocks.length - 1]);
         if (!['accept', 'keep'].includes(raw.decision)) return { error: `bad decision ${raw.decision}` };
         return { decision: raw.decision, reply: String(raw.reply || '').trim() || (raw.decision === 'accept' ? 'Agreed.' : 'This still applies.') };
     } catch (e) {

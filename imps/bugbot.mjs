@@ -86,7 +86,7 @@ const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
   reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
   comments(last:100){nodes{author{login} createdAt body}}
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt}}}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt originalCommit{oid}}}}}
 }}}`;
 
 /** Everything bugbot decides on, for one PR. */
@@ -99,7 +99,7 @@ function loadPr(slug, number) {
         : { name: c.context, state: c.state });
     const reviews = d.reviews.nodes.map((r) => ({ id: r.databaseId, author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
-    const threads = d.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes.map((c) => ({ author: c.author?.login || '', body: c.body, createdAt: c.createdAt })) }));
+    const threads = d.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes.map((c) => ({ author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid })) }));
     // Fail closed past one page: an unseen check could be red and an unseen thread could be open.
     const moreThreads = Boolean(d.reviewThreads.pageInfo?.hasNextPage);
     const moreChecks = Boolean(head.statusCheckRollup?.contexts?.pageInfo?.hasNextPage);
@@ -224,11 +224,25 @@ async function answerThreads(pr, budget) {
         budget.left--;
         // Only the current diff of the thread's file: the judge checks "Fixed in …" against the code as it is now.
         const fileDiff = (fullDiff.split(/^(?=diff --git )/m).find((part) => part.includes(` b/${t.path}\n`)) || '(this file is no longer in the diff)').slice(0, 20_000);
+        // What changed in this file since the finding was posted: where a claimed fix has to be.
+        const since = t.comments[0]?.originalCommit;
+        let delta = '(could not compute the change since the finding)';
+        if (since && since !== pr.headSha) {
+            const cmp = gh(['api', `repos/${pr.slug}/compare/${since}...${pr.headSha}`, '--jq', `.files[] | select(.filename == "${t.path}") | .patch`]);
+            if (!cmp.code) delta = cmp.out.trim() ? cmp.out.slice(0, 30_000) : '(no change to this file since the finding)';
+        } else if (since === pr.headSha) delta = '(no new commit since the finding)';
         const conversation = t.comments.map((c) => `**${c.author}:** ${stripComments(c.body)}`).join('\n\n');
-        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 6, stream: true, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
-        const j = parseThreadJudgement(metrics.finalText);
+        const ask = `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## Changes to ${t.path} since the finding was posted (where a claimed fix must be)\n\n\`\`\`diff\n${delta}\n\`\`\`\n\n## The PR's current diff of ${t.path} (context, may be cut)\n\n\`\`\`diff\n${fileDiff}\n\`\`\``;
+        // A reasoning model can spend the budget before the block: one retry with more room and a terser ask.
+        let metrics;
+        let j;
+        for (const [maxTokens, extra] of [[3000, ''], [8000, '\n\n**Output only the json block, nothing before it.**']]) {
+            metrics = await chat({ model: o.model, maxTokens, minutes: 6, stream: true, prompt: ask + extra });
+            j = parseThreadJudgement(metrics.finalText);
+            if (!j.error) break;
+        }
         if (j.error) {
-            log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}`, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : undefined });
+            log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}`, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : String(metrics.finalText || '').slice(0, 200) });
             continue;
         }
         if (!o['dry-run']) {

@@ -192,6 +192,7 @@ test('parseThreadJudgement reads accept/keep and rejects anything else', () => {
     assert.equal(parseThreadJudgement('```json\n{"decision":"keep"}\n```').decision, 'keep');
     assert.ok(parseThreadJudgement('```json\n{"decision":"maybe"}\n```').error);
     assert.ok(parseThreadJudgement('no block').error);
+    assert.equal(parseThreadJudgement('Looks fixed. {"decision":"accept","reply":"ok"}').decision, 'accept', 'bare object');
 });
 
 test('shouldDismissCodeRabbit: only when stalled, bugbot passed the head, no threads, green', () => {
