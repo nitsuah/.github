@@ -1163,12 +1163,44 @@ export function routerWaitDelays({ windowMs = 600_000, firstMs = 15_000, maxMs =
 // verdict is recomputed from the findings, so a model that says "approve"
 // with a blocker in its list can't wave a PR through.
 const SEVERITIES = ['blocker', 'major', 'minor', 'nit'];
+/**
+ * JSON.parse, then one lenient retry: models sometimes put a raw newline or tab inside a
+ * string ("Bad control character in string literal", bb-mcp#189, 2026-11-21). The retry
+ * escapes bare control characters that sit inside string literals; anything else still throws.
+ */
+export function parseJsonLenient(text) {
+    try {
+        return JSON.parse(text);
+    } catch (first) {
+        let out = '';
+        let inString = false;
+        let escaped = false;
+        for (const ch of String(text)) {
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch === '\\') escaped = true;
+                else if (ch === '"') inString = false;
+                else if (ch < ' ') {
+                    out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+                    continue;
+                }
+            } else if (ch === '"') inString = true;
+            out += ch;
+        }
+        try {
+            return JSON.parse(out);
+        } catch {
+            throw first;
+        }
+    }
+}
+
 export function parseReview(text = '') {
     const blocks = [...String(text).matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
     if (!blocks.length) return { error: 'no json block in the reviewer output' };
     let raw;
     try {
-        raw = JSON.parse(blocks[blocks.length - 1][1]);
+        raw = parseJsonLenient(blocks[blocks.length - 1][1]);
     } catch (e) {
         return { error: `unparseable json: ${e.message}` };
     }

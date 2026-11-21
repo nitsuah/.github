@@ -10,6 +10,8 @@
 // bugbot passed that same head, and no thread is open.
 // Contract: imps/STANDARD.md § Bugbot.
 
+import { parseJsonLenient } from './lib.mjs';
+
 export const BUGBOT_MARK = '<!-- bugbot';
 export const STATUS_CONTEXT = 'bugbot';
 // On every inline comment and thread reply bugbot writes, so it can find its own threads and its own last word.
@@ -282,7 +284,7 @@ export function parseThreadJudgement(text = '') {
     }
     if (!blocks.length) return { error: 'no json block' };
     try {
-        const raw = JSON.parse(blocks[blocks.length - 1]);
+        const raw = parseJsonLenient(blocks[blocks.length - 1]);
         if (!['accept', 'keep'].includes(raw.decision)) return { error: `bad decision ${raw.decision}` };
         return { decision: raw.decision, reply: String(raw.reply || '').trim() || (raw.decision === 'accept' ? 'Agreed.' : 'This still applies.') };
     } catch (e) {
