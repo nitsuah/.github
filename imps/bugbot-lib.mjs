@@ -55,36 +55,48 @@ export function codeRabbitStatus({ headSha, headAt, reviews = [], comments = [],
     if (crReviews.some((r) => r.commit === headSha && r.state !== 'PENDING')) return out('reviewed', 'CodeRabbit reviewed the head commit');
 
     const headTime = ts(headAt);
+    const age = now - headTime;
+    // A CodeRabbit check still running on the head wins over any notice: it is working (CodeRabbit #320 review).
+    const crCheck = checks.find((c) => /coderabbit/i.test(c.name || ''));
+    if (crCheck && /^(PENDING|IN_PROGRESS|QUEUED|EXPECTED|pending)$/i.test(crCheck.state || '') && age < pendingMaxMinutes * 60_000)
+        return out('working', 'CodeRabbit check is still running');
+
     const crComments = comments.filter((c) => isCodeRabbit(c.author)).sort((a, b) => ts(a.createdAt) - ts(b.createdAt));
     const afterHead = crComments.filter((c) => ts(c.createdAt) >= headTime);
     const latest = afterHead[afterHead.length - 1];
     if (latest && CR_STALL_TEXT.test(latest.body || '')) return out('rate-limited', 'CodeRabbit says it is rate-limited for this head');
     if (latest && CR_ALREADY_REVIEWED.test(latest.body || '')) return out('reviewed', 'CodeRabbit says it already reviewed the head');
 
-    const crCheck = checks.find((c) => /coderabbit/i.test(c.name || ''));
-    const age = now - headTime;
-    if (crCheck && /^(PENDING|IN_PROGRESS|QUEUED|EXPECTED|pending)$/i.test(crCheck.state || '') && age < pendingMaxMinutes * 60_000)
-        return out('working', 'CodeRabbit check is still running');
     if (age < graceMinutes * 60_000) return out('waiting', `head is ${Math.round(age / 60_000)} min old (grace ${graceMinutes} min)`);
     if (!crReviews.length && !crComments.length && !crCheck) return out('absent', 'CodeRabbit has not touched this PR');
     return out('silent', `no CodeRabbit review of the head after ${graceMinutes} min`);
 }
 
-/** Read `<!-- bugbot sha=<sha> verdict=<verdict> -->` from a review body. */
+/** Read `<!-- bugbot sha=<sha> verdict=<verdict> scope=<full|partial> -->` from a review body. */
 export function parseBugbotMarker(body = '') {
-    const m = String(body).match(/<!-- bugbot sha=([0-9a-f]{7,40}) verdict=(approve|comment|request_changes) -->/);
-    return m ? { sha: m[1], verdict: m[2] } : null;
+    const m = String(body).match(/<!-- bugbot sha=([0-9a-f]{7,40}) verdict=(approve|comment|request_changes)(?: scope=(full|partial))? -->/);
+    return m ? { sha: m[1], verdict: m[2], scope: m[3] || 'full' } : null;
 }
 
-/** The latest bugbot verdict for this exact head commit, or null. */
-export function bugbotVerdictFor(reviews = [], headSha) {
+/**
+ * The latest bugbot verdict for this exact head commit, or null. A marker only
+ * counts on a review written by a trusted bugbot account and submitted on the
+ * head commit itself, so a pasted marker cannot pass the gate.
+ */
+export function bugbotVerdictFor(reviews = [], headSha, { trustedAuthors = [] } = {}) {
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
     let found = null;
     for (const r of [...reviews].sort((a, b) => ts(a.submittedAt) - ts(b.submittedAt))) {
         const m = parseBugbotMarker(r.body);
-        if (m && headSha && m.sha === headSha) found = { ...m, url: r.url || null };
+        if (!m || !headSha || m.sha !== headSha || r.commit !== headSha) continue;
+        if (!trusted.has(String(r.author || '').toLowerCase())) continue;
+        found = { ...m, url: r.url || null };
     }
     return found;
 }
+
+/** A bugbot result the gate may count as a pass: not request_changes, and the whole diff was reviewed. */
+export const bugbotPassed = (b) => Boolean(b) && b.verdict !== 'request_changes' && b.scope !== 'partial';
 
 /**
  * New-side line numbers each file shows in a unified diff (added and context
@@ -95,7 +107,26 @@ export function rightSideLines(diff = '') {
     const files = new Map();
     let file = null;
     let line = 0;
+    let oldLeft = 0; // lines of the current hunk still to read, per side (from the @@ header),
+    let newLeft = 0; // so hunk content such as "+++ heading" is never mistaken for a file header
     for (const raw of String(diff).split('\n')) {
+        if (oldLeft > 0 || newLeft > 0) {
+            if (raw.startsWith('\\')) continue; // "\ No newline at end of file"
+            const tag = raw[0];
+            if (tag === '+') {
+                if (file) files.get(file).add(line);
+                line++;
+                newLeft--;
+            } else if (tag === '-') {
+                oldLeft--;
+            } else {
+                if (file) files.get(file).add(line);
+                line++;
+                oldLeft--;
+                newLeft--;
+            }
+            continue;
+        }
         if (raw.startsWith('diff --git ')) {
             file = null;
             continue;
@@ -106,18 +137,12 @@ export function rightSideLines(diff = '') {
             if (file && !files.has(file)) files.set(file, new Set());
             continue;
         }
-        if (raw.startsWith('--- ')) continue;
-        const h = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        const h = raw.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
         if (h) {
-            line = Number(h[1]);
-            continue;
+            oldLeft = h[1] === undefined ? 1 : Number(h[1]);
+            line = Number(h[2]);
+            newLeft = h[3] === undefined ? 1 : Number(h[3]);
         }
-        if (!file || !line) continue;
-        if (raw.startsWith('+') || raw.startsWith(' ')) {
-            files.get(file).add(line);
-            line++;
-        }
-        // '-' lines and "\ No newline at end of file" do not advance the new side
     }
     return files;
 }
@@ -131,7 +156,7 @@ const VERDICT_LABEL = { approve: '✅ No blocking issues', comment: '💬 Minor 
  * threads (no `<!-- imp-` marker, so the imp fix round treats them as
  * feedback); the rest go in the summary.
  */
-export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model = 'MAX', served = [] } = {}) {
+export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model = 'MAX', served = [], partial = false } = {}) {
     const lines = rightSideLines(diff);
     const comments = [];
     const unplaced = [];
@@ -151,21 +176,23 @@ export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model =
     }
     const nits = (rv.findings || []).filter((f) => f.severity === 'nit').slice(0, 3);
     const body = [
-        `<!-- bugbot sha=${headSha} verdict=${rv.verdict} -->`,
+        `<!-- bugbot sha=${headSha} verdict=${rv.verdict} scope=${partial ? 'partial' : 'full'} -->`,
         `### Bugbot review: ${VERDICT_LABEL[rv.verdict] || rv.verdict}`,
         '',
         rv.summary || '(no summary)',
         '',
         `CodeRabbit could not review this head (${reason || 'unavailable'}), so this adversarial review stands in for it. ${comments.length} finding(s) are inline threads.`,
     ];
+    if (partial) body.push('', '**The diff was too large to review in full**, so this review does not count as a pass: the `bugbot` status stays failing until CodeRabbit or a human reviews the rest.');
     if (unplaced.length) {
         body.push('', '**Findings outside the diff lines:**', '', '| | Finding | Where |', '| --- | --- | --- |');
         for (const f of unplaced) body.push(`| **${f.severity}** | ${escapeCell(f.title)} | \`${escapeCell(f.file || '?')}${f.line ? `:${f.line}` : ''}\` |`);
         for (const f of unplaced) body.push('', `<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
     }
     if (nits.length) body.push('', `Nits: ${nits.map((f) => `${f.title} (\`${f.file}${f.line ? `:${f.line}` : ''}\`)`).join('; ')}`);
-    body.push('', `<sub>Read-only review through 9router (\`${model}\`, served ${served.join(', ') || '?'}). Bugbot never edits code or merges; the \`bugbot\` status on this commit is ${rv.verdict === 'request_changes' ? 'failure' : 'success'}.</sub>`);
-    return { body: body.join('\n'), comments, unplaced, statusState: rv.verdict === 'request_changes' ? 'failure' : 'success' };
+    const statusState = rv.verdict === 'request_changes' || partial ? 'failure' : 'success';
+    body.push('', `<sub>Read-only review through 9router (\`${model}\`, served ${served.join(', ') || '?'}). Bugbot never edits code or merges; the \`bugbot\` status on this commit is ${statusState}.</sub>`);
+    return { body: body.join('\n'), comments, unplaced, statusState };
 }
 
 /**
@@ -177,7 +204,7 @@ export function shouldDismissCodeRabbit({ crLatestState, crStatus, bugbot, openT
     if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
     if (!crStatus?.stalled) return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head; defer to it` };
     if (!bugbot) return { ok: false, reason: 'no bugbot review of the head yet' };
-    if (bugbot.verdict === 'request_changes') return { ok: false, reason: 'bugbot requests changes on the head' };
+    if (!bugbotPassed(bugbot)) return { ok: false, reason: bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };
     return { ok: true, reason: 'CodeRabbit is stalled; bugbot passed the head with every thread resolved and green checks' };
@@ -192,8 +219,8 @@ export function reviewGate({ crApprovedHead = false, crStatus, bugbot, openThrea
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (crApprovedHead) return { ok: true, reason: 'CodeRabbit approved the head' };
-    if (crStatus?.stalled && bugbot && bugbot.verdict !== 'request_changes') return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
-    if (crStatus?.stalled) return { ok: false, reason: bugbot ? 'bugbot requests changes on the head' : 'CodeRabbit stalled and bugbot has not reviewed the head' };
+    if (crStatus?.stalled && bugbotPassed(bugbot)) return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
+    if (crStatus?.stalled) return { ok: false, reason: !bugbot ? 'CodeRabbit stalled and bugbot has not reviewed the head' : bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
     return { ok: false, reason: `waiting for CodeRabbit (${crStatus?.state || 'unknown'})` };
 }
 

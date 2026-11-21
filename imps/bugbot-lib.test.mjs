@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     codeRabbitStatus, parseBugbotMarker, bugbotVerdictFor, rightSideLines, buildBugbotReview,
     shouldDismissCodeRabbit, reviewGate, sweepCandidates, reviewsInLastDay, CR_STALL_TEXT,
-    THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
+    THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement, bugbotPassed,
 } from './bugbot-lib.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -63,16 +63,53 @@ test('CR_STALL_TEXT does not match an ordinary review', () => {
     assert.equal(CR_STALL_TEXT.test('Actionable comments posted: 3'), false);
 });
 
-test('parseBugbotMarker / bugbotVerdictFor pick the latest verdict for the exact head', () => {
-    assert.deepEqual(parseBugbotMarker(`<!-- bugbot sha=${HEAD} verdict=approve -->\nbody`), { sha: HEAD, verdict: 'approve' });
+test('parseBugbotMarker reads sha, verdict and scope (full by default)', () => {
+    assert.deepEqual(parseBugbotMarker(`<!-- bugbot sha=${HEAD} verdict=approve -->\nbody`), { sha: HEAD, verdict: 'approve', scope: 'full' });
+    assert.deepEqual(parseBugbotMarker(`<!-- bugbot sha=${HEAD} verdict=comment scope=partial -->`), { sha: HEAD, verdict: 'comment', scope: 'partial' });
     assert.equal(parseBugbotMarker('<!-- imp-review -->'), null);
+});
+
+test('bugbotVerdictFor: latest verdict for the head, only from a trusted author on the head commit', () => {
+    const t = { trustedAuthors: ['nitsuah'] };
     const reviews = [
-        { body: `<!-- bugbot sha=${HEAD} verdict=request_changes -->`, submittedAt: minsAgo(30), url: 'u1' },
-        { body: `<!-- bugbot sha=${'b'.repeat(40)} verdict=approve -->`, submittedAt: minsAgo(20), url: 'u2' },
-        { body: `<!-- bugbot sha=${HEAD} verdict=approve -->`, submittedAt: minsAgo(10), url: 'u3' },
+        { author: 'nitsuah', commit: HEAD, body: `<!-- bugbot sha=${HEAD} verdict=request_changes -->`, submittedAt: minsAgo(30), url: 'u1' },
+        { author: 'nitsuah', commit: 'b'.repeat(40), body: `<!-- bugbot sha=${'b'.repeat(40)} verdict=approve -->`, submittedAt: minsAgo(20), url: 'u2' },
+        { author: 'nitsuah', commit: HEAD, body: `<!-- bugbot sha=${HEAD} verdict=approve -->`, submittedAt: minsAgo(10), url: 'u3' },
     ];
-    assert.deepEqual(bugbotVerdictFor(reviews, HEAD), { sha: HEAD, verdict: 'approve', url: 'u3' });
-    assert.equal(bugbotVerdictFor(reviews, 'c'.repeat(40)), null);
+    assert.deepEqual(bugbotVerdictFor(reviews, HEAD, t), { sha: HEAD, verdict: 'approve', scope: 'full', url: 'u3' });
+    assert.equal(bugbotVerdictFor(reviews, 'c'.repeat(40), t), null);
+    // a pasted marker from someone else, or a marker on a review of another commit, does not count
+    const forged = [{ author: 'mallory', commit: HEAD, body: `<!-- bugbot sha=${HEAD} verdict=approve -->`, submittedAt: minsAgo(1) }];
+    assert.equal(bugbotVerdictFor(forged, HEAD, t), null);
+    const wrongCommit = [{ author: 'nitsuah', commit: 'b'.repeat(40), body: `<!-- bugbot sha=${HEAD} verdict=approve -->`, submittedAt: minsAgo(1) }];
+    assert.equal(bugbotVerdictFor(wrongCommit, HEAD, t), null);
+    assert.equal(bugbotVerdictFor(reviews, HEAD), null, 'no trusted authors means nothing counts');
+});
+
+test('a partial (truncated) bugbot review never passes the gate or lifts CodeRabbit', () => {
+    const stalled = { state: 'silent', stalled: true };
+    const partial = { verdict: 'approve', scope: 'partial' };
+    assert.equal(bugbotPassed(partial), false);
+    assert.equal(reviewGate({ crStatus: stalled, bugbot: partial, checksGreen: true }).ok, false);
+    assert.equal(shouldDismissCodeRabbit({ crLatestState: 'CHANGES_REQUESTED', crStatus: stalled, bugbot: partial, checksGreen: true }).ok, false);
+    const out = buildBugbotReview({ verdict: 'approve', findings: [] }, { diff: DIFF, headSha: HEAD, partial: true });
+    assert.equal(out.statusState, 'failure');
+    assert.match(out.body, /scope=partial/);
+});
+
+test('codeRabbitStatus: a running CodeRabbit check wins over a later rate-limit notice', () => {
+    const s = codeRabbitStatus({
+        headSha: HEAD, headAt: minsAgo(30), now: NOW,
+        checks: [{ name: 'CodeRabbit', state: 'PENDING' }],
+        comments: [{ author: 'coderabbitai', createdAt: minsAgo(1), body: 'Rate Limit Exceeded: exceeded the limit for the number of chat messages' }],
+    });
+    assert.equal(s.state, 'working');
+});
+
+test('rightSideLines: hunk content starting with +++ is not a file header', () => {
+    const diff = ['diff --git a/doc.md b/doc.md', '--- a/doc.md', '+++ b/doc.md', '@@ -1,1 +1,3 @@', ' title', '+++ heading', '+text'].join('\n');
+    assert.deepEqual([...rightSideLines(diff).get('doc.md')], [1, 2, 3]);
+    assert.equal(rightSideLines(diff).has('heading'), false);
 });
 
 const DIFF = [
@@ -80,7 +117,7 @@ const DIFF = [
     'index 1..2 100644',
     '--- a/src/a.js',
     '+++ b/src/a.js',
-    '@@ -10,4 +10,5 @@ function x() {',
+    '@@ -10,3 +10,4 @@ function x() {',
     ' keep10',
     '-old11',
     '+new11',
@@ -126,7 +163,7 @@ test('buildBugbotReview: inline threads only on diff lines, no imp- marker, nits
     assert.equal(out.comments.length, 1);
     assert.deepEqual({ path: out.comments[0].path, line: out.comments[0].line, side: out.comments[0].side }, { path: 'src/a.js', line: 11, side: 'RIGHT' });
     assert.doesNotMatch(out.comments[0].body, /<!-- imp-/);
-    assert.match(out.body, new RegExp(`<!-- bugbot sha=${HEAD} verdict=request_changes -->`));
+    assert.match(out.body, new RegExp(`<!-- bugbot sha=${HEAD} verdict=request_changes scope=full -->`));
     assert.match(out.body, /Outside diff/);
     assert.match(out.body, /Nits: Naming/);
     assert.equal(out.statusState, 'failure');

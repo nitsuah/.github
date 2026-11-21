@@ -82,11 +82,11 @@ const ghJson = (args) => {
 const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){
   url number title body state isDraft reviewDecision author{login} labels(first:20){nodes{name}}
   closingIssuesReferences(first:3){nodes{number title body}}
-  commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:60){nodes{
+  commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
-  reviews(last:60){nodes{author{login} state submittedAt body url commit{oid}}}
-  comments(last:60){nodes{author{login} createdAt body}}
-  reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt}}}}
+  reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
+  comments(last:100){nodes{author{login} createdAt body}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line comments(first:30){nodes{author{login} body createdAt}}}}
 }}}`;
 
 /** Everything bugbot decides on, for one PR. */
@@ -97,10 +97,13 @@ function loadPr(slug, number) {
     const checks = (head.statusCheckRollup?.contexts?.nodes || []).map((c) => c.__typename === 'CheckRun'
         ? { name: c.name, state: c.status === 'COMPLETED' ? c.conclusion : c.status }
         : { name: c.context, state: c.state });
-    const reviews = d.reviews.nodes.map((r) => ({ author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
+    const reviews = d.reviews.nodes.map((r) => ({ id: r.databaseId, author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
     const threads = d.reviewThreads.nodes.map((t) => ({ ...t, comments: t.comments.nodes.map((c) => ({ author: c.author?.login || '', body: c.body, createdAt: c.createdAt })) }));
-    const openThreads = threads.filter((t) => !t.isResolved && !t.isOutdated).length;
+    // Fail closed past one page: an unseen check could be red and an unseen thread could be open.
+    const moreThreads = Boolean(d.reviewThreads.pageInfo?.hasNextPage);
+    const moreChecks = Boolean(head.statusCheckRollup?.contexts?.pageInfo?.hasNextPage);
+    const openThreads = threads.filter((t) => !t.isResolved && !t.isOutdated).length + (moreThreads ? 1 : 0);
     // Our own status and CodeRabbit's check do not decide "green": a stalled CodeRabbit must not hold the gate.
     const gateChecks = checks.filter((c) => c.name !== STATUS_CONTEXT && !/coderabbit/i.test(c.name || ''));
     let crLatestState = null;
@@ -109,23 +112,50 @@ function loadPr(slug, number) {
     return {
         slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, isDraft: d.isDraft, labels: d.labels.nodes,
         issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: head.committedDate, checks, reviews, comments, threads, openThreads,
-        checksGreen: evaluateChecks(gateChecks).green, crLatestState,
+        checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
     };
 }
 
 function assess(pr) {
     const crStatus = codeRabbitStatus({ headSha: pr.headSha, headAt: pr.headAt, reviews: pr.reviews, comments: pr.comments, checks: pr.checks, graceMinutes: C.graceMinutes, pendingMaxMinutes: C.pendingMaxMinutes });
-    const bugbot = bugbotVerdictFor(pr.reviews, pr.headSha);
+    const bugbot = bugbotVerdictFor(pr.reviews, pr.headSha, { trustedAuthors: trustedAuthors() });
     const gate = reviewGate({ crApprovedHead: pr.crApprovedHead, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     const dismiss = shouldDismissCodeRabbit({ crLatestState: pr.crLatestState, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     return { crStatus, bugbot, gate, dismiss };
 }
 
+const MAX_DIFF = 60_000;
+
+/** Who may write bugbot markers: the gh account bugbot posts as, plus any configured extra. */
+let trusted = null;
+function trustedAuthors() {
+    if (trusted) return trusted;
+    const me = gh(['api', 'user', '--jq', '.login']);
+    trusted = [...(me.code ? [] : [me.out.trim()]), ...(C.trustedAuthors || [])].filter(Boolean);
+    return trusted;
+}
+
+const statusDescription = (verdict, partial) => (partial ? 'Diff too large for a complete fallback review'
+    : verdict === 'request_changes' ? 'Changes needed (fallback review)' : 'Passed fallback review');
+
+function writeStatus(pr, state, description, url) {
+    const res = gh(['api', `repos/${pr.slug}/statuses/${pr.headSha}`, '-X', 'POST', '-f', `state=${state}`, '-f', `context=${STATUS_CONTEXT}`,
+        '-f', `description=${description}`, ...(url ? ['-f', `target_url=${url}`] : [])]);
+    if (res.code) log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: `status write failed: ${res.err.slice(0, 200)}` });
+    return !res.code;
+}
+
 async function runReview(pr, reason) {
-    let diff = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]).out;
-    const fullDiff = diff;
-    if (diff.length > 60_000) diff = diff.slice(0, 60_000) + '\n… (diff truncated)';
+    const d = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]);
+    if (d.code || !d.out.trim()) {
+        // No diff, no verdict: an empty prompt would "approve" code nobody read.
+        log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: `diff unavailable: ${(d.err || 'empty diff').slice(0, 200)}` });
+        return null;
+    }
+    const fullDiff = d.out;
+    const partial = fullDiff.length > MAX_DIFF;
+    const diff = partial ? fullDiff.slice(0, MAX_DIFF) + '\n… (diff truncated)' : fullDiff;
     const issues = pr.issues.map((i) => `### Issue #${i.number}: ${i.title}\n\n${(i.body || '').slice(0, 4000)}`).join('\n\n') || '(no linked issue)';
     const prompt = [
         readFileSync(join(HERE, 'BUGBOT.md'), 'utf8'),
@@ -142,10 +172,10 @@ async function runReview(pr, reason) {
         if (!rv.error) break;
     }
     if (rv.error) {
-        log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: rv.error, end: metrics.end });
+        log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: rv.error, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : undefined });
         return null;
     }
-    const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served });
+    const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served, partial });
     let url = null;
     if (!o['dry-run']) {
         const post = (comments) => gh(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '-X', 'POST', '--input', '-', '--jq', '.html_url'], {
@@ -154,8 +184,9 @@ async function runReview(pr, reason) {
         let res = post(payload.comments);
         if (res.code && payload.comments.length) {
             // GitHub refuses the whole review if one line is off the diff; fall back to a summary-only review.
-            const listed = payload.comments.map((c) => `- \`${c.path}:${c.line}\`: ${c.body.split('\n')[0]}`).join('\n');
-            payload.body += `\n\n**Inline findings (GitHub refused the line anchors):**\n${listed}`;
+            // Keep each finding whole (evidence and fix), minus the thread marker.
+            const listed = payload.comments.map((c) => `#### \`${c.path}:${c.line}\`\n\n${c.body.split(THREAD_MARK).join('').trim()}`).join('\n\n');
+            payload.body += `\n\n**Inline findings (GitHub refused the line anchors):**\n\n${listed}`;
             res = post([]);
         }
         if (res.code) {
@@ -163,13 +194,13 @@ async function runReview(pr, reason) {
             return null;
         }
         url = res.out;
-        gh(['api', `repos/${pr.slug}/statuses/${pr.headSha}`, '-X', 'POST', '-f', `state=${payload.statusState}`, '-f', `context=${STATUS_CONTEXT}`,
-            '-f', `description=${rv.verdict === 'request_changes' ? 'Changes needed (fallback review)' : 'Passed fallback review'}`, '-f', `target_url=${url}`]);
+        // A failed write is retried by the next sweep from the posted review (handle → restore status).
+        writeStatus(pr, payload.statusState, statusDescription(rv.verdict, partial), url);
     } else {
         console.log(payload.body);
         for (const c of payload.comments) console.log(`  inline ${c.path}:${c.line} ${c.body.split('\n')[0]}`);
     }
-    log({ event: 'bugbot-review', pr: pr.url, sha: pr.headSha, reason, verdict: rv.verdict, counts: rv.counts, inline: payload.comments.length, url, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
+    log({ event: 'bugbot-review', pr: pr.url, sha: pr.headSha, reason, verdict: rv.verdict, partial: partial || undefined, counts: rv.counts, inline: payload.comments.length, url, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
     return { verdict: rv.verdict, url };
 }
 
@@ -193,11 +224,11 @@ async function answerThreads(pr, budget) {
         budget.left--;
         // Only the current diff of the thread's file: the judge checks "Fixed in …" against the code as it is now.
         const fileDiff = (fullDiff.split(/^(?=diff --git )/m).find((part) => part.includes(` b/${t.path}\n`)) || '(this file is no longer in the diff)').slice(0, 20_000);
-        const conversation = t.comments.map((c) => `**${c.author}:** ${String(c.body || '').replace(/<!--[\s\S]*?-->/g, '').trim()}`).join('\n\n');
-        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 4, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
+        const conversation = t.comments.map((c) => `**${c.author}:** ${stripComments(c.body)}`).join('\n\n');
+        const metrics = await chat({ model: o.model, maxTokens: 3000, minutes: 6, prompt: `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## The current diff of ${t.path}\n\n\`\`\`diff\n${fileDiff}\n\`\`\`` });
         const j = parseThreadJudgement(metrics.finalText);
         if (j.error) {
-            log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}` });
+            log({ event: 'bugbot-error', pr: pr.url, thread: t.id, error: `judgement: ${j.error}`, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : undefined });
             continue;
         }
         if (!o['dry-run']) {
@@ -211,10 +242,26 @@ async function answerThreads(pr, budget) {
     return answered;
 }
 
+/** HTML comments out (repeated until stable, then any stray opener or closer), for prompt text. */
+function stripComments(text = '') {
+    let out = String(text);
+    let prev;
+    do {
+        prev = out;
+        out = out.replace(/<!--[\s\S]*?-->/g, '');
+    } while (out !== prev);
+    return out.replace(/<!--|-->/g, '').trim();
+}
+
+/**
+ * Dismiss only the CodeRabbit reviews the assessment saw: CHANGES_REQUESTED on an older commit. Each one is
+ * re-read first, so a review CodeRabbit submits after the snapshot (it came back) is never touched.
+ */
 function dismissCodeRabbit(pr, why) {
-    const reviews = ghJson(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '--paginate']);
-    const blocking = reviews.filter((r) => isCodeRabbit(r.user?.login) && r.state === 'CHANGES_REQUESTED');
-    for (const r of blocking) {
+    const snapshot = pr.reviews.filter((r) => isCodeRabbit(r.author) && r.state === 'CHANGES_REQUESTED' && r.commit !== pr.headSha && r.id);
+    for (const s of snapshot) {
+        const r = ghJson(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews/${s.id}`]);
+        if (!r || r.state !== 'CHANGES_REQUESTED' || r.commit_id === pr.headSha) continue;
         if (o['dry-run']) {
             console.log(`would dismiss CodeRabbit review ${r.id}`);
             continue;
@@ -232,6 +279,12 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
     // Replies on our own threads first: they unblock a PR sooner than a new review does.
     if (await answerThreads(pr, budget) && !o['dry-run']) pr = loadPr(slug, number);
     let a = assess(pr);
+    // A bugbot review whose status write failed: restore the status from the review instead of reviewing again.
+    if (a.bugbot && !pr.hasBugbotStatus && !o['dry-run']) {
+        const failing = a.bugbot.verdict === 'request_changes' || a.bugbot.scope === 'partial';
+        if (writeStatus(pr, failing ? 'failure' : 'success', statusDescription(a.bugbot.verdict, a.bugbot.scope === 'partial'), a.bugbot.url))
+            log({ event: 'bugbot-status-restored', pr: pr.url, sha: pr.headSha });
+    }
     if (!a.bugbot && (a.crStatus.stalled || force)) {
         if (reviewsInLastDay(events(), pr.url) >= C.perPrPerDay) {
             log({ event: 'bugbot-skip', pr: pr.url, sha: pr.headSha, reason: `per-PR cap (${C.perPrPerDay}/day)` });
@@ -258,7 +311,12 @@ function parseTarget(t = '') {
 }
 
 async function main() {
-    if (process.env.IMPS_BUGBOT === '0') return console.log('bugbot disabled (IMPS_BUGBOT=0)');
+    if (process.env.IMPS_BUGBOT === '0') {
+        console.log('bugbot disabled (IMPS_BUGBOT=0)');
+        // `status` promises exit 0 only when the gate passes; an unassessed PR must not read as passed.
+        if (cmd === 'status') process.exit(3);
+        return;
+    }
     if (cmd === 'status') {
         const [slug, n] = parseTarget(target);
         const pr = loadPr(slug, n);
