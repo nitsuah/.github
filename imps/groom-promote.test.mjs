@@ -136,4 +136,8 @@ test('promotionVerdict with exists: holds when no specific allow path is real, o
     assert.match(v(brief(), noPkg).reasons.join(), /no package\.json/);
     const cdSub = brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && npm ci') });
     assert.doesNotMatch(v(cdSub, noPkg).reasons.join(), /package\.json/);
+    const cdPlain = brief({ test: 'docker run --rm -v {wt}:/app -w /app node:22 sh -c "cd frontend&& npm ci"'.replace('frontend&&', 'frontend &&') });
+    assert.doesNotMatch(v(cdPlain, noPkg).reasons.join(), /no package\.json/);
+    // "(or similar)" with nothing after it is still a hedge.
+    assert.match(verdict({}, brief().replace('round the count.', 'round the count (or similar).')).reasons.join(), /hedges/);
 });

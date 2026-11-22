@@ -123,7 +123,7 @@ export function guessedPathReasons(briefText, exists) {
         const specific = allow.filter((p) => !GENERIC.test(p));
         if (specific.length && !specific.some((p) => exists(p))) reasons.push(`no allow: path is on the default branch (${specific.join(', ')})`);
         const test = String(meta.test || '');
-        const inSubdir = /sh -c "cd [\w./-]+ &&/.test(test) || /-w \/{1,2}app\/[\w.-]/.test(test);
+        const inSubdir = /\bcd [\w./-]+ *&&/.test(test) ||/-w \/{1,2}app\/[\w.-]/.test(test);
         if (/\bnpm (?:ci|test|run)\b/.test(test) && !inSubdir && !exists('package.json')) reasons.push('test runs npm at the repo root but there is no package.json there');
     }
     return reasons;

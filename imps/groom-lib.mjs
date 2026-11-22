@@ -384,7 +384,8 @@ export async function runGroom({
                     enabled: config.groomAutoPromote !== false,
                     poster, briefAuthors,
                     ownerKeywordHold: config.groomOwnerKeywordHold === true,
-                    exists: tree ? treeExists(tree) : undefined,
+                    // A truncated tree can't prove a path is absent, so only the hedge check runs then.
+                    exists: tree && !tree.truncated ? treeExists(tree) : undefined,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {

@@ -91,7 +91,7 @@ test('fetchRepoTree / treeExists / treeContext', async () => {
     const tree = fetchRepoTree(gh, 'nitsuah', 'vhs');
     assert.equal(calls.length, 1);
     assert.match(calls[0][1], /^repos\/nitsuah\/vhs\/git\/trees\/HEAD\?recursive=1$/);
-    assert.deepEqual(tree, ['src/a.js', 'src/lib/b.js', 'package.json', 'assets/logo.png', 'node_modules/x/y.js']);
+    assert.deepEqual([...tree], ['src/a.js', 'src/lib/b.js', 'package.json', 'assets/logo.png', 'node_modules/x/y.js']);
     assert.equal(fetchRepoTree(() => { throw new Error('404'); }, 'o', 'r'), null);
     assert.equal(fetchRepoTree(() => '', 'o', 'r'), null);
     const ex = treeExists(tree);
@@ -101,4 +101,10 @@ test('fetchRepoTree / treeExists / treeContext', async () => {
     assert.match(ctx, /src\/lib\/b\.js/);
     assert.doesNotMatch(ctx, /logo\.png|node_modules/);
     assert.match(treeContext(['a/1.js', 'a/2.js', 'a/3.js'], { max: 2 }), /1 more/);
+    assert.equal(tree.truncated, false);
+    // GitHub's truncated flag rides along so callers skip absence checks on a partial tree.
+    const cut = fetchRepoTree(() => '#truncated\nsrc/a.js\n', 'o', 'r');
+    assert.deepEqual([...cut], ['src/a.js']);
+    assert.equal(cut.truncated, true);
+    assert.match(calls[0][3], /truncated/);
 });

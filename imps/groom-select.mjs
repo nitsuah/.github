@@ -96,12 +96,18 @@ export function fetchNamedFiles(gh, owner, repo, paths = [], { maxChars = 6000 }
  * The drafting model sees it so `## The fix` and `allow:` name real files, and promotion uses it
  * to hold briefs whose paths are guesses (five of seven groomed briefs on 2026-11-21 named files
  * that did not exist, e.g. app/lib/state.mjs, src/worker/, an npm ci in a repo with no package.json).
+ * GitHub cuts the recursive tree off past its size limit and sets `truncated`; the returned array
+ * then carries `truncated: true`, and callers must not treat a missing path as proof it is absent.
  */
+export const TRUNCATED_MARK = '#truncated';
 export function fetchRepoTree(gh, owner, repo) {
     try {
-        const out = gh(['api', `repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, '--jq', '.tree[] | select(.type == "blob") | .path']);
-        const paths = String(out || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-        return paths.length ? paths : null;
+        const out = gh(['api', `repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, '--jq', `(if .truncated then "${TRUNCATED_MARK}" else empty end), (.tree[] | select(.type == "blob") | .path)`]);
+        const lines = String(out || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        const paths = lines.filter((l) => l !== TRUNCATED_MARK);
+        if (!paths.length) return null;
+        paths.truncated = lines.includes(TRUNCATED_MARK);
+        return paths;
     } catch {
         return null;
     }
