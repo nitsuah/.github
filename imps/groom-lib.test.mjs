@@ -234,6 +234,15 @@ test('postGroomed: comment ok, label fails twice, DELETE throws -> ok false, err
 test('clipLines keeps whole lines and marks what it dropped', async () => {
     const { clipLines } = await import('./groom-lib.mjs');
     assert.equal(clipLines('a/1.js\nb/2.js', 100), 'a/1.js\nb/2.js');
-    const out = clipLines('src/aaaa.js\nsrc/bbbb.js\nsrc/cccc.js', 25);
-    assert.equal(out, 'src/aaaa.js\nsrc/bbbb.js\n… (1 more lines)');
+    const out = clipLines('src/aaaa.js\nsrc/bbbb.js\nsrc/cccc.js', 30);
+    assert.equal(out, 'src/aaaa.js\n… (2 more lines)');
+    // Never longer than max, marker included, and only whole lines survive.
+    const many = Array.from({ length: 500 }, (_, i) => `src/dir${i}/file${i}.js`).join('\n');
+    for (const max of [30, 100, 999, 6000]) {
+        const c = clipLines(many, max);
+        assert.ok(c.length <= max, `${c.length} > ${max}`);
+        const body = c.split('\n').slice(0, -1);
+        for (const l of body) assert.match(l, /^src\/dir\d+\/file\d+\.js$/);
+        assert.match(c, /more lines\)$/);
+    }
 });

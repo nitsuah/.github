@@ -158,6 +158,10 @@ test('promotionVerdict with exists: holds when no specific allow path is real, o
     const sub = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd frontend && npm ci) && npm test && npx') }), frontendOnly);
     assert.match(sub.reasons.join(), /npm at the repo root/);
     assert.doesNotMatch(sub.reasons.join(), /frontend\//);
+    // The npm inside the group is checked against the group's cwd too.
+    const missing = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd missing && npm ci) && npm test && npx') }));
+    assert.match(missing.reasons.join(), /npm in missing\/ but there is no missing\/package\.json/);
+    assert.doesNotMatch(missing.reasons.join(), /repo root/);
     // . and .. are resolved: cd frontend && cd .. lands back on a root that has package.json.
     const back = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && cd .. && cd ./ && npm ci') }));
     assert.deepEqual(back.reasons, []);

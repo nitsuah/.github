@@ -109,19 +109,24 @@ export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
 /**
  * `text` cut to at most `max` characters on a line boundary, with a marker saying how many lines
  * were dropped. A cut mid-line would hand the model a path fragment it could copy as a real file.
+ * The result, marker included, never exceeds `max`.
  */
 export function clipLines(text, max) {
     const s = String(text);
     if (s.length <= max) return s;
     const lines = s.split('\n');
+    const marker = (n) => `… (${n} more lines)`;
+    // Reserve room for the newline plus the widest marker this text could need.
+    const budget = max - (marker(lines.length).length + 1);
     const kept = [];
-    let used = 0;
+    let used = -1; // join adds a separator only between lines
     for (const l of lines) {
-        if (used + l.length + 1 > max) break;
+        if (used + 1 + l.length > budget) break;
         kept.push(l);
-        used += l.length + 1;
+        used += 1 + l.length;
     }
-    return `${kept.join('\n')}\n… (${lines.length - kept.length} more lines)`;
+    const tail = marker(lines.length - kept.length);
+    return kept.length ? `${kept.join('\n')}\n${tail}` : tail;
 }
 
 /** Draft a brief via 9router chat completion. Retry once after 2s; use [::1] for localhost. */
