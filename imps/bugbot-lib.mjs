@@ -20,7 +20,7 @@ export const THREAD_MARK = '<!-- bugbot-thread -->';
 export const BUGBOT_DEFAULTS = {
     graceMinutes: 20, // how long CodeRabbit gets to review a new head before it counts as silent
     pendingMaxMinutes: 45, // a CodeRabbit check still pending after this long counts as stalled
-    maxPerSweep: 2, // bugbot reviews per sweep (each one is a 9router completion)
+    maxPerSweep: 4, // bugbot reviews per sweep (each one is a 9router completion)
     perPrPerDay: 6, // bugbot reviews of one PR in 24 h, so a fix/re-review loop cannot spin
     skipLabel: 'bugbot:skip',
     skipRepos: ['security-program', '9router', '9router-fork'],
@@ -217,10 +217,13 @@ export function shouldDismissCodeRabbit({ crLatestState, crStatus, bugbot, openT
  * or (when it is stalled) bugbot passed the head. Either way no thread may be
  * open and checks must be green.
  */
-export function reviewGate({ crApprovedHead = false, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
+export function reviewGate({ crApprovedHead = false, crBlocksHead = false, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (crApprovedHead) return { ok: true, reason: 'CodeRabbit approved the head' };
+    // Repos with CodeRabbit approvals disabled only ever get COMMENTED reviews (`@coderabbitai approve` is refused,
+    // stash#425): a review of the head that requests nothing, with every thread answered, is the clean review.
+    if (crStatus?.state === 'reviewed' && !crBlocksHead) return { ok: true, reason: 'CodeRabbit reviewed the head and left nothing open' };
     if (crStatus?.stalled && bugbotPassed(bugbot)) return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
     if (crStatus?.stalled) return { ok: false, reason: !bugbot ? 'CodeRabbit stalled and bugbot has not reviewed the head' : bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
     return { ok: false, reason: `waiting for CodeRabbit (${crStatus?.state || 'unknown'})` };

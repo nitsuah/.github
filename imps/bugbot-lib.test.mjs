@@ -219,6 +219,17 @@ test('reviewGate: CodeRabbit approval, or bugbot pass while CodeRabbit is stalle
     assert.equal(reviewGate({ crStatus: { state: 'working', stalled: false }, bugbot: { verdict: 'approve' }, checksGreen: true }).ok, false);
 });
 
+test('reviewGate: a CodeRabbit review of the head that requests nothing passes (approvals disabled)', () => {
+    const reviewed = { state: 'reviewed', stalled: false };
+    assert.equal(reviewGate({ crStatus: reviewed, checksGreen: true }).ok, true);
+    // ...but not with a thread still open, red checks, or changes requested on the head itself
+    assert.equal(reviewGate({ crStatus: reviewed, checksGreen: true, openThreads: 1 }).ok, false);
+    assert.equal(reviewGate({ crStatus: reviewed, checksGreen: false }).ok, false);
+    assert.equal(reviewGate({ crStatus: reviewed, crBlocksHead: true, checksGreen: true }).ok, false);
+    // a review of an older commit does not count: CodeRabbit is still waited for
+    assert.equal(reviewGate({ crStatus: { state: 'waiting', stalled: false }, checksGreen: true }).ok, false);
+});
+
 test('sweepCandidates drops drafts, bot authors, skipped repos and skip-labelled PRs', () => {
     const prs = [
         { number: 1, repository: { name: 'fire' }, author: { login: 'nitsuah' }, labels: [] },

@@ -148,13 +148,14 @@ function loadPr(slug, number) {
         commentsComplete,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
+        crBlocksHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'CHANGES_REQUESTED' && r.commit === head.oid),
     };
 }
 
 function assess(pr) {
     const crStatus = codeRabbitStatus({ headSha: pr.headSha, headAt: pr.headAt, reviews: pr.reviews, comments: pr.comments, checks: pr.checks, graceMinutes: C.graceMinutes, pendingMaxMinutes: C.pendingMaxMinutes });
     const bugbot = bugbotVerdictFor(pr.reviews, pr.headSha, { trustedAuthors: trustedAuthors() });
-    const gate = reviewGate({ crApprovedHead: pr.crApprovedHead, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
+    const gate = reviewGate({ crApprovedHead: pr.crApprovedHead, crBlocksHead: pr.crBlocksHead, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     const dismiss = shouldDismissCodeRabbit({ crLatestState: pr.crLatestState, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     return { crStatus, bugbot, gate, dismiss };
 }
