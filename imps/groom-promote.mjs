@@ -140,7 +140,9 @@ export function npmDirsWithoutPackageJson(cmd, exists) {
     const inner = cmd.match(/\bsh -c (["'])([\s\S]*)\1/);
     let dir = norm(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
     const bad = new Set();
-    for (const step of (inner ? inner[2] : cmd).split(/&&|;|\|\|/).map((s) => s.trim().replace(/^\(+/, ''))) {
+    // Without sh -c the container command is whatever follows the image, e.g. `... node:22 npm test`.
+    const body = inner ? inner[2] : (cmd.match(/\s(npm\s[\s\S]*)$/)?.[1] ?? '');
+    for (const step of body.split(/&&|;|\|\|/).map((s) => s.trim().replace(/^\(+/, ''))) {
         const cd = step.match(/^cd\s+(\S+)$/);
         if (cd) {
             const to = cd[1];
