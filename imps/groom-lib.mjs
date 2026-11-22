@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
 import { promotionVerdict, groomedComment } from './groom-promote.mjs';
-import { groomEligible, namedPaths, fetchNamedFiles, DRAFT_CHECKLIST } from './groom-select.mjs';
+import { groomEligible, namedPaths, fetchNamedFiles, fetchRepoTree, treeExists, treeContext, DRAFT_CHECKLIST } from './groom-select.mjs';
 
 export const DRAFT_MARK = '<!-- imp-brief-draft -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
@@ -125,7 +125,7 @@ The brief MUST be valid front-matter + body:
 - Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
 ${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
-${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, f.startsWith('file: ') ? 6000 : 3000)}`).join('\n\n')}
+${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, f.startsWith('file: ') || f === 'repo file list' ? 6000 : 3000)}`).join('\n\n')}
 
 Issue:
 #${issue}: ${title}
@@ -356,7 +356,9 @@ export async function runGroom({
             // Fetch context and draft
             try {
                 // The files the issue names, so the brief can state real code facts.
+                const tree = fetchRepoTree(gh, owner, issue.repo);
                 const context = {
+                    ...(tree ? { 'repo file list': treeContext(tree) } : {}),
                     ...(await fetchRepoContext(gh, owner, issue.repo)),
                     ...fetchNamedFiles(gh, owner, issue.repo, namedPaths(`${issue.title}\n${issue.body}`)),
                 };
@@ -382,6 +384,7 @@ export async function runGroom({
                     enabled: config.groomAutoPromote !== false,
                     poster, briefAuthors,
                     ownerKeywordHold: config.groomOwnerKeywordHold === true,
+                    exists: tree ? treeExists(tree) : undefined,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {

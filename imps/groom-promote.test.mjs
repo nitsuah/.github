@@ -113,3 +113,27 @@ test('groomedComment: a promoted brief round-trips through briefFromComments; a 
     assert.match(held, /- label security/);
     assert.equal(briefFromComments([{ author: { login: 'nitsuah' }, body: held }]), null);
 });
+
+test('promotionVerdict holds briefs whose target file is a hedged guess (2026-11-21 groomer failures)', () => {
+    const hedged = brief().replace('In src/stats/chips.js, round the count.', 'File: `src/worker/index.ts` (or similar Worker entry)\nRound the count.');
+    assert.match(verdict({}, hedged).reasons.join(), /hedges on its target file/);
+    const ifInline = brief().replace('In src/stats/chips.js', 'In `src/routes/health.js` (or `src/server.js` if health inline)');
+    assert.match(verdict({}, ifInline).reasons.join(), /hedges/);
+    assert.deepEqual(verdict().reasons, [], 'a plain file reference is not a hedge');
+});
+
+test('promotionVerdict with exists: holds when no specific allow path is real, or npm runs where there is no package.json', () => {
+    const tree = new Set(['src/stats/chips.js', 'tests/stats.test.js', 'package.json', 'CHANGELOG.md']);
+    const exists = (p) => tree.has(p.replace(/\/$/, '')) || [...tree].some((f) => f.startsWith(p.replace(/\/?$/, '/')));
+    const v = (text, ex = exists) => promotionVerdict({ issue: issue(), briefText: text, owner: 'nitsuah', poster: 'nitsuah', exists: ex });
+    assert.deepEqual(v(brief()).reasons, []);
+    // vhs#203: src/worker/ and tests/worker/ did not exist; package.json alone proves nothing.
+    assert.match(v(brief({ allow: 'src/worker/, tests/worker/, package.json' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/, tests\/worker\/\)/);
+    // one real path plus a new test file is fine
+    assert.deepEqual(v(brief({ allow: 'src/stats/, tests/new-thing.test.js' })).reasons, []);
+    // kryptos#313: a Python repo whose frontend lives in frontend/ — npm ci at the root cannot work.
+    const noPkg = (p) => p !== 'package.json' && exists(p);
+    assert.match(v(brief(), noPkg).reasons.join(), /no package\.json/);
+    const cdSub = brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && npm ci') });
+    assert.doesNotMatch(v(cdSub, noPkg).reasons.join(), /package\.json/);
+});

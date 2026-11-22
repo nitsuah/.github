@@ -55,7 +55,7 @@ export function sensitiveTerm(text) {
  * Decide whether a groomed brief may be promoted to imp:ready.
  * Returns { promote, reasons } where reasons lists every failed check (empty when promoted).
  */
-export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'], ownerKeywordHold = false } = {}) {
+export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'], ownerKeywordHold = false, exists } = {}) {
     const reasons = [];
     if (!enabled) reasons.push('auto-promote is off (config groomAutoPromote: false)');
     // The dispatcher only reads briefs posted by IMPS_BRIEF_AUTHORS; a brief from any other
@@ -94,12 +94,39 @@ export function promotionVerdict({ issue = {}, briefText = '', owner = '', trust
     if (Number.isFinite(ml) && ml > maxLines) reasons.push(`maxLines ${ml} over the groomer cap ${maxLines}`);
     if (meta.depends && !/^(none|n\/a|-)\s*(;|$)/i.test(String(meta.depends).trim())) reasons.push('has depends: (a person checks the order)');
 
+    for (const r of guessedPathReasons(String(briefText), exists)) reasons.push(r);
+
     for (const key of ['test', 'lint', 'format']) {
         if (key !== 'test' && !meta[key]) continue;
         const why = unsafeCommand(meta[key], issue.repo || repo);
         if (why) reasons.push(`${key}: ${why}`);
     }
     return { promote: reasons.length === 0, reasons };
+}
+
+// A drafted target the model hedged on: "File: src/worker/index.ts (or similar Worker entry)".
+const HEDGE = /\((?:or|maybe|possibly) (?:similar|wherever|whichever|equivalent|main|the main|another)\b|\(or `[^`]+` if\b/i;
+// Allow entries that exist in nearly every repo and so prove nothing about the target.
+const GENERIC = /^(?:package\.json|CHANGELOG\.md|docs\/CHANGELOG\.md|README\.md|docs\/?|tests?\/?|TASKS\.md|ROADMAP\.md)$/i;
+
+/**
+ * Reasons a brief's paths look guessed rather than read. `exists` (path => boolean on the default
+ * branch) is optional; without it only the hedge check runs.
+ */
+export function guessedPathReasons(briefText, exists) {
+    const reasons = [];
+    const { meta, body } = parseBrief(String(briefText));
+    const hedge = String(body || '').match(HEDGE);
+    if (hedge) reasons.push(`brief hedges on its target file ("${hedge[0]}"), so the path is a guess`);
+    if (typeof exists === 'function') {
+        const allow = String(meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const specific = allow.filter((p) => !GENERIC.test(p));
+        if (specific.length && !specific.some((p) => exists(p))) reasons.push(`no allow: path is on the default branch (${specific.join(', ')})`);
+        const test = String(meta.test || '');
+        const inSubdir = /sh -c "cd [\w./-]+ &&/.test(test) || /-w \/{1,2}app\/[\w.-]/.test(test);
+        if (/\bnpm (?:ci|test|run)\b/.test(test) && !inSubdir && !exists('package.json')) reasons.push('test runs npm at the repo root but there is no package.json there');
+    }
+    return reasons;
 }
 
 /** The issue comment for a groomed brief: a real brief when promoted, else a held draft with its reasons. */
