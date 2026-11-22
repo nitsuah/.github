@@ -147,8 +147,23 @@ test('promotionVerdict with exists: holds when no specific allow path is real, o
     const bare = brief({ test: 'docker run --rm -v {wt}:/app -v imp-nm-vhs:/app/node_modules -w /app node:22 npm test' });
     assert.match(v(bare, noPkg).reasons.join(), /npm at the repo root/);
     assert.deepEqual(v(bare).reasons, []);
-    const bareSub = brief({ test: 'docker run --rm -v {wt}:/app -w /app/frontend node:22 npm test' });
-    assert.doesNotMatch(v(bareSub, frontendOnly).reasons.join(), /package\.json/);
+    // -w must be /app (unsafeCommand), so a subdirectory -w is held on shape, not promoted.
+    const bareSub = v(brief({ test: 'docker run --rm -v {wt}:/app -w /app/frontend node:22 npm test' }), frontendOnly);
+    assert.equal(bareSub.promote, false);
+    assert.match(bareSub.reasons.join(), /not the sandboxed docker shape/);
+    assert.doesNotMatch(bareSub.reasons.join(), /package\.json/);
+    // Flags before the subcommand still count as npm.
+    assert.match(v(brief({ test: 'docker run --rm -v {wt}:/app -w /app node:22 npm --silent test' }), noPkg).reasons.join(), /npm at the repo root/);
+    // A cd inside ( … ) ends at the paren: the later npm test runs at the root.
+    const sub = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd frontend && npm ci) && npm test && npx') }), frontendOnly);
+    assert.match(sub.reasons.join(), /npm at the repo root/);
+    assert.doesNotMatch(sub.reasons.join(), /frontend\//);
+    // . and .. are resolved: cd frontend && cd .. lands back on a root that has package.json.
+    const back = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && cd .. && cd ./ && npm ci') }));
+    assert.deepEqual(back.reasons, []);
+    assert.equal(back.promote, true);
+    // The sh -c subdirectory form is the promotable one.
+    assert.equal(v(cdSub, frontendOnly).promote, true);
     // A test file that exists does not stand in for a missing implementation path.
     assert.match(v(brief({ allow: 'src/worker/, tests/stats.test.js' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/\)/);
     // "(or similar)" with nothing after it is still a hedge.

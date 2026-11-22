@@ -133,23 +133,42 @@ export function guessedPathReasons(briefText, exists) {
 /**
  * Directories (repo-relative, '' = root) where `cmd` runs an npm command with no package.json there.
  * Walks the steps in order, so `npm ci && cd frontend && npm test` still flags the root `npm ci`,
- * and a `cd` must land somewhere that has a package.json of its own.
+ * and a `cd` must land somewhere that has a package.json of its own. A `cd` inside `( … )` lasts
+ * only to the closing paren, and `.`/`..` are resolved. Any step whose program is `npm` counts,
+ * whatever flags come first (`npm --silent test`).
  */
 export function npmDirsWithoutPackageJson(cmd, exists) {
-    const norm = (p) => String(p).replace(/^\/{1,2}app(?:\/|$)/, '').replace(/^\.\//, '').replace(/\/+$/, '');
+    const canon = (p) => {
+        const out = [];
+        for (const seg of String(p).split('/')) {
+            if (!seg || seg === '.') continue;
+            if (seg === '..') out.pop();
+            else out.push(seg);
+        }
+        return out.join('/');
+    };
+    const fromApp = (p) => canon(String(p).replace(/^\/{1,2}app(?=\/|$)/, ''));
     const inner = cmd.match(/\bsh -c (["'])([\s\S]*)\1/);
-    let dir = norm(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
+    let dir = fromApp(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
+    const stack = [];
     const bad = new Set();
     // Without sh -c the container command is whatever follows the image, e.g. `... node:22 npm test`.
     const body = inner ? inner[2] : (cmd.match(/\s(npm\s[\s\S]*)$/)?.[1] ?? '');
-    for (const step of body.split(/&&|;|\|\|/).map((s) => s.trim().replace(/^\(+/, ''))) {
-        const cd = step.match(/^cd\s+(\S+)$/);
-        if (cd) {
-            const to = cd[1];
-            dir = to.startsWith('/') ? norm(to) : norm(dir ? `${dir}/${to}` : to);
-            continue;
+    for (const raw of body.split(/&&|;|\|\|/)) {
+        let step = raw.trim();
+        while (step.startsWith('(')) {
+            stack.push(dir);
+            step = step.slice(1).trim();
         }
-        if (/^npm (?:ci|test|run|install|i)\b/.test(step) && !exists(dir ? `${dir}/package.json` : 'package.json')) bad.add(dir);
+        let closes = 0;
+        while (step.endsWith(')')) {
+            closes++;
+            step = step.slice(0, -1).trim();
+        }
+        const cd = step.match(/^cd\s+(\S+)$/);
+        if (cd) dir = cd[1].startsWith('/') ? fromApp(cd[1]) : canon(`${dir}/${cd[1]}`);
+        else if (/^npm(?:\s|$)/.test(step) && !exists(dir ? `${dir}/package.json` : 'package.json')) bad.add(dir);
+        for (; closes > 0 && stack.length; closes--) dir = stack.pop();
     }
     return [...bad];
 }
