@@ -372,3 +372,81 @@ export function shouldAskCodeRabbitApproval({ crStatus, crLatestState, openThrea
     if (!historyComplete) return { ok: false, reason: 'comment history incomplete; cannot rule out an earlier ask' };
     return { ok: true, reason: 'CodeRabbit reviewed the head, nothing is open and checks are green' };
 }
+
+/**
+ * The latest passing bugbot verdict on any commit of the PR, or null. Same trust
+ * rules as bugbotVerdictFor (trusted author, marker sha equals the review's commit);
+ * used to carry a verdict over a head that only merged the base branch in.
+ */
+export function latestPassedVerdict(reviews = [], { trustedAuthors = [] } = {}) {
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
+    let found = null;
+    for (const r of [...reviews].sort((a, b) => ts(a.submittedAt) - ts(b.submittedAt))) {
+        const m = parseBugbotMarker(r.body);
+        if (!m || !r.commit || !r.commit.startsWith(m.sha)) continue;
+        if (!trusted.has(String(r.author || '').toLowerCase())) continue;
+        found = { ...m, sha: r.commit, url: r.url || null };
+    }
+    return bugbotPassed(found) ? found : null;
+}
+
+/**
+ * A PR's own changes, as compare-API files: per file, only the added and removed
+ * lines (no context, no hunk headers), so the same change measured against an
+ * older and a newer base compares equal. Returns null (fail closed) when the
+ * file list may be truncated or a changed file has no patch to compare.
+ */
+export function ownChanges(files = [], { maxFiles = 300 } = {}) {
+    if (!Array.isArray(files) || files.length >= maxFiles) return null;
+    const out = new Map();
+    for (const f of files) {
+        if (typeof f.patch !== 'string') {
+            if ((f.changes || 0) > 0 || f.status === 'renamed') return null;
+            out.set(f.filename, `${f.status}`);
+            continue;
+        }
+        const lines = f.patch.split('\n').filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'));
+        out.set(f.filename, `${f.status}${f.previous_filename ? `<${f.previous_filename}` : ''}\n${lines.join('\n')}`);
+    }
+    return out;
+}
+
+/** True only when both change sets are known and identical file by file. */
+export function sameOwnChanges(a, b) {
+    if (!a || !b || a.size !== b.size) return false;
+    for (const [file, change] of a) if (b.get(file) !== change) return false;
+    return true;
+}
+
+/**
+ * Numbered lines around `line` (1-based) for the thread judge, so it can check
+ * evidence that sits outside the diff. With no line, the start of the file.
+ */
+export function excerptLines(text = '', line = null, radius = 60) {
+    const all = String(text).split('\n');
+    const center = Number.isInteger(line) && line > 0 ? line : 1;
+    const from = Math.max(1, center - radius);
+    const to = Math.min(all.length, center + radius);
+    const width = String(to).length;
+    return all.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(width)}  ${l}`).join('\n');
+}
+
+/**
+ * `path:line` locations cited in reply text (e.g. "app/lib/db.js:140"), deduped,
+ * at most `max`. URLs are ignored; only repo-relative paths with an extension.
+ */
+export function citedLocations(text = '', max = 3) {
+    const out = [];
+    const seen = new Set();
+    const cleaned = String(text).replace(/https?:\/\/\S+/g, ' ');
+    for (const m of cleaned.matchAll(/(?<![\w/.-])((?:[\w@-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8}):(\d{1,6})\b/g)) {
+        const path = m[1].replace(/^\.\//, '');
+        if (path.startsWith('/') || path.includes('..')) continue;
+        const key = `${path}:${m[2]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ path, line: Number(m[2]) });
+        if (out.length >= max) break;
+    }
+    return out;
+}
