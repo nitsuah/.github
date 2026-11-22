@@ -469,9 +469,9 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         pr = loadPr(slug, number);
         a = assess(pr);
     }
-    // CodeRabbit reviewed the head and only its stale block remains: ask it to approve, once per head.
+    // CodeRabbit reviewed the head without approving it (a stale block, or comments only): ask it to approve, once per head.
     const ask = shouldAskCodeRabbitApproval({
-        crStatus: a.crStatus, crLatestState: pr.crLatestState, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
+        crStatus: a.crStatus, crApprovedHead: pr.crApprovedHead, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
         headSha: pr.headSha, comments: pr.comments, historyComplete: pr.commentsComplete, isImpPr: pr.labels.some((l) => (l.name || l) === 'imp'),
     });
     if (ask.ok) {

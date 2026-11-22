@@ -271,7 +271,7 @@ test('canClearVerdict: only request_changes, full scope, every bugbot thread ans
 
 test('shouldAskCodeRabbitApproval: once per head, only when CodeRabbit reviewed it and nothing is open', async () => {
     const { shouldAskCodeRabbitApproval, APPROVE_ASK_MARK } = await import('./bugbot-lib.mjs');
-    const base = { crStatus: { state: 'reviewed' }, crLatestState: 'CHANGES_REQUESTED', openThreads: 0, checksGreen: true, headSha: HEAD, comments: [], historyComplete: true };
+    const base = { crStatus: { state: 'reviewed' }, crApprovedHead: false, openThreads: 0, checksGreen: true, headSha: HEAD, comments: [], historyComplete: true };
     // the default is conservative: a caller that omits historyComplete never triggers a second ask
     const { historyComplete: _h, ...noHistory } = base;
     assert.equal(shouldAskCodeRabbitApproval(noHistory).ok, false);
@@ -279,7 +279,10 @@ test('shouldAskCodeRabbitApproval: once per head, only when CodeRabbit reviewed 
     assert.equal(shouldAskCodeRabbitApproval({ ...base, comments: [{ body: `@coderabbitai approve\n\n${APPROVE_ASK_MARK(HEAD)}` }] }).ok, false, 'asked already');
     assert.equal(shouldAskCodeRabbitApproval({ ...base, comments: [{ body: APPROVE_ASK_MARK('b'.repeat(40)) }] }).ok, true, 'an ask for an older head does not count');
     assert.equal(shouldAskCodeRabbitApproval({ ...base, crStatus: { state: 'silent' } }).ok, false);
-    assert.equal(shouldAskCodeRabbitApproval({ ...base, crLatestState: 'APPROVED' }).ok, false);
+    assert.equal(shouldAskCodeRabbitApproval({ ...base, crApprovedHead: true }).ok, false, 'already approved the head');
+    // a stale block and a comments-only CodeRabbit are asked the same way: neither approves the head by itself
+    assert.equal(shouldAskCodeRabbitApproval({ ...base, crLatestState: 'CHANGES_REQUESTED' }).ok, true);
+    assert.equal(shouldAskCodeRabbitApproval({ ...base, crLatestState: null }).ok, true, 'comments-only CodeRabbit');
     assert.equal(shouldAskCodeRabbitApproval({ ...base, openThreads: 1 }).ok, false);
     assert.equal(shouldAskCodeRabbitApproval({ ...base, checksGreen: false }).ok, false);
     assert.equal(shouldAskCodeRabbitApproval({ ...base, isImpPr: true }).ok, false);

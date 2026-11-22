@@ -20,7 +20,7 @@ export const THREAD_MARK = '<!-- bugbot-thread -->';
 export const BUGBOT_DEFAULTS = {
     graceMinutes: 20, // how long CodeRabbit gets to review a new head before it counts as silent
     pendingMaxMinutes: 45, // a CodeRabbit check still pending after this long counts as stalled
-    maxPerSweep: 2, // bugbot reviews per sweep (each one is a 9router completion)
+    maxPerSweep: 4, // bugbot reviews per sweep (each one is a 9router completion)
     perPrPerDay: 6, // bugbot reviews of one PR in 24 h, so a fix/re-review loop cannot spin
     skipLabel: 'bugbot:skip',
     skipRepos: ['security-program', '9router', '9router-fork'],
@@ -361,9 +361,11 @@ export const APPROVE_ASK_MARK = (sha) => `<!-- bugbot-approve-ask sha=${sha} -->
  * CodeRabbit reviewed the head and its old CHANGES_REQUESTED is the only thing left: ask it once per head
  * to approve. Imp PRs are left to the fix round, which already does this for them.
  */
-export function shouldAskCodeRabbitApproval({ crStatus, crLatestState, openThreads = 0, checksGreen = false, headSha, comments = [], historyComplete = false, isImpPr = false } = {}) {
+// Asks whether CodeRabbit left a stale CHANGES_REQUESTED or only ever COMMENTED: on repos where it never
+// approves by itself, a clean head otherwise waits forever (stash#425, 2026-11-22).
+export function shouldAskCodeRabbitApproval({ crStatus, crApprovedHead = false, openThreads = 0, checksGreen = false, headSha, comments = [], historyComplete = false, isImpPr = false } = {}) {
     if (isImpPr) return { ok: false, reason: 'imp PR: the fix round asks' };
-    if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
+    if (crApprovedHead) return { ok: false, reason: 'CodeRabbit already approved the head' };
     if (crStatus?.state !== 'reviewed') return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head` };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };
