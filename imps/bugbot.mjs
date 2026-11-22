@@ -26,7 +26,7 @@ import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
     ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
-    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations,
+    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -256,8 +256,10 @@ function fileAt(slug, path, sha) {
     const key = `${slug}@${sha}:${path}`;
     if (fileCache.has(key)) return fileCache.get(key);
     const encoded = path.split('/').map(encodeURIComponent).join('/');
-    const res = gh(['api', `repos/${slug}/contents/${encoded}?ref=${sha}`, '-H', 'Accept: application/vnd.github.raw']);
-    const text = res.code || res.out.length > 2_000_000 || res.out.includes('\u0000') ? null : res.out;
+    // JSON (base64) rather than raw: gh's captured stdout is trimmed, which would drop leading
+    // blank lines and shift every line number in the excerpt.
+    const res = gh(['api', `repos/${slug}/contents/${encoded}?ref=${sha}`]);
+    const text = res.code ? null : decodeContents(res.out);
     fileCache.set(key, text);
     return text;
 }

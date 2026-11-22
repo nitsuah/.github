@@ -4,7 +4,7 @@ import {
     codeRabbitStatus, parseBugbotMarker, bugbotVerdictFor, rightSideLines, buildBugbotReview,
     shouldDismissCodeRabbit, reviewGate, sweepCandidates, reviewsInLastDay, CR_STALL_TEXT,
     THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement, bugbotPassed,
-    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations,
+    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -339,4 +339,31 @@ test('citedLocations: repo paths with a line, deduped, no URLs or escapes', () =
         { path: 'tests/unit/rotate.test.mjs', line: 12 },
     ]);
     assert.equal(citedLocations('a.js:1 b.js:2 c.js:3 d.js:4').length, 3);
+});
+
+test('ownChanges: lines that start with ++ or -- are content, not headers', () => {
+    const a = ownChanges([{ filename: 'c.js', status: 'modified', patch: '@@ -1 +1,2 @@\n-reset();\n+++attempts;\n+++failures;' }]);
+    const b = ownChanges([{ filename: 'c.js', status: 'modified', patch: '@@ -1 +1,2 @@\n-reset();\n+++attempts;\n+--failures;' }]);
+    assert.equal(sameOwnChanges(a, b), false);
+});
+
+test('ownChanges: a patchless modified or added file fails closed; a removal compares by status', () => {
+    assert.equal(ownChanges([{ filename: 'logo.png', status: 'modified', changes: 0 }]), null);
+    assert.equal(ownChanges([{ filename: 'logo.png', status: 'added', changes: 0 }]), null);
+    const removed = ownChanges([{ filename: 'old.bin', status: 'removed', changes: 0 }]);
+    assert.ok(sameOwnChanges(removed, ownChanges([{ filename: 'old.bin', status: 'removed', changes: 0 }])));
+});
+
+test('citedLocations: a leading ./ is the same location', () => {
+    assert.deepEqual(citedLocations('see ./src/check.js:140 and src/check.js:140'), [{ path: 'src/check.js', line: 140 }]);
+});
+
+test('decodeContents: keeps leading blank lines so line numbers stay exact', () => {
+    const text = '\n\nconst x = 1;\n';
+    const json = JSON.stringify({ type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') });
+    assert.equal(decodeContents(json), text);
+    assert.equal(excerptLines(decodeContents(json), 3, 0), '3  const x = 1;');
+    assert.equal(decodeContents(JSON.stringify({ type: 'file', encoding: 'none', content: '' })), null, 'too large for the contents API');
+    assert.equal(decodeContents(JSON.stringify({ type: 'dir' })), null);
+    assert.equal(decodeContents('not json'), null);
 });

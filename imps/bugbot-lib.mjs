@@ -401,11 +401,15 @@ export function ownChanges(files = [], { maxFiles = 300 } = {}) {
     const out = new Map();
     for (const f of files) {
         if (typeof f.patch !== 'string') {
-            if ((f.changes || 0) > 0 || f.status === 'renamed') return null;
-            out.set(f.filename, `${f.status}`);
+            // No patch: a binary or oversized change whose content we cannot compare. Only a
+            // deletion is safe to compare by status alone; anything else forces a full review.
+            if (f.status !== 'removed') return null;
+            out.set(f.filename, 'removed');
             continue;
         }
-        const lines = f.patch.split('\n').filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'));
+        // A per-file compare patch has no file headers, so every +/- line is content
+        // (a source line "++i;" appears as "+++i;" and must be kept).
+        const lines = f.patch.split('\n').filter((l) => l.startsWith('+') || l.startsWith('-'));
         out.set(f.filename, `${f.status}${f.previous_filename ? `<${f.previous_filename}` : ''}\n${lines.join('\n')}`);
     }
     return out;
@@ -439,7 +443,7 @@ export function citedLocations(text = '', max = 3) {
     const out = [];
     const seen = new Set();
     const cleaned = String(text).replace(/https?:\/\/\S+/g, ' ');
-    for (const m of cleaned.matchAll(/(?<![\w/.-])((?:[\w@-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8}):(\d{1,6})\b/g)) {
+    for (const m of cleaned.matchAll(/(?<![\w/.-])((?:\.\/)?(?:[\w@-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8}):(\d{1,6})\b/g)) {
         const path = m[1].replace(/^\.\//, '');
         if (path.startsWith('/') || path.includes('..')) continue;
         const key = `${path}:${m[2]}`;
@@ -449,4 +453,20 @@ export function citedLocations(text = '', max = 3) {
         if (out.length >= max) break;
     }
     return out;
+}
+
+/**
+ * Text of a contents-API JSON response (base64), untrimmed so line numbers stay
+ * exact; null for anything that is not a readable text file.
+ */
+export function decodeContents(json = '') {
+    let d;
+    try {
+        d = typeof json === 'string' ? JSON.parse(json) : json;
+    } catch {
+        return null;
+    }
+    if (!d || d.type !== 'file' || d.encoding !== 'base64' || typeof d.content !== 'string') return null;
+    const text = Buffer.from(d.content, 'base64').toString('utf8');
+    return text.includes('\u0000') ? null : text;
 }
