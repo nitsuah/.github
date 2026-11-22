@@ -113,3 +113,72 @@ test('groomedComment: a promoted brief round-trips through briefFromComments; a 
     assert.match(held, /- label security/);
     assert.equal(briefFromComments([{ author: { login: 'nitsuah' }, body: held }]), null);
 });
+
+test('promotionVerdict holds briefs whose target file is a hedged guess (2026-11-21 groomer failures)', () => {
+    const hedged = brief().replace('In src/stats/chips.js, round the count.', 'File: `src/worker/index.ts` (or similar Worker entry)\nRound the count.');
+    assert.match(verdict({}, hedged).reasons.join(), /hedges on its target file/);
+    const ifInline = brief().replace('In src/stats/chips.js', 'In `src/routes/health.js` (or `src/server.js` if health inline)');
+    assert.match(verdict({}, ifInline).reasons.join(), /hedges/);
+    assert.deepEqual(verdict().reasons, [], 'a plain file reference is not a hedge');
+});
+
+test('promotionVerdict with exists: holds when no specific allow path is real, or npm runs where there is no package.json', () => {
+    const tree = new Set(['src/stats/chips.js', 'tests/stats.test.js', 'package.json', 'CHANGELOG.md']);
+    const exists = (p) => tree.has(p.replace(/\/$/, '')) || [...tree].some((f) => f.startsWith(p.replace(/\/?$/, '/')));
+    const v = (text, ex = exists) => promotionVerdict({ issue: issue(), briefText: text, owner: 'nitsuah', poster: 'nitsuah', exists: ex });
+    assert.deepEqual(v(brief()).reasons, []);
+    // vhs#203: src/worker/ and tests/worker/ did not exist; package.json alone proves nothing.
+    assert.match(v(brief({ allow: 'src/worker/, tests/worker/, package.json' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/\)/);
+    // one real path plus a new test file is fine
+    assert.deepEqual(v(brief({ allow: 'src/stats/, tests/new-thing.test.js' })).reasons, []);
+    // kryptos#313: a Python repo whose frontend lives in frontend/ — npm ci at the root cannot work.
+    const noPkg = (p) => p !== 'package.json' && exists(p);
+    assert.match(v(brief(), noPkg).reasons.join(), /no package\.json/);
+    const cdSub = brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && npm ci') });
+    const cdPlain = brief({ test: 'docker run --rm -v {wt}:/app -w /app node:22 sh -c "cd frontend&& npm ci"'.replace('frontend&&', 'frontend &&') });
+    // Order matters: a root npm ci before the cd is still flagged; a cd needs its own package.json.
+    const rootThenCd = brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "npm ci --no-audit --no-fund && cd frontend && npm test && npx') });
+    const frontendOnly = (p) => p === 'frontend/package.json' || (p !== 'package.json' && exists(p));
+    assert.doesNotMatch(v(cdPlain, frontendOnly).reasons.join(), /package\.json/);
+    assert.match(v(rootThenCd, frontendOnly).reasons.join(), /npm at the repo root/);
+    assert.doesNotMatch(v(cdSub, frontendOnly).reasons.join(), /package\.json/);
+    assert.match(v(cdSub, noPkg).reasons.join(), /npm in frontend\/ but there is no frontend\/package\.json/);
+    // A bare container command (no sh -c) is checked too, from -w.
+    const bare = brief({ test: 'docker run --rm -v {wt}:/app -v imp-nm-vhs:/app/node_modules -w /app node:22 npm test' });
+    assert.match(v(bare, noPkg).reasons.join(), /npm at the repo root/);
+    assert.deepEqual(v(bare).reasons, []);
+    // -w must be /app (unsafeCommand), so a subdirectory -w is held on shape, not promoted.
+    const bareSub = v(brief({ test: 'docker run --rm -v {wt}:/app -w /app/frontend node:22 npm test' }), frontendOnly);
+    assert.equal(bareSub.promote, false);
+    assert.match(bareSub.reasons.join(), /not the sandboxed docker shape/);
+    assert.doesNotMatch(bareSub.reasons.join(), /package\.json/);
+    // Flags before the subcommand still count as npm.
+    assert.match(v(brief({ test: 'docker run --rm -v {wt}:/app -w /app node:22 npm --silent test' }), noPkg).reasons.join(), /npm at the repo root/);
+    // A cd inside ( … ) ends at the paren: the later npm test runs at the root.
+    const sub = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd frontend && npm ci) && npm test && npx') }), frontendOnly);
+    assert.match(sub.reasons.join(), /npm at the repo root/);
+    assert.doesNotMatch(sub.reasons.join(), /frontend\//);
+    // cd .. from /app leaves the worktree: npm there is held even with a root package.json.
+    const up = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd .. && npm ci') }));
+    assert.match(up.reasons.join(), /outside the \/app worktree/);
+    assert.equal(up.promote, false);
+    // Leading env assignments: CI=true npm ci at a root with no package.json is still flagged.
+    const envRoot = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "CI=true npm ci && cd frontend && npm test && npx') }), frontendOnly);
+    assert.match(envRoot.reasons.join(), /npm at the repo root/);
+    const envSub = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && CI=true npm ci') }), frontendOnly);
+    assert.doesNotMatch(envSub.reasons.join(), /package\.json|outside/);
+    // The npm inside the group is checked against the group's cwd too.
+    const missing = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd missing && npm ci) && npm test && npx') }));
+    assert.match(missing.reasons.join(), /npm in missing\/ but there is no missing\/package\.json/);
+    assert.doesNotMatch(missing.reasons.join(), /repo root/);
+    // . and .. are resolved: cd frontend && cd .. lands back on a root that has package.json.
+    const back = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && cd .. && cd ./ && npm ci') }));
+    assert.deepEqual(back.reasons, []);
+    assert.equal(back.promote, true);
+    // The sh -c subdirectory form is the promotable one.
+    assert.equal(v(cdSub, frontendOnly).promote, true);
+    // A test file that exists does not stand in for a missing implementation path.
+    assert.match(v(brief({ allow: 'src/worker/, tests/stats.test.js' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/\)/);
+    // "(or similar)" with nothing after it is still a hedge.
+    assert.match(verdict({}, brief().replace('round the count.', 'round the count (or similar).')).reasons.join(), /hedges/);
+});

@@ -83,3 +83,28 @@ test('ensureFinalNewlines: fixes text files, keeps CRLF style, skips binary, emp
     assert.equal(readFileSync(join(d, 'ok.js'), 'utf8'), 'y;\n');
     assert.equal(needsFinalNewline(Buffer.from('')), false);
 });
+
+test('fetchRepoTree / treeExists / treeContext', async () => {
+    const { fetchRepoTree, treeExists, treeContext } = await import('./groom-select.mjs');
+    const calls = [];
+    const gh = (args) => { calls.push(args); return 'src/a.js\nsrc/lib/b.js\r\npackage.json\nassets/logo.png\nnode_modules/x/y.js\n'; };
+    const tree = fetchRepoTree(gh, 'nitsuah', 'vhs');
+    assert.equal(calls.length, 1);
+    assert.match(calls[0][1], /^repos\/nitsuah\/vhs\/git\/trees\/HEAD\?recursive=1$/);
+    assert.deepEqual([...tree], ['src/a.js', 'src/lib/b.js', 'package.json', 'assets/logo.png', 'node_modules/x/y.js']);
+    assert.equal(fetchRepoTree(() => { throw new Error('404'); }, 'o', 'r'), null);
+    assert.equal(fetchRepoTree(() => '', 'o', 'r'), null);
+    const ex = treeExists(tree);
+    for (const p of ['src/a.js', 'src/', 'src', 'src/lib/', './src/lib/b.js', 'package.json']) assert.ok(ex(p), p);
+    for (const p of ['src/worker/', 'src/a', 'lib/', 'src/lib/c.js']) assert.ok(!ex(p), p);
+    const ctx = treeContext(tree);
+    assert.match(ctx, /src\/lib\/b\.js/);
+    assert.doesNotMatch(ctx, /logo\.png|node_modules/);
+    assert.match(treeContext(['a/1.js', 'a/2.js', 'a/3.js'], { max: 2 }), /1 more/);
+    assert.equal(tree.truncated, false);
+    // GitHub's truncated flag rides along so callers skip absence checks on a partial tree.
+    const cut = fetchRepoTree(() => '#truncated\nsrc/a.js\n', 'o', 'r');
+    assert.deepEqual([...cut], ['src/a.js']);
+    assert.equal(cut.truncated, true);
+    assert.match(calls[0][3], /truncated/);
+});

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DEFAULTS } from './defaults.mjs';
 import { BRIEF_MARK, parseBrief, briefFromComments, closesIssue } from './lib.mjs';
 import { promotionVerdict, groomedComment } from './groom-promote.mjs';
-import { groomEligible, namedPaths, fetchNamedFiles, DRAFT_CHECKLIST } from './groom-select.mjs';
+import { groomEligible, namedPaths, fetchNamedFiles, fetchRepoTree, treeExists, treeContext, DRAFT_CHECKLIST } from './groom-select.mjs';
 
 export const DRAFT_MARK = '<!-- imp-brief-draft -->';
 export const NEEDS_BRIEF_LABEL = 'imp:needs-brief';
@@ -106,6 +106,29 @@ export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
     return null;
 }
 
+/**
+ * `text` cut to at most `max` characters on a line boundary, with a marker saying how many lines
+ * were dropped. A cut mid-line would hand the model a path fragment it could copy as a real file.
+ * The result, marker included, never exceeds `max`.
+ */
+export function clipLines(text, max) {
+    const s = String(text);
+    if (s.length <= max) return s;
+    const lines = s.split('\n');
+    const marker = (n) => `… (${n} more lines)`;
+    // Reserve room for the newline plus the widest marker this text could need.
+    const budget = max - (marker(lines.length).length + 1);
+    const kept = [];
+    let used = -1; // join adds a separator only between lines
+    for (const l of lines) {
+        if (used + 1 + l.length > budget) break;
+        kept.push(l);
+        used += 1 + l.length;
+    }
+    const tail = marker(lines.length - kept.length);
+    return kept.length ? `${kept.join('\n')}\n${tail}` : tail;
+}
+
 /** Draft a brief via 9router chat completion. Retry once after 2s; use [::1] for localhost. */
 export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow, example }) {
     const sys = `You are an imps groomer. Write a brief in the STANDARD.md format for an imp to implement.
@@ -125,7 +148,7 @@ The brief MUST be valid front-matter + body:
 - Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
 ${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
-${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, f.startsWith('file: ') ? 6000 : 3000)}`).join('\n\n')}
+${Object.entries(context).map(([f, c]) => `### ${f}\n${f === 'repo file list' ? clipLines(c, 6000) : c.slice(0, f.startsWith('file: ') ? 6000 : 3000)}`).join('\n\n')}
 
 Issue:
 #${issue}: ${title}
@@ -356,7 +379,9 @@ export async function runGroom({
             // Fetch context and draft
             try {
                 // The files the issue names, so the brief can state real code facts.
+                const tree = fetchRepoTree(gh, owner, issue.repo);
                 const context = {
+                    ...(tree ? { 'repo file list': treeContext(tree) } : {}),
                     ...(await fetchRepoContext(gh, owner, issue.repo)),
                     ...fetchNamedFiles(gh, owner, issue.repo, namedPaths(`${issue.title}\n${issue.body}`)),
                 };
@@ -382,6 +407,8 @@ export async function runGroom({
                     enabled: config.groomAutoPromote !== false,
                     poster, briefAuthors,
                     ownerKeywordHold: config.groomOwnerKeywordHold === true,
+                    // A truncated tree can't prove a path is absent, so only the hedge check runs then.
+                    exists: tree && !tree.truncated ? treeExists(tree) : undefined,
                 });
                 const label = verdict.promote ? READY_LABEL : NEEDS_BRIEF_LABEL;
                 if (!dryRun) {

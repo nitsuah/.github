@@ -55,7 +55,7 @@ export function sensitiveTerm(text) {
  * Decide whether a groomed brief may be promoted to imp:ready.
  * Returns { promote, reasons } where reasons lists every failed check (empty when promoted).
  */
-export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'], ownerKeywordHold = false } = {}) {
+export function promotionVerdict({ issue = {}, briefText = '', owner = '', trustedAuthors = [], maxLines = 180, enabled = true, poster, briefAuthors = ['nitsuah'], ownerKeywordHold = false, exists } = {}) {
     const reasons = [];
     if (!enabled) reasons.push('auto-promote is off (config groomAutoPromote: false)');
     // The dispatcher only reads briefs posted by IMPS_BRIEF_AUTHORS; a brief from any other
@@ -94,12 +94,91 @@ export function promotionVerdict({ issue = {}, briefText = '', owner = '', trust
     if (Number.isFinite(ml) && ml > maxLines) reasons.push(`maxLines ${ml} over the groomer cap ${maxLines}`);
     if (meta.depends && !/^(none|n\/a|-)\s*(;|$)/i.test(String(meta.depends).trim())) reasons.push('has depends: (a person checks the order)');
 
+    for (const r of guessedPathReasons(String(briefText), exists)) reasons.push(r);
+
     for (const key of ['test', 'lint', 'format']) {
         if (key !== 'test' && !meta[key]) continue;
         const why = unsafeCommand(meta[key], issue.repo || repo);
         if (why) reasons.push(`${key}: ${why}`);
     }
     return { promote: reasons.length === 0, reasons };
+}
+
+// A drafted target the model hedged on: "File: src/worker/index.ts (or similar Worker entry)".
+const HEDGE = /\((?:or|maybe|possibly) (?:similar|wherever|whichever|equivalent|main|the main|another)\b|\(or `[^`]+` if\b/i;
+// Allow entries that exist in nearly every repo and so prove nothing about the target.
+const GENERIC = /^(?:package\.json|CHANGELOG\.md|docs\/CHANGELOG\.md|README\.md|docs\/?|tests?\/?|TASKS\.md|ROADMAP\.md)$/i;
+
+/**
+ * Reasons a brief's paths look guessed rather than read. `exists` (path => boolean on the default
+ * branch) is optional; without it only the hedge check runs.
+ */
+export function guessedPathReasons(briefText, exists) {
+    const reasons = [];
+    const { meta, body } = parseBrief(String(briefText));
+    const hedge = String(body || '').match(HEDGE);
+    if (hedge) reasons.push(`brief hedges on its target file ("${hedge[0]}"), so the path is a guess`);
+    if (typeof exists === 'function') {
+        const allow = String(meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        // Docs and tests (and anything under them) prove nothing about where the fix goes.
+        const specific = allow.filter((p) => !GENERIC.test(p) && !/^(?:docs|tests?)\//i.test(p));
+        if (specific.length && !specific.some((p) => exists(p))) reasons.push(`no allow: path is on the default branch (${specific.join(', ')})`);
+        for (const dir of npmDirsWithoutPackageJson(String(meta.test || ''), exists)) {
+            if (dir === OUTSIDE_APP) reasons.push('test runs npm outside the /app worktree (a cd leaves it)');
+            else reasons.push(dir ? `test runs npm in ${dir}/ but there is no ${dir}/package.json` : 'test runs npm at the repo root but there is no package.json there');
+        }
+    }
+    return reasons;
+}
+
+/**
+ * Directories (repo-relative, '' = root) where `cmd` runs an npm command with no package.json there.
+ * Walks the steps in order, so `npm ci && cd frontend && npm test` still flags the root `npm ci`,
+ * and a `cd` must land somewhere that has a package.json of its own. A `cd` inside `( … )` lasts
+ * only to the closing paren, and `.`/`..` are resolved. Any step whose program is `npm` counts,
+ * whatever flags come first (`npm --silent test`).
+ */
+export const OUTSIDE_APP = '<outside /app>';
+export function npmDirsWithoutPackageJson(cmd, exists) {
+    // Repo-relative directory, or OUTSIDE_APP once a cd leaves the mounted worktree.
+    const canon = (p) => {
+        const out = [];
+        for (const seg of String(p).split('/')) {
+            if (!seg || seg === '.') continue;
+            if (seg === '..') {
+                if (!out.length) return OUTSIDE_APP;
+                out.pop();
+            } else out.push(seg);
+        }
+        return out.join('/');
+    };
+    const fromApp = (p) => (/^\/{1,2}app(?=\/|$)/.test(String(p)) ? canon(String(p).replace(/^\/{1,2}app/, '')) : OUTSIDE_APP);
+    const inner = cmd.match(/\bsh -c (["'])([\s\S]*)\1/);
+    let dir = fromApp(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
+    const stack = [];
+    const bad = new Set();
+    // Without sh -c the container command is whatever follows the image, e.g. `... node:22 npm test`.
+    const body = inner ? inner[2] : (cmd.match(/\s(npm\s[\s\S]*)$/)?.[1] ?? '');
+    for (const raw of body.split(/&&|;|\|\|/)) {
+        let step = raw.trim();
+        while (step.startsWith('(')) {
+            stack.push(dir);
+            step = step.slice(1).trim();
+        }
+        let closes = 0;
+        while (step.endsWith(')')) {
+            closes++;
+            step = step.slice(0, -1).trim();
+        }
+        // Leading VAR=value assignments don't change which program runs (`CI=true npm ci`).
+        step = step.replace(/^(?:[A-Za-z_]\w*=\S*\s+)+/, '');
+        const cd = step.match(/^cd\s+(\S+)$/);
+        if (cd) {
+            if (dir !== OUTSIDE_APP || cd[1].startsWith('/')) dir = cd[1].startsWith('/') ? fromApp(cd[1]) : canon(`${dir}/${cd[1]}`);
+        } else if (/^npm(?:\s|$)/.test(step) && (dir === OUTSIDE_APP || !exists(dir ? `${dir}/package.json` : 'package.json'))) bad.add(dir);
+        for (; closes > 0 && stack.length; closes--) dir = stack.pop();
+    }
+    return [...bad];
 }
 
 /** The issue comment for a groomed brief: a real brief when promoted, else a held draft with its reasons. */
