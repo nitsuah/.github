@@ -26,6 +26,7 @@ import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
     ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
+    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -81,13 +82,13 @@ const ghJson = (args) => {
 };
 
 const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){
-  url number title body state isDraft reviewDecision author{login} labels(first:20){nodes{name}}
+  url number title body state isDraft reviewDecision baseRefName author{login} labels(first:20){nodes{name}}
   closingIssuesReferences(first:3){nodes{number title body}}
   commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
   reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
   comments(last:100){pageInfo{hasPreviousPage} nodes{author{login} createdAt body}}
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line originalLine
     first: comments(first:1){nodes{id author{login} body createdAt originalCommit{oid}}}
     latest: comments(last:30){nodes{id author{login} body createdAt originalCommit{oid}}}}}
 }}}`;
@@ -142,7 +143,7 @@ function loadPr(slug, number) {
     for (const r of [...reviews].sort((a, b) => Date.parse(a.submittedAt) - Date.parse(b.submittedAt)))
         if (isCodeRabbit(r.author) && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(r.state)) crLatestState = r.state;
     return {
-        slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, isDraft: d.isDraft, labels: d.labels.nodes,
+        slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, baseRef: d.baseRefName, isDraft: d.isDraft, labels: d.labels.nodes,
         issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: headArrival({ committedAt: head.committedDate, firstSeenAt: firstSeen(d.url, head.oid) }), checks, reviews, comments, threads, openThreads,
         commentsComplete,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
@@ -243,9 +244,41 @@ const JUDGE = `You are bugbot. Earlier you raised the review finding below on a 
 - **accept**: the reply shows the finding was wrong, or the current diff (below) shows it is fixed, or it is reasonably out of scope and the reply says where it will be handled.
 - **keep**: the reply does not answer the finding, the claimed fix is not in the current diff, or the evidence does not hold.
 
+The excerpts of files at the PR head show the code as it is now, including lines outside the diff. Code that already existed before this PR counts as evidence: do not keep a thread only because a cited line is not in the diff.
+
 Be fair: you were wrong sometimes, and a correct pushback should be accepted. Do not keep a thread just to be safe. Reply in one or two sentences.
 
 Finish with exactly one fenced json block: {"decision":"accept|keep","reply":"..."}`;
+
+/** A file's text at a commit, or null (missing, binary, too large or unreadable). Cached per run. */
+const fileCache = new Map();
+function fileAt(slug, path, sha) {
+    const key = `${slug}@${sha}:${path}`;
+    if (fileCache.has(key)) return fileCache.get(key);
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    // JSON (base64) rather than raw: gh's captured stdout is trimmed, which would drop leading
+    // blank lines and shift every line number in the excerpt.
+    const res = gh(['api', `repos/${slug}/contents/${encoded}?ref=${sha}`]);
+    const text = res.code ? null : decodeContents(res.out);
+    fileCache.set(key, text);
+    return text;
+}
+
+/** Head-file context for the judge: the thread's own file around its line, plus up to three cited locations. */
+function headContext(pr, t, replies) {
+    const fence = '```';
+    const at = t.line ?? t.originalLine ?? null;
+    const parts = [];
+    const own = fileAt(pr.slug, t.path, pr.headSha);
+    if (own !== null) parts.push(`### ${t.path} at the PR head (around line ${at ?? 1})\n\n${fence}\n${excerptLines(own, at, 60)}\n${fence}`);
+    for (const loc of citedLocations(replies, 3)) {
+        if (loc.path === t.path && at && Math.abs(loc.line - at) <= 60) continue;
+        const text = fileAt(pr.slug, loc.path, pr.headSha);
+        if (text === null) continue;
+        parts.push(`### ${loc.path} at the PR head (cited line ${loc.line})\n\n${fence}\n${excerptLines(text, loc.line, 25)}\n${fence}`);
+    }
+    return parts.length ? parts.join('\n\n').slice(0, 40_000) : '(no head-file context available)';
+}
 
 /** Answer replies on bugbot's own threads: resolve the ones whose reply holds, keep the rest open. */
 const resolveThread = (id) => !gh(['api', 'graphql', '-f', 'query=mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}', '-f', `t=${id}`]).code;
@@ -284,7 +317,7 @@ async function answerThreads(pr, budget) {
             }
         } else if (since === pr.headSha) delta = '(no new commit since the finding)';
         const conversation = t.comments.map((c) => `**${c.author}:** ${stripComments(c.body)}`).join('\n\n');
-        const ask = `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## Changes to ${t.path} since the finding was posted (where a claimed fix must be)\n\n\`\`\`diff\n${delta}\n\`\`\`\n\n## The PR's current diff of ${t.path} (context, may be cut)\n\n\`\`\`diff\n${fileDiff}\n\`\`\``;
+        const ask = `${JUDGE}\n\n## The thread (${t.path}:${t.line ?? '?'})\n\n${conversation}\n\n## Changes to ${t.path} since the finding was posted (where a claimed fix must be)\n\n\`\`\`diff\n${delta}\n\`\`\`\n\n## The PR's current diff of ${t.path} (context, may be cut)\n\n\`\`\`diff\n${fileDiff}\n\`\`\`\n\n## Files at the PR head (the code as it is now, including lines outside the diff)\n\n${headContext(pr, t, t.comments.slice(1).map((c) => c.body || '').join('\n'))}`;
         // A reasoning model can spend the budget before the block: one retry with more room and a terser ask.
         let metrics;
         let j;
@@ -349,6 +382,44 @@ function dismissCodeRabbit(pr, why) {
 }
 
 /** One PR: review if CodeRabbit is stalled on the head, then lift its block if our gate passed. */
+/** The PR's own changes at a commit (base...sha, so measured from the merge base), or null. */
+function ownChangesAt(pr, sha) {
+    if (!pr.baseRef) return null;
+    const cmp = gh(['api', `repos/${pr.slug}/compare/${encodeURIComponent(pr.baseRef)}...${sha}`]);
+    if (cmp.code) return null;
+    try {
+        return ownChanges(JSON.parse(cmp.out).files || []);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * A head that only merged the base branch in (the PR's own changes identical to a
+ * commit bugbot already passed) inherits that verdict instead of a full re-review.
+ * Posts a trusted marker review on the head, so the usual gate reads it.
+ * @returns {object|null} the carried verdict, or null when it cannot be carried.
+ */
+function carryOverVerdict(pr) {
+    const prior = latestPassedVerdict(pr.reviews, { trustedAuthors: trustedAuthors() });
+    if (!prior || prior.sha === pr.headSha) return null;
+    const before = ownChangesAt(pr, prior.sha);
+    const now = ownChangesAt(pr, pr.headSha);
+    if (!sameOwnChanges(before, now)) return null;
+    const body = `<!-- bugbot sha=${pr.headSha} verdict=${prior.verdict} scope=full -->\n### Bugbot review: carried over\n\nThe PR's own changes at this commit are identical to ${prior.sha.slice(0, 7)}, which bugbot already reviewed ([verdict](${prior.url})); the new commits only bring in \`${pr.baseRef}\`. The verdict carries over.\n\n<sub>bugbot</sub>`;
+    if (o['dry-run']) return { ...prior, carriedFrom: prior.sha, sha: pr.headSha };
+    const post = gh(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '-X', 'POST', '--input', '-', '--jq', '.html_url'], {
+        input: JSON.stringify({ commit_id: pr.headSha, event: 'COMMENT', body }),
+    });
+    if (post.code) {
+        log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: `carry-over post failed: ${post.err.slice(0, 200)}` });
+        return null;
+    }
+    writeStatus(pr, 'success', statusDescription(prior.verdict, false), post.out);
+    log({ event: 'bugbot-carried', pr: pr.url, sha: pr.headSha, from: prior.sha, verdict: prior.verdict, url: post.out });
+    return { ...prior, carriedFrom: prior.sha, sha: pr.headSha, url: post.out };
+}
+
 async function handle(slug, number, { force = false, budget = { left: Infinity } } = {}) {
     let pr = loadPr(slug, number);
     if (pr.state !== 'OPEN' || pr.isDraft) return { pr: pr.url, action: 'none', reason: pr.isDraft ? 'draft' : pr.state.toLowerCase() };
@@ -378,6 +449,11 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         const failing = a.bugbot.verdict === 'request_changes' || a.bugbot.scope === 'partial';
         if (writeStatus(pr, failing ? 'failure' : 'success', statusDescription(a.bugbot.verdict, a.bugbot.scope === 'partial'), a.bugbot.url))
             log({ event: 'bugbot-status-restored', pr: pr.url, sha: pr.headSha });
+    }
+    // A merge of the base branch alone: inherit the verdict bugbot already gave the same changes.
+    if (!a.bugbot && a.crStatus.stalled && !force && carryOverVerdict(pr) && !o['dry-run']) {
+        pr = loadPr(slug, number);
+        a = assess(pr);
     }
     if (!a.bugbot && (a.crStatus.stalled || force)) {
         if (reviewsInLastDay(events(), pr.url) >= C.perPrPerDay) {

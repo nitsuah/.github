@@ -4,6 +4,7 @@ import {
     codeRabbitStatus, parseBugbotMarker, bugbotVerdictFor, rightSideLines, buildBugbotReview,
     shouldDismissCodeRabbit, reviewGate, sweepCandidates, reviewsInLastDay, CR_STALL_TEXT,
     THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement, bugbotPassed,
+    latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -284,4 +285,85 @@ test('shouldAskCodeRabbitApproval: once per head, only when CodeRabbit reviewed 
     assert.equal(shouldAskCodeRabbitApproval({ ...base, isImpPr: true }).ok, false);
     // more than one page of comments and no marker in the page read: do not risk a second ask
     assert.equal(shouldAskCodeRabbitApproval({ ...base, historyComplete: false }).ok, false);
+});
+
+// ── Carry-over across base-branch merges ──────────────────────────────────
+
+const OLD = 'b'.repeat(40);
+const marker = (sha, verdict, scope = 'full') => `<!-- bugbot sha=${sha} verdict=${verdict} scope=${scope} -->`;
+
+test('latestPassedVerdict: latest trusted passing verdict on any commit, else null', () => {
+    const t = { trustedAuthors: ['bot'] };
+    const reviews = [
+        { author: 'bot', commit: OLD, submittedAt: minsAgo(30), body: marker(OLD, 'approve'), url: 'u1' },
+        { author: 'mallory', commit: HEAD, submittedAt: minsAgo(20), body: marker(HEAD, 'approve'), url: 'u2' },
+        { author: 'bot', commit: OLD, submittedAt: minsAgo(10), body: marker(HEAD, 'approve'), url: 'u3' },
+    ];
+    // u2 is untrusted; u3's marker names a commit other than the one it was posted on.
+    assert.deepEqual(latestPassedVerdict(reviews, t), { sha: OLD, verdict: 'approve', scope: 'full', url: 'u1' });
+    const failing = [...reviews, { author: 'bot', commit: OLD, submittedAt: minsAgo(5), body: marker(OLD, 'request_changes'), url: 'u4' }];
+    assert.equal(latestPassedVerdict(failing, t), null, 'a later request_changes is the latest word');
+    assert.equal(latestPassedVerdict([{ author: 'bot', commit: OLD, submittedAt: minsAgo(1), body: marker(OLD, 'approve', 'partial') }], t), null);
+});
+
+test('ownChanges/sameOwnChanges: same edits against a moved base compare equal', () => {
+    const before = ownChanges([{ filename: 'a.js', status: 'modified', patch: '@@ -10,3 +10,4 @@\n ctx\n-old\n+new\n+added' }]);
+    const after = ownChanges([{ filename: 'a.js', status: 'modified', patch: '@@ -40,3 +40,4 @@\n other ctx\n-old\n+new\n+added' }]);
+    assert.ok(sameOwnChanges(before, after));
+    const edited = ownChanges([{ filename: 'a.js', status: 'modified', patch: '@@ -40,3 +40,4 @@\n-old\n+new\n+changed during the merge' }]);
+    assert.equal(sameOwnChanges(before, edited), false, 'a merge that alters the PR lines does not carry');
+    const extra = ownChanges([...[{ filename: 'a.js', status: 'modified', patch: '-old\n+new\n+added' }], { filename: 'b.js', status: 'added', patch: '+x' }]);
+    assert.equal(sameOwnChanges(before, extra), false, 'a new file does not carry');
+});
+
+test('ownChanges: fails closed on a missing patch or a possibly truncated file list', () => {
+    assert.equal(ownChanges([{ filename: 'big.js', status: 'modified', changes: 5000 }]), null);
+    assert.equal(ownChanges(Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, status: 'modified', patch: '+x' }))), null);
+    assert.equal(sameOwnChanges(null, null), false);
+});
+
+// ── Judge context ─────────────────────────────────────────────────────────
+
+test('excerptLines: numbered window around a line, clamped to the file', () => {
+    const text = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n');
+    const ex = excerptLines(text, 140, 2).split('\n');
+    assert.deepEqual(ex, ['138  line 138', '139  line 139', '140  line 140', '141  line 141', '142  line 142']);
+    assert.equal(excerptLines('a\nb', null, 5), '1  a\n2  b');
+});
+
+test('citedLocations: repo paths with a line, deduped, no URLs or escapes', () => {
+    const reply = 'On main, `app/lib/db.js:140` already checks it (see app/lib/db.js:140 and tests/unit/rotate.test.mjs:12). '
+        + 'Not https://example.com/x.js:9, not ../secret.txt:1, not /etc/passwd.txt:2.';
+    assert.deepEqual(citedLocations(reply), [
+        { path: 'app/lib/db.js', line: 140 },
+        { path: 'tests/unit/rotate.test.mjs', line: 12 },
+    ]);
+    assert.equal(citedLocations('a.js:1 b.js:2 c.js:3 d.js:4').length, 3);
+});
+
+test('ownChanges: lines that start with ++ or -- are content, not headers', () => {
+    const a = ownChanges([{ filename: 'c.js', status: 'modified', patch: '@@ -1 +1,2 @@\n-reset();\n+++attempts;\n+++failures;' }]);
+    const b = ownChanges([{ filename: 'c.js', status: 'modified', patch: '@@ -1 +1,2 @@\n-reset();\n+++attempts;\n+--failures;' }]);
+    assert.equal(sameOwnChanges(a, b), false);
+});
+
+test('ownChanges: a patchless modified or added file fails closed; a removal compares by status', () => {
+    assert.equal(ownChanges([{ filename: 'logo.png', status: 'modified', changes: 0 }]), null);
+    assert.equal(ownChanges([{ filename: 'logo.png', status: 'added', changes: 0 }]), null);
+    const removed = ownChanges([{ filename: 'old.bin', status: 'removed', changes: 0 }]);
+    assert.ok(sameOwnChanges(removed, ownChanges([{ filename: 'old.bin', status: 'removed', changes: 0 }])));
+});
+
+test('citedLocations: a leading ./ is the same location', () => {
+    assert.deepEqual(citedLocations('see ./src/check.js:140 and src/check.js:140'), [{ path: 'src/check.js', line: 140 }]);
+});
+
+test('decodeContents: keeps leading blank lines so line numbers stay exact', () => {
+    const text = '\n\nconst x = 1;\n';
+    const json = JSON.stringify({ type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') });
+    assert.equal(decodeContents(json), text);
+    assert.equal(excerptLines(decodeContents(json), 3, 0), '3  const x = 1;');
+    assert.equal(decodeContents(JSON.stringify({ type: 'file', encoding: 'none', content: '' })), null, 'too large for the contents API');
+    assert.equal(decodeContents(JSON.stringify({ type: 'dir' })), null);
+    assert.equal(decodeContents('not json'), null);
 });
