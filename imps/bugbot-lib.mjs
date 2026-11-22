@@ -217,10 +217,13 @@ export function shouldDismissCodeRabbit({ crLatestState, crStatus, bugbot, openT
  * or (when it is stalled) bugbot passed the head. Either way no thread may be
  * open and checks must be green.
  */
-export function reviewGate({ crApprovedHead = false, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
+export function reviewGate({ crApprovedHead = false, crBlocksHead = false, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (crApprovedHead) return { ok: true, reason: 'CodeRabbit approved the head' };
+    // Repos with CodeRabbit approvals disabled only ever get COMMENTED reviews (`@coderabbitai approve` is refused,
+    // stash#425): a review of the head that requests nothing, with every thread answered, is the clean review.
+    if (crStatus?.state === 'reviewed' && !crBlocksHead) return { ok: true, reason: 'CodeRabbit reviewed the head and left nothing open' };
     if (crStatus?.stalled && bugbotPassed(bugbot)) return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
     if (crStatus?.stalled) return { ok: false, reason: !bugbot ? 'CodeRabbit stalled and bugbot has not reviewed the head' : bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
     return { ok: false, reason: `waiting for CodeRabbit (${crStatus?.state || 'unknown'})` };
@@ -361,11 +364,9 @@ export const APPROVE_ASK_MARK = (sha) => `<!-- bugbot-approve-ask sha=${sha} -->
  * CodeRabbit reviewed the head and its old CHANGES_REQUESTED is the only thing left: ask it once per head
  * to approve. Imp PRs are left to the fix round, which already does this for them.
  */
-// Asks whether CodeRabbit left a stale CHANGES_REQUESTED or only ever COMMENTED: on repos where it never
-// approves by itself, a clean head otherwise waits forever (stash#425, 2026-11-22).
-export function shouldAskCodeRabbitApproval({ crStatus, crApprovedHead = false, openThreads = 0, checksGreen = false, headSha, comments = [], historyComplete = false, isImpPr = false } = {}) {
+export function shouldAskCodeRabbitApproval({ crStatus, crLatestState, openThreads = 0, checksGreen = false, headSha, comments = [], historyComplete = false, isImpPr = false } = {}) {
     if (isImpPr) return { ok: false, reason: 'imp PR: the fix round asks' };
-    if (crApprovedHead) return { ok: false, reason: 'CodeRabbit already approved the head' };
+    if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
     if (crStatus?.state !== 'reviewed') return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head` };
     if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
     if (!checksGreen) return { ok: false, reason: 'checks are not green' };

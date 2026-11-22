@@ -148,13 +148,14 @@ function loadPr(slug, number) {
         commentsComplete,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
+        crBlocksHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'CHANGES_REQUESTED' && r.commit === head.oid),
     };
 }
 
 function assess(pr) {
     const crStatus = codeRabbitStatus({ headSha: pr.headSha, headAt: pr.headAt, reviews: pr.reviews, comments: pr.comments, checks: pr.checks, graceMinutes: C.graceMinutes, pendingMaxMinutes: C.pendingMaxMinutes });
     const bugbot = bugbotVerdictFor(pr.reviews, pr.headSha, { trustedAuthors: trustedAuthors() });
-    const gate = reviewGate({ crApprovedHead: pr.crApprovedHead, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
+    const gate = reviewGate({ crApprovedHead: pr.crApprovedHead, crBlocksHead: pr.crBlocksHead, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     const dismiss = shouldDismissCodeRabbit({ crLatestState: pr.crLatestState, crStatus, bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen });
     return { crStatus, bugbot, gate, dismiss };
 }
@@ -469,9 +470,9 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         pr = loadPr(slug, number);
         a = assess(pr);
     }
-    // CodeRabbit reviewed the head without approving it (a stale block, or comments only): ask it to approve, once per head.
+    // CodeRabbit reviewed the head and only its stale block remains: ask it to approve, once per head.
     const ask = shouldAskCodeRabbitApproval({
-        crStatus: a.crStatus, crApprovedHead: pr.crApprovedHead, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
+        crStatus: a.crStatus, crLatestState: pr.crLatestState, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
         headSha: pr.headSha, comments: pr.comments, historyComplete: pr.commentsComplete, isImpPr: pr.labels.some((l) => (l.name || l) === 'imp'),
     });
     if (ask.ok) {
