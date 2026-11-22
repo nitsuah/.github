@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { codeLines, extractBriefInput, lintBrief } from './brieflint.mjs';
+import { briefFromComments } from './lib.mjs';
 
 const brief = (front, body = '## Issue o/r#1\nDo the thing.\n') => `---\nrepo: r\nissue: 1\ntest: docker run x --config config/v.mjs y\nmaxLines: 100\nallow: a.js, a.test.js\n${front}---\n${body}`;
 const code = (n) => `~~~js\n${'x();\n'.repeat(n)}~~~\n`;
@@ -72,6 +73,23 @@ test('a raw marker-first comment matches dispatcher extraction', () => {
     assert.deepEqual(r.problems, []);
     assert.equal(r.meta.repo, 'r');
     assert.equal(r.meta.issue, '1');
+});
+
+test('a groom-promoted comment with an intro line before the fence lints clean', () => {
+    const source = brief('depends: none\n', '## Issue o/r#1\nPreserve this body exactly.\n');
+    const comment = '<!-- imp-brief -->\nGroomed brief, auto-promoted to `imp:ready`. Remove `imp:ready` to stop it.\n'
+        + '\x60\x60\x60markdown\n' + source.trim() + '\n' + '\x60\x60\x60\n';
+    const extracted = extractBriefInput(comment);
+    assert.equal(extracted.error, null);
+    assert.equal(extracted.brief, source.trim() + '\n');
+    assert.equal(extracted.brief, briefFromComments([{ body: comment, author: { login: 'nitsuah' } }]));
+    assert.deepEqual(lintBrief(comment, { exists: () => true }).problems, []);
+});
+
+test('front matter before a later fence is still a raw brief with an inner fence', () => {
+    const source = brief('', '## Issue o/r#1\n```markdown\nx\n```\n');
+    const comment = '<!-- imp-brief -->\n' + source.trim() + '\n';
+    assert.equal(extractBriefInput(comment).error, 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief');
 });
 
 test('a raw marker-first brief with an inner triple fence fails closed', () => {
