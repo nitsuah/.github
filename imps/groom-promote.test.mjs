@@ -158,6 +158,15 @@ test('promotionVerdict with exists: holds when no specific allow path is real, o
     const sub = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd frontend && npm ci) && npm test && npx') }), frontendOnly);
     assert.match(sub.reasons.join(), /npm at the repo root/);
     assert.doesNotMatch(sub.reasons.join(), /frontend\//);
+    // cd .. from /app leaves the worktree: npm there is held even with a root package.json.
+    const up = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd .. && npm ci') }));
+    assert.match(up.reasons.join(), /outside the \/app worktree/);
+    assert.equal(up.promote, false);
+    // Leading env assignments: CI=true npm ci at a root with no package.json is still flagged.
+    const envRoot = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "CI=true npm ci && cd frontend && npm test && npx') }), frontendOnly);
+    assert.match(envRoot.reasons.join(), /npm at the repo root/);
+    const envSub = v(brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && CI=true npm ci') }), frontendOnly);
+    assert.doesNotMatch(envSub.reasons.join(), /package\.json|outside/);
     // The npm inside the group is checked against the group's cwd too.
     const missing = v(brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "(cd missing && npm ci) && npm test && npx') }));
     assert.match(missing.reasons.join(), /npm in missing\/ but there is no missing\/package\.json/);

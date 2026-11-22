@@ -124,7 +124,8 @@ export function guessedPathReasons(briefText, exists) {
         const specific = allow.filter((p) => !GENERIC.test(p) && !/^(?:docs|tests?)\//i.test(p));
         if (specific.length && !specific.some((p) => exists(p))) reasons.push(`no allow: path is on the default branch (${specific.join(', ')})`);
         for (const dir of npmDirsWithoutPackageJson(String(meta.test || ''), exists)) {
-            reasons.push(dir ? `test runs npm in ${dir}/ but there is no ${dir}/package.json` : 'test runs npm at the repo root but there is no package.json there');
+            if (dir === OUTSIDE_APP) reasons.push('test runs npm outside the /app worktree (a cd leaves it)');
+            else reasons.push(dir ? `test runs npm in ${dir}/ but there is no ${dir}/package.json` : 'test runs npm at the repo root but there is no package.json there');
         }
     }
     return reasons;
@@ -137,17 +138,21 @@ export function guessedPathReasons(briefText, exists) {
  * only to the closing paren, and `.`/`..` are resolved. Any step whose program is `npm` counts,
  * whatever flags come first (`npm --silent test`).
  */
+export const OUTSIDE_APP = '<outside /app>';
 export function npmDirsWithoutPackageJson(cmd, exists) {
+    // Repo-relative directory, or OUTSIDE_APP once a cd leaves the mounted worktree.
     const canon = (p) => {
         const out = [];
         for (const seg of String(p).split('/')) {
             if (!seg || seg === '.') continue;
-            if (seg === '..') out.pop();
-            else out.push(seg);
+            if (seg === '..') {
+                if (!out.length) return OUTSIDE_APP;
+                out.pop();
+            } else out.push(seg);
         }
         return out.join('/');
     };
-    const fromApp = (p) => canon(String(p).replace(/^\/{1,2}app(?=\/|$)/, ''));
+    const fromApp = (p) => (/^\/{1,2}app(?=\/|$)/.test(String(p)) ? canon(String(p).replace(/^\/{1,2}app/, '')) : OUTSIDE_APP);
     const inner = cmd.match(/\bsh -c (["'])([\s\S]*)\1/);
     let dir = fromApp(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
     const stack = [];
@@ -165,9 +170,12 @@ export function npmDirsWithoutPackageJson(cmd, exists) {
             closes++;
             step = step.slice(0, -1).trim();
         }
+        // Leading VAR=value assignments don't change which program runs (`CI=true npm ci`).
+        step = step.replace(/^(?:[A-Za-z_]\w*=\S*\s+)+/, '');
         const cd = step.match(/^cd\s+(\S+)$/);
-        if (cd) dir = cd[1].startsWith('/') ? fromApp(cd[1]) : canon(`${dir}/${cd[1]}`);
-        else if (/^npm(?:\s|$)/.test(step) && !exists(dir ? `${dir}/package.json` : 'package.json')) bad.add(dir);
+        if (cd) {
+            if (dir !== OUTSIDE_APP || cd[1].startsWith('/')) dir = cd[1].startsWith('/') ? fromApp(cd[1]) : canon(`${dir}/${cd[1]}`);
+        } else if (/^npm(?:\s|$)/.test(step) && (dir === OUTSIDE_APP || !exists(dir ? `${dir}/package.json` : 'package.json'))) bad.add(dir);
         for (; closes > 0 && stack.length; closes--) dir = stack.pop();
     }
     return [...bad];
