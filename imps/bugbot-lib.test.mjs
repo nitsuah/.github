@@ -279,4 +279,6 @@ test('shouldAskCodeRabbitApproval: once per head, only when CodeRabbit reviewed 
     assert.equal(shouldAskCodeRabbitApproval({ ...base, openThreads: 1 }).ok, false);
     assert.equal(shouldAskCodeRabbitApproval({ ...base, checksGreen: false }).ok, false);
     assert.equal(shouldAskCodeRabbitApproval({ ...base, isImpPr: true }).ok, false);
+    // more than one page of comments and no marker in the page read: do not risk a second ask
+    assert.equal(shouldAskCodeRabbitApproval({ ...base, historyComplete: false }).ok, false);
 });

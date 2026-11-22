@@ -86,7 +86,7 @@ const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$
   commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
   reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
-  comments(last:100){nodes{author{login} createdAt body}}
+  comments(last:100){pageInfo{hasPreviousPage} nodes{author{login} createdAt body}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line
     first: comments(first:1){nodes{id author{login} body createdAt originalCommit{oid}}}
     latest: comments(last:30){nodes{id author{login} body createdAt originalCommit{oid}}}}}
@@ -121,6 +121,7 @@ function loadPr(slug, number) {
         ? { name: c.name, state: c.status === 'COMPLETED' ? c.conclusion : c.status }
         : { name: c.context, state: c.state });
     const reviews = d.reviews.nodes.map((r) => ({ id: r.databaseId, author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
+    const commentsComplete = !d.comments.pageInfo?.hasPreviousPage;
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
     // The original finding plus the latest replies (a long thread's newest word is what bugbot must read).
     const toComment = (c) => ({ id: c.id, author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid });
@@ -142,6 +143,7 @@ function loadPr(slug, number) {
     return {
         slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, isDraft: d.isDraft, labels: d.labels.nodes,
         issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: headArrival({ committedAt: head.committedDate, firstSeenAt: firstSeen(d.url, head.oid) }), checks, reviews, comments, threads, openThreads,
+        commentsComplete,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
     };
@@ -386,12 +388,14 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         const done = await runReview(pr, force && !a.crStatus.stalled ? 'forced' : a.crStatus.state);
         if (!done) return { pr: pr.url, action: 'review-failed' };
         if (o['dry-run']) return { pr: pr.url, action: 'reviewed', verdict: done.verdict };
-        a = assess(loadPr(slug, number));
+        // Reload both: the review took minutes, and checks or CodeRabbit may have moved meanwhile.
+        pr = loadPr(slug, number);
+        a = assess(pr);
     }
     // CodeRabbit reviewed the head and only its stale block remains: ask it to approve, once per head.
     const ask = shouldAskCodeRabbitApproval({
         crStatus: a.crStatus, crLatestState: pr.crLatestState, openThreads: pr.openThreads, checksGreen: pr.checksGreen,
-        headSha: pr.headSha, comments: pr.comments, isImpPr: pr.labels.some((l) => (l.name || l) === 'imp'),
+        headSha: pr.headSha, comments: pr.comments, historyComplete: pr.commentsComplete, isImpPr: pr.labels.some((l) => (l.name || l) === 'imp'),
     });
     if (ask.ok) {
         if (!o['dry-run']) {
