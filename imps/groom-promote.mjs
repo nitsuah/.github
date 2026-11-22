@@ -120,13 +120,36 @@ export function guessedPathReasons(briefText, exists) {
     if (hedge) reasons.push(`brief hedges on its target file ("${hedge[0]}"), so the path is a guess`);
     if (typeof exists === 'function') {
         const allow = String(meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
-        const specific = allow.filter((p) => !GENERIC.test(p));
+        // Docs and tests (and anything under them) prove nothing about where the fix goes.
+        const specific = allow.filter((p) => !GENERIC.test(p) && !/^(?:docs|tests?)\//i.test(p));
         if (specific.length && !specific.some((p) => exists(p))) reasons.push(`no allow: path is on the default branch (${specific.join(', ')})`);
-        const test = String(meta.test || '');
-        const inSubdir = /\bcd [\w./-]+ *&&/.test(test) ||/-w \/{1,2}app\/[\w.-]/.test(test);
-        if (/\bnpm (?:ci|test|run)\b/.test(test) && !inSubdir && !exists('package.json')) reasons.push('test runs npm at the repo root but there is no package.json there');
+        for (const dir of npmDirsWithoutPackageJson(String(meta.test || ''), exists)) {
+            reasons.push(dir ? `test runs npm in ${dir}/ but there is no ${dir}/package.json` : 'test runs npm at the repo root but there is no package.json there');
+        }
     }
     return reasons;
+}
+
+/**
+ * Directories (repo-relative, '' = root) where `cmd` runs an npm command with no package.json there.
+ * Walks the steps in order, so `npm ci && cd frontend && npm test` still flags the root `npm ci`,
+ * and a `cd` must land somewhere that has a package.json of its own.
+ */
+export function npmDirsWithoutPackageJson(cmd, exists) {
+    const norm = (p) => String(p).replace(/^\/{1,2}app(?:\/|$)/, '').replace(/^\.\//, '').replace(/\/+$/, '');
+    const inner = cmd.match(/\bsh -c (["'])([\s\S]*)\1/);
+    let dir = norm(cmd.match(/-w (\/{1,2}app\S*)/)?.[1] || '');
+    const bad = new Set();
+    for (const step of (inner ? inner[2] : cmd).split(/&&|;|\|\|/).map((s) => s.trim().replace(/^\(+/, ''))) {
+        const cd = step.match(/^cd\s+(\S+)$/);
+        if (cd) {
+            const to = cd[1];
+            dir = to.startsWith('/') ? norm(to) : norm(dir ? `${dir}/${to}` : to);
+            continue;
+        }
+        if (/^npm (?:ci|test|run|install|i)\b/.test(step) && !exists(dir ? `${dir}/package.json` : 'package.json')) bad.add(dir);
+    }
+    return [...bad];
 }
 
 /** The issue comment for a groomed brief: a real brief when promoted, else a held draft with its reasons. */

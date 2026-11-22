@@ -106,6 +106,24 @@ export function recentBrief(ghJson, owner, repo, { exclude } = {}) {
     return null;
 }
 
+/**
+ * `text` cut to at most `max` characters on a line boundary, with a marker saying how many lines
+ * were dropped. A cut mid-line would hand the model a path fragment it could copy as a real file.
+ */
+export function clipLines(text, max) {
+    const s = String(text);
+    if (s.length <= max) return s;
+    const lines = s.split('\n');
+    const kept = [];
+    let used = 0;
+    for (const l of lines) {
+        if (used + l.length + 1 > max) break;
+        kept.push(l);
+        used += l.length + 1;
+    }
+    return `${kept.join('\n')}\n… (${lines.length - kept.length} more lines)`;
+}
+
 /** Draft a brief via 9router chat completion. Retry once after 2s; use [::1] for localhost. */
 export async function draftBrief({ router, owner, repo, issue, title, body, context, maxLines, allow, example }) {
     const sys = `You are an imps groomer. Write a brief in the STANDARD.md format for an imp to implement.
@@ -125,7 +143,7 @@ The brief MUST be valid front-matter + body:
 - Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
 ${example ? `\nA recent brief in this repo (copy its test command and style):\n~~~\n${example.slice(0, 3000)}\n~~~\n` : ''}
 Context from the repo:
-${Object.entries(context).map(([f, c]) => `### ${f}\n${c.slice(0, f.startsWith('file: ') || f === 'repo file list' ? 6000 : 3000)}`).join('\n\n')}
+${Object.entries(context).map(([f, c]) => `### ${f}\n${f === 'repo file list' ? clipLines(c, 6000) : c.slice(0, f.startsWith('file: ') ? 6000 : 3000)}`).join('\n\n')}
 
 Issue:
 #${issue}: ${title}

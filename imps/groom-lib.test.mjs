@@ -230,3 +230,10 @@ test('postGroomed: comment ok, label fails twice, DELETE throws -> ok false, err
     assert.deepEqual(calls.filter(c => c[0] === 'issue' && c[1] === 'edit').length, 2);
     assert.deepEqual(calls.filter(c => c[0] === 'api' && c[1] === '-X' && c[2] === 'DELETE').length, 1);
 });
+
+test('clipLines keeps whole lines and marks what it dropped', async () => {
+    const { clipLines } = await import('./groom-lib.mjs');
+    assert.equal(clipLines('a/1.js\nb/2.js', 100), 'a/1.js\nb/2.js');
+    const out = clipLines('src/aaaa.js\nsrc/bbbb.js\nsrc/cccc.js', 25);
+    assert.equal(out, 'src/aaaa.js\nsrc/bbbb.js\n… (1 more lines)');
+});

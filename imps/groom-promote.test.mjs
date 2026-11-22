@@ -128,16 +128,23 @@ test('promotionVerdict with exists: holds when no specific allow path is real, o
     const v = (text, ex = exists) => promotionVerdict({ issue: issue(), briefText: text, owner: 'nitsuah', poster: 'nitsuah', exists: ex });
     assert.deepEqual(v(brief()).reasons, []);
     // vhs#203: src/worker/ and tests/worker/ did not exist; package.json alone proves nothing.
-    assert.match(v(brief({ allow: 'src/worker/, tests/worker/, package.json' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/, tests\/worker\/\)/);
+    assert.match(v(brief({ allow: 'src/worker/, tests/worker/, package.json' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/\)/);
     // one real path plus a new test file is fine
     assert.deepEqual(v(brief({ allow: 'src/stats/, tests/new-thing.test.js' })).reasons, []);
     // kryptos#313: a Python repo whose frontend lives in frontend/ — npm ci at the root cannot work.
     const noPkg = (p) => p !== 'package.json' && exists(p);
     assert.match(v(brief(), noPkg).reasons.join(), /no package\.json/);
     const cdSub = brief({ test: NODE.replace('sh -c "npm ci', 'sh -c "cd frontend && npm ci') });
-    assert.doesNotMatch(v(cdSub, noPkg).reasons.join(), /package\.json/);
     const cdPlain = brief({ test: 'docker run --rm -v {wt}:/app -w /app node:22 sh -c "cd frontend&& npm ci"'.replace('frontend&&', 'frontend &&') });
-    assert.doesNotMatch(v(cdPlain, noPkg).reasons.join(), /no package\.json/);
+    // Order matters: a root npm ci before the cd is still flagged; a cd needs its own package.json.
+    const rootThenCd = brief({ test: NODE.replace('sh -c "npm ci --no-audit --no-fund && npx', 'sh -c "npm ci --no-audit --no-fund && cd frontend && npm test && npx') });
+    const frontendOnly = (p) => p === 'frontend/package.json' || (p !== 'package.json' && exists(p));
+    assert.doesNotMatch(v(cdPlain, frontendOnly).reasons.join(), /package\.json/);
+    assert.match(v(rootThenCd, frontendOnly).reasons.join(), /npm at the repo root/);
+    assert.doesNotMatch(v(cdSub, frontendOnly).reasons.join(), /package\.json/);
+    assert.match(v(cdSub, noPkg).reasons.join(), /npm in frontend\/ but there is no frontend\/package\.json/);
+    // A test file that exists does not stand in for a missing implementation path.
+    assert.match(v(brief({ allow: 'src/worker/, tests/stats.test.js' })).reasons.join(), /no allow: path is on the default branch \(src\/worker\/\)/);
     // "(or similar)" with nothing after it is still a hedge.
     assert.match(verdict({}, brief().replace('round the count.', 'round the count (or similar).')).reasons.join(), /hedges/);
 });
