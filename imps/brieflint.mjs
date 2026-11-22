@@ -24,8 +24,12 @@ export function extractBriefInput(text) {
     if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
 
     const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
-    const opening = commentBody.match(/^\s*```(?:markdown|md)?\n/);
-    if (opening) {
+    // A short prose intro may sit before the outer fence, as groom-promote posts it
+    // ("Groomed brief, auto-promoted …"); briefFromComments takes the fenced block too.
+    // An intro that already holds front matter is a raw brief with an inner fence.
+    const opening = commentBody.match(/^(?:\s*|[\s\S]*?\n)```(?:markdown|md)?\n/);
+    const intro = opening ? opening[0].slice(0, opening[0].lastIndexOf('```')) : '';
+    if (opening && !/^---\s*$/m.test(intro)) {
         const closingIndex = commentBody.lastIndexOf('\n```');
         if (closingIndex < opening[0].length) return { brief: '', error: 'unclosed outer fence' };
         const inner = commentBody.slice(opening[0].length, closingIndex);
