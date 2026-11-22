@@ -121,7 +121,8 @@ function loadPr(slug, number) {
         ? { name: c.name, state: c.status === 'COMPLETED' ? c.conclusion : c.status }
         : { name: c.context, state: c.state });
     const reviews = d.reviews.nodes.map((r) => ({ id: r.databaseId, author: r.author?.login || '', state: r.state, submittedAt: r.submittedAt, body: r.body, url: r.url, commit: r.commit?.oid }));
-    const commentsComplete = !d.comments.pageInfo?.hasPreviousPage;
+    // Fail closed: a response without pageInfo cannot prove the history is complete.
+    const commentsComplete = d.comments.pageInfo ? !d.comments.pageInfo.hasPreviousPage : false;
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
     // The original finding plus the latest replies (a long thread's newest word is what bugbot must read).
     const toComment = (c) => ({ id: c.id, author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid });
@@ -401,6 +402,7 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         if (!o['dry-run']) {
             const res = gh(['pr', 'comment', String(pr.number), '-R', pr.slug, '--body', `@coderabbitai approve\n\n${APPROVE_ASK_MARK(pr.headSha)}`]);
             log({ event: res.code ? 'bugbot-error' : 'bugbot-approve-ask', pr: pr.url, sha: pr.headSha, error: res.code ? res.err.slice(0, 200) : undefined });
+            if (res.code) return { pr: pr.url, action: 'approve-ask-failed', gate: a.gate };
         }
         return { pr: pr.url, action: 'asked-coderabbit-approve', gate: a.gate };
     }

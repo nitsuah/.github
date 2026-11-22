@@ -270,7 +270,10 @@ test('canClearVerdict: only request_changes, full scope, every bugbot thread ans
 
 test('shouldAskCodeRabbitApproval: once per head, only when CodeRabbit reviewed it and nothing is open', async () => {
     const { shouldAskCodeRabbitApproval, APPROVE_ASK_MARK } = await import('./bugbot-lib.mjs');
-    const base = { crStatus: { state: 'reviewed' }, crLatestState: 'CHANGES_REQUESTED', openThreads: 0, checksGreen: true, headSha: HEAD, comments: [] };
+    const base = { crStatus: { state: 'reviewed' }, crLatestState: 'CHANGES_REQUESTED', openThreads: 0, checksGreen: true, headSha: HEAD, comments: [], historyComplete: true };
+    // the default is conservative: a caller that omits historyComplete never triggers a second ask
+    const { historyComplete: _h, ...noHistory } = base;
+    assert.equal(shouldAskCodeRabbitApproval(noHistory).ok, false);
     assert.equal(shouldAskCodeRabbitApproval(base).ok, true);
     assert.equal(shouldAskCodeRabbitApproval({ ...base, comments: [{ body: `@coderabbitai approve\n\n${APPROVE_ASK_MARK(HEAD)}` }] }).ok, false, 'asked already');
     assert.equal(shouldAskCodeRabbitApproval({ ...base, comments: [{ body: APPROVE_ASK_MARK('b'.repeat(40)) }] }).ok, true, 'an ask for an older head does not count');
