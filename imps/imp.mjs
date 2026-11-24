@@ -465,6 +465,7 @@ async function runGate(id) {
             reason: pass ? null : (recoveryError || verified.reason),
             configuredModel: recoveryModel || null,
             servedModel,
+            servedCheck: auditServed({ served: recoveryMetrics?.served, expected: expectedFamilies(loadHomeConfig(), process.env) }),
             metrics: recoveryMetrics ? {
                 end: recoveryMetrics.end,
                 turns: recoveryMetrics.turns,
@@ -551,7 +552,9 @@ async function runGate(id) {
         bugfix: meta.kind === 'bug',
         humanOnlyPaths: humanOnly,
     });
-    if (r.servedCheck && r.servedCheck.ok === false) g.reasons.push(auditLine(r.servedCheck)), (g.pass = false);
+    // The run and any commit-recovery round both count: a recovery served by an unexpected model fails too.
+    for (const sc of [r.servedCheck, (commitRecovery || r.commitRecovery)?.servedCheck])
+        if (sc && sc.ok === false) g.reasons.push(auditLine(sc)), (g.pass = false);
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
