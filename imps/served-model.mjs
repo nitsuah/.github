@@ -85,3 +85,24 @@ export async function probeServedModel({ baseUrl, key, model = 'MAX', expected =
 export function mismatchLine(r) {
     return `${MODEL_MISMATCH_MARK}: requested ${r.requested || '?'}, served ${r.served} (family ${r.family}), expected ${r.expected.join('/')}; run stopped before any attempt`;
 }
+
+/**
+ * Post-run audit (.github#256): every model the router actually served during the run, checked
+ * against the expected families. The pre-run probe sees one request; a run can fall through to
+ * several models, so the run row records the whole list and the verdict. No expectation configured
+ * means nothing to judge (ok, verdict 'no-expectation').
+ */
+export function auditServed({ served = [], expected = [] } = {}) {
+    const models = [...new Set((Array.isArray(served) ? served : [served]).map((s) => String(s || '').trim()).filter(Boolean))];
+    const families = expected.map(modelFamily).filter(Boolean);
+    if (!families.length) return { ok: true, verdict: 'no-expectation', models };
+    if (!models.length) return { ok: true, verdict: 'unknown-served', models, expected: families };
+    const unexpected = models.filter((m) => !families.includes(modelFamily(m)));
+    if (!unexpected.length) return { ok: true, verdict: 'match', models, expected: families };
+    return { ok: false, verdict: 'mismatch', models, unexpected, expected: families };
+}
+
+/** The one gate reason / stderr line for a failed audit. */
+export function auditLine(a) {
+    return `${MODEL_MISMATCH_MARK}: served ${a.unexpected.join(', ')}, outside expected ${a.expected.join('/')}`;
+}

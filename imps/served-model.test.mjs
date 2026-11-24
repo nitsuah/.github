@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { servedModelId, modelFamily, expectedFamilies, checkServedModel, probeServedModel, mismatchLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
+import { servedModelId, modelFamily, expectedFamilies, checkServedModel, auditServed, auditLine, probeServedModel, mismatchLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
 
 // Fixture responses shaped like the router's chat completion. No live calls, no keys.
 const bodyOnly = { id: 'chatcmpl-1', model: 'nvidia/nemotron-3-super', choices: [{ message: { content: 'o' } }] };
@@ -108,4 +108,26 @@ test('imp.mjs stops before quota and dispatch puts a mismatch back on imp:ready'
     assert.ok(imp.indexOf('probeServedModel(') < imp.indexOf('reserveQuota(MODEL_POOL, o.modelStrategy'), 'probe runs before quota is reserved');
     const dispatch = readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
     assert.match(dispatch, /run\.out\.includes\(MODEL_MISMATCH_MARK\)[\s\S]{0,400}relabel\(repo, number, 'imp:ready', \['imp:working'\]\)/);
+});
+
+test('auditServed: records every served model and flags families outside the expectation (#256)', () => {
+    const expected = ['nemotron', 'laguna'];
+    const ok = auditServed({ served: ['nvidia/nemotron-3-ultra', 'poolside/laguna-s-2.1', 'nvidia/nemotron-3-ultra'], expected });
+    assert.equal(ok.ok, true);
+    assert.equal(ok.verdict, 'match');
+    assert.deepEqual(ok.models, ['nvidia/nemotron-3-ultra', 'poolside/laguna-s-2.1']);
+    const bad = auditServed({ served: ['nvidia/nemotron-3-ultra', 'recursive/flint-v1.0', 'baidu/ernie-5'], expected });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.verdict, 'mismatch');
+    assert.deepEqual(bad.unexpected, ['recursive/flint-v1.0', 'baidu/ernie-5']);
+    const line = auditLine(bad);
+    assert.ok(line.startsWith(MODEL_MISMATCH_MARK));
+    assert.ok(line.includes('flint') && line.includes('nemotron/laguna'));
+});
+
+test('auditServed: cannot judge without an expectation or a served id, and does not fail', () => {
+    assert.deepEqual(auditServed({ served: ['x/flint-1'], expected: [] }), { ok: true, verdict: 'no-expectation', models: ['x/flint-1'] });
+    const none = auditServed({ served: [], expected: ['nemotron'] });
+    assert.equal(none.ok, true);
+    assert.equal(none.verdict, 'unknown-served');
 });

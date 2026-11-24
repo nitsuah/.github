@@ -25,7 +25,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged } from './lib.mjs';
-import { expectedFamilies, probeServedModel, mismatchLine } from './served-model.mjs';
+import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
@@ -217,7 +217,10 @@ async function run() {
 }
 
 function finishRun(id, meta, metrics) {
-    update(id, { endedAt: new Date().toISOString(), metrics });
+    // Record which models actually served the run and whether they match the expected tier (#256).
+    const servedCheck = auditServed({ served: metrics.served, expected: expectedFamilies(loadHomeConfig(), process.env) });
+    if (!servedCheck.ok) console.error(auditLine(servedCheck));
+    update(id, { endedAt: new Date().toISOString(), metrics, servedCheck });
     writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
     console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${(metrics.served || []).join(', ') || 'none'}`);
     console.log(metrics.finalText || '');
@@ -548,6 +551,7 @@ async function runGate(id) {
         bugfix: meta.kind === 'bug',
         humanOnlyPaths: humanOnly,
     });
+    if (r.servedCheck && r.servedCheck.ok === false) g.reasons.push(auditLine(r.servedCheck)), (g.pass = false);
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
