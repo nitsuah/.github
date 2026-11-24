@@ -29,7 +29,7 @@ import { expectedFamilies, probeServedModel, mismatchLine } from './served-model
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -358,7 +358,26 @@ async function runGate(id) {
         console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
         update(id, { outOfScopeReverted: reverted.slice(0, 20) });
     }
-    const leftover = git(r.worktree, 'status', '--porcelain').out;
+    let leftover = git(r.worktree, 'status', '--porcelain').out;
+    // #256: commit the in-scope work ourselves before any model is asked to (Nemotron runs end with edits
+    // in the tree). Kill switch: IMPS_RUNNER_COMMIT=0. A failure falls through to the model recovery below.
+    if (leftover && process.env.IMPS_RUNNER_COMMIT !== '0' && !commitRecovery?.inProgress) {
+        const allowList = String(meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        const auto = autoCommitScoped(r.worktree, allowList, r.issue);
+        if (auto.pass) {
+            const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+            console.log(`runner committed ${auto.paths.length} in-scope file(s): ${auto.paths.slice(0, 5).join(', ')}`);
+            commitRecovery = { attempted: true, pass: true, inProgress: false, method: 'runner', beforeHead, afterHead, clean: true, changed: true, commitCount: 1, trailerValid: true, reason: null, paths: auto.paths.slice(0, 20), at: new Date().toISOString() };
+            update(id, { commitRecovery });
+            commitRecovered = true;
+            impHead = afterHead;
+            leftover = '';
+            writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'runner-commit-pass', failureSignatures: [] });
+        } else {
+            console.log(`runner commit not possible: ${auto.reason}`);
+        }
+    }
     if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
         console.log('commit recovery previously failed; refusing to gate a dirty tree');
         update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });

@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { memorySection } from './memory.mjs';
-import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, writeStreamJsonMessage, isPidAlive, foldChatStream } from './lib.mjs';
+import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, inScopeChanged, isDeniedPath, writeStreamJsonMessage, isPidAlive, foldChatStream } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -202,6 +202,32 @@ export const sh = (bin, args, opts = {}) => {
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
+
+export const RUNNER_COMMIT_TRAILER = 'Co-Authored-By: 9router imp <noreply@anthropic.com>';
+
+/**
+ * Commit an imp's uncommitted work for it, deterministically (#256). Models that stop with edits in the
+ * tree (Nemotron: commit-recovery-failed, vigil#437) lose the run even when the work is right, and a
+ * second model prompt to commit is as fallible as the first. Stages exactly the changed paths inside the
+ * brief's `allow:` list that the gate would not deny anyway, and makes one commit with the imp trailer.
+ * Returns { pass, reason, paths }; pass only when the tree is clean afterwards (any leftover change, such as
+ * an allowed-but-denied lockfile edit, fails it so the model recovery path still runs).
+ */
+export function autoCommitScoped(wt, allow = [], issue = '') {
+    const status = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', windowsHide: true });
+    if (status.status !== 0) return { pass: false, reason: 'git status failed', paths: [] };
+    const paths = inScopeChanged(String(status.stdout || '').trimEnd(), allow).filter((p) => !isDeniedPath(p));
+    if (!paths.length) return { pass: false, reason: 'no in-scope changed path to commit', paths };
+    for (const p of paths) {
+        if (git(wt, 'add', '--', p).code) return { pass: false, reason: 'git add failed', paths };
+    }
+    const subject = `imp: work for #${issue} (runner commit)`;
+    const c = git(wt, 'commit', '-q', '-m', [subject, '', RUNNER_COMMIT_TRAILER].join(String.fromCharCode(10)));
+    if (c.code) return { pass: false, reason: 'git commit failed', paths };
+    const after = spawnSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true });
+    if (String(after.stdout || '').trim()) return { pass: false, reason: 'worktree not clean after the runner commit', paths };
+    return { pass: true, reason: null, paths };
+}
 
 // Everything prGuard needs about one issue: its state, every imp/<n>-* PR, and
 // merged PRs whose body closes it. Throws when a lookup fails (fail closed).
