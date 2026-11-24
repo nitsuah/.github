@@ -146,6 +146,7 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
 | --- | --- |
 | `briefHash` | Ties every outcome to an exact prompt version (preamble + brief) |
 | `model`, `metrics.served`, `metrics.modelSwitches` | What was asked for vs. what 9router served. A run served by a fallback model, or that switched model mid-run, isn't evidence about the prompt |
+| `servedCheck` | Post-run audit of every served model against `expectedModelFamilies` (#256): `{ok, verdict, models, unexpected}`. An out-of-list model fails the gate (`served model mismatch: …`) and prints the same line to stderr; with no expectation configured nothing is judged |
 | `metrics.turns`, `durationMs`, `turnMs.{median,max}` | Effort and stalls |
 | `metrics.tools`, `toolErrors`, `errorKinds`, `denials` | Where the imp fights its tools (edit-miss, denied, command-failed …) |
 | `metrics.tokens.{input,cacheRead,cacheWrite,output}`, `costEstimateUsd` | Token cost. The USD figure is the CLI's list-price estimate, not what 9router actually charged |
