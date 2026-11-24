@@ -215,7 +215,7 @@ export function brokenCommandSignature(status, output = '') {
         [head, /^[\w./-]+: (?:line \d+: )?[^\s:]+: command not found$/im, 'the test command names a program that does not exist'],
         // skyview#253 (2026-11-23): a Playwright test run in plain node:22 has no browsers, so the base never
         // passes and every imp attempt dies at the gate with "tests exit 1".
-        [all, /^\s*(?:Error: )?browserType\.launch: Executable doesn't exist at \S*ms-playwright\//im, 'the test command runs Playwright in an image without its browsers (use mcr.microsoft.com/playwright:<version>)'],
+        [all, /^\s*(?:Error: )?browserType\.launch(?:PersistentContext)?: Executable doesn't exist at \S+/im, 'the test command runs Playwright without its browsers installed (use mcr.microsoft.com/playwright:<version>, or install them into the configured PLAYWRIGHT_BROWSERS_PATH)'],
         [all, /^(?:#\d+ )?ERROR: failed to solve\b/im,'the docker build in the test command fails on the unchanged base'],
         [all, /^(?:ERROR: )?(?:unable to prepare context|failed to read dockerfile)\b/im, 'the docker build context or Dockerfile path is wrong'],
     ];

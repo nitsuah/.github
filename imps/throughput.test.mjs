@@ -49,6 +49,9 @@ test('brokenCommandSignature: catches a command that cannot run, ignores ordinar
     // skyview#253: node:22 has no Playwright browsers, so the base test can never pass.
     const noBrowser = ['Running 1 test using 1 worker', '', '  1) [chromium] › a.spec.ts:5:3 › x', '', "    Error: browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1255/chrome-headless-shell"].join(NL);
     assert.match(brokenCommandSignature(1, noBrowser), /without its browsers/);
+    // A custom PLAYWRIGHT_BROWSERS_PATH and launchPersistentContext get the same classification.
+    assert.match(brokenCommandSignature(1, "Error: browserType.launch: Executable doesn't exist at /tmp/pw-browsers/chromium-1/chrome"), /without its browsers/);
+    assert.match(brokenCommandSignature(1, "Error: browserType.launchPersistentContext: Executable doesn't exist at /root/.cache/ms-playwright/chromium-1/chrome"), /without its browsers/);
     assert.equal(brokenCommandSignature(0, noBrowser), null);
     assert.equal(brokenCommandSignature(0, pw), null);
     assert.equal(brokenCommandSignature(1, '  1 failed' + NL + '  expect(received).toBe(expected)'), null);
