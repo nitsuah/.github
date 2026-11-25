@@ -1,0 +1,5 @@
+- **Edits left uncommitted** (×2): imps make changes but never `git add` + `git commit`. Rule 5: always commit after RUNTEST passes; uncommitted work is lost.
+- **Turn cap / 20 calls without an edit** (×2): imps read/analyze but don't write. Open the file "The fix" names first and make the edit within the first few turns.
+- **Tests only through RUNTEST**: run exact `node .github/imps/runtest.mjs` (no args). Never run vitest, npm, npx, or docker directly — they're denied.
+- **One allowed command per Bash call**: chained ops (`a && b`, pipes) or non-allowlist tools are denied. Split into separate calls.
+- **Use forward-slash repo-relative paths**: `imps/memory/games.md`, not `C:\...`; Glob before Read when unsure.
