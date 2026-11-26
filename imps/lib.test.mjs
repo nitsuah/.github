@@ -799,8 +799,8 @@ test('formatMergedByAgentTrailer produces correct trailer for normal machine nam
 
 test('mergedByAgentCommitBody preserves commit headlines and unique coauthor trailers', () => {
     const body = mergedByAgentCommitBody([
-        { commit: { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' } },
-        { commit: { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' } },
+        { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' },
+        { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' },
     ], 'build-box');
     assert.match(body, /\* first change/);
     assert.match(body, /\* second change/);
