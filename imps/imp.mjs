@@ -738,15 +738,15 @@ function openPr(id) {
     catch { return console.log('could not parse PR commits for squash attribution, leaving the PR open'); }
     const commitHeadlines = commits.map((c) => String(c.commit?.messageHeadline || '').trim()).filter(Boolean);
     const coAuthors = [...new Set(commits.flatMap((c) => String(c.commit?.messageBody || '')
-        .split(/\\r?\\n/)
+        .split(/\r?\n/)
         .map((line) => line.trim())
         .filter((line) => /^Co-Authored-By:/i.test(line))))];
     const trailer = formatMergedByAgentTrailer(machineName());
     const mergeBody = [
-        commitHeadlines.map((headline) => `* ${headline}`).join('\\n'),
+        commitHeadlines.map((headline) => `* ${headline}`).join('\n'),
         coAuthors.join('\\n'),
         trailer,
-    ].filter(Boolean).join('\\n\\n');
+    ].filter(Boolean).join('\n\n');
     const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
