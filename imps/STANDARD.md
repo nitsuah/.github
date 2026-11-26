@@ -433,3 +433,14 @@ An advisory, per-run guard can nudge the worker when the same coarse tool error 
 - **Bounds:** each counter saturates at 5; at most `allowlist.length` signatures are tracked; at most one nudge per kind per run. State is local to the `runClaude` invocation — no ledger, no file, no cross-run persistence.
 - **Fail-open:** if the stdin write errors or backpressures, the guard disables itself for the rest of the run and the worker continues unchanged. The child process is never killed, the handler never throws, and no tool allowances, budgets, turn caps, gate, review, or merge behavior is altered.
 - **Advisory only:** the guard cannot terminate a run, authorize a tool, widen scope, alter the diff/test gate, or influence PR/review/merge decisions.
+
+
+## Merge attribution and owner review
+
+Every agent-initiated squash merge must include a commit-body trailer identifying the actor:
+- Imp automation: `Merged-by-agent: imp-<machine>` (use the machine recorded for the run; never invent an identity).
+- Interactive agents: `Merged-by-agent: <ChatGPT|Claude|Grok>`.
+
+Preserve the original squash commit list and every distinct `Co-Authored-By:` trailer when supplying a custom merge body. Do not replace existing attribution with the agent trailer alone.
+
+Sensitive changes require explicit owner approval before merge: `.github/workflows/**`, `**/auth/**`, `**/security/**`, `SECURITY.md`, lockfiles, or PRs labeled `security`/`auth`. The owner approval marker is `owner-approved`. CI green is not a substitute for owner approval on these paths.
