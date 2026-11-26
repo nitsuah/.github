@@ -58,6 +58,92 @@ export function gateSignature(reason = '') {
         .slice(0, 120);
 }
 
+/** Internal model state for the fallback policy. */
+const modelState = new Map();
+let passSequence = 0;
+
+/**
+ * Record a gate result for a model.
+ * @param {string} model - Model identifier (e.g., "nemotron", "recursive/flint")
+ * @param {boolean} passed - Whether the gate passed
+ */
+export function recordModelGateResult(model, passed) {
+    if (!model) return;
+    const state = modelState.get(model) || { streak: 0, benched: false, lastPassedAt: null, passSeq: 0 };
+    if (passed) {
+        state.streak = 0;
+        state.benched = false;
+        state.lastPassedAt = Date.now();
+        passSequence += 1;
+        state.passSeq = passSequence;
+    } else {
+        state.streak += 1;
+        if (state.streak >= 3) {
+            state.benched = true;
+        }
+    }
+    modelState.set(model, state);
+}
+
+/**
+ * Select a model from the given list, skipping benched models and
+ * falling back to the most recent last-known-good model.
+ * The served model may be retried with 0-2 failures without a recorded pass.
+ * Fallback candidates must have a recorded gate pass.
+ * Among models with passes, the most recent pass (highest passSeq) wins.
+ * @param {string[]} models - Ordered list of candidate models (preferred first)
+ * @param {string} [servedModel] - Currently served model (allowed 0-2 failures without pass)
+ * @returns {string|null} Selected model or null if none available
+ */
+export function selectModel(models = [], servedModel = null) {
+    // First pass: served model - used unless benched (a fresh model with no record is allowed)
+    if (servedModel && models.includes(servedModel)) {
+        const state = modelState.get(servedModel);
+        if (!state || !state.benched) {
+            return servedModel;
+        }
+    }
+    // Second pass: among preferred models with passes, pick the most recent pass
+    let bestPreferred = null;
+    let bestTime = -1;
+    let bestSeq = -1;
+    for (const model of models) {
+        if (model === servedModel) continue;
+        const state = modelState.get(model);
+        if (state && !state.benched && state.lastPassedAt) {
+            if (state.lastPassedAt > bestTime ||
+                (state.lastPassedAt === bestTime && state.passSeq > bestSeq)) {
+                bestPreferred = model;
+                bestTime = state.lastPassedAt;
+                bestSeq = state.passSeq;
+            }
+        }
+    }
+    if (bestPreferred) return bestPreferred;
+    // Third pass: fallback to last-known-good across all models, using passSeq for tiebreaking
+    let lastGood = null;
+    let lastGoodTime = -1;
+    let lastGoodSeq = -1;
+    for (const [model, state] of modelState) {
+        if (!state.benched && state.lastPassedAt) {
+            if (state.lastPassedAt > lastGoodTime ||
+                (state.lastPassedAt === lastGoodTime && state.passSeq > lastGoodSeq)) {
+                lastGood = model;
+                lastGoodTime = state.lastPassedAt;
+                lastGoodSeq = state.passSeq;
+            }
+        }
+    }
+    return lastGood;
+}
+
+/**
+ * Reset all model state (for testing).
+ */
+export function resetModelState() {
+    modelState.clear();
+}
+
 /** Extract a brief `test:` line from an issue body, or null. */
 export function testFromIssueBody(body = '') {
     const m = String(body).match(/(?:^|\n)\s*test:\s*(.+?)\s*(?:\n|$)/i);

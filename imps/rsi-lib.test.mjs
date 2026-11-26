@@ -1,7 +1,15 @@
 // node --test imps/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRsiConfig, rsiEnabled, gateSignature, proposeRsiIssues } from './rsi-lib.mjs';
+import {
+    parseRsiConfig,
+    rsiEnabled,
+    gateSignature,
+    proposeRsiIssues,
+    recordModelGateResult,
+    selectModel,
+    resetModelState,
+} from './rsi-lib.mjs';
 
 test('rsiEnabled kill switch', () => {
     assert.equal(rsiEnabled({}, {}), true);
@@ -90,4 +98,101 @@ test('proposeRsiIssues files a struggling repo first with a memory-file brief an
     assert.equal(out[0].title, 'imps RSI: imps keep failing in skyview');
     assert.match(out[0].brief, /allow: imps\/memory\/skyview\.md/);
     assert.equal(proposeRsiIssues({ struggling, openRsi: [{ title: 'imps RSI: imps keep failing in skyview' }] }).filter((p) => p.kind === 'struggle').length, 0);
+});
+
+test('model fallback: failure streak 1, 2, 3 and bench', () => {
+    resetModelState();
+    // Streak 1
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron'], 'nemotron'), 'nemotron');
+    // Streak 2
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron'], 'nemotron'), 'nemotron');
+    // Streak 3 -> benched
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron'], 'nemotron'), null);
+});
+
+test('model fallback: served model retries without pass, fallback requires pass', () => {
+    resetModelState();
+    // served model with 1 failure, no pass yet - can be retried
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron', 'recursive/flint'], 'nemotron'), 'nemotron');
+    // fallback candidate without pass is not eligible
+    assert.equal(selectModel(['recursive/flint']), null);
+    // fallback with pass becomes eligible
+    recordModelGateResult('recursive/flint', true);
+    assert.equal(selectModel(['recursive/flint']), 'recursive/flint');
+});
+
+test('model fallback: pass resets streak and records last-known-good', () => {
+    resetModelState();
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', true); // pass resets
+    assert.equal(selectModel(['nemotron'], 'nemotron'), 'nemotron');
+    // After pass, two failures should still keep it eligible (streak < 3)
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron'], 'nemotron'), 'nemotron');
+    // Third failure benches it
+    recordModelGateResult('nemotron', false);
+    assert.equal(selectModel(['nemotron'], 'nemotron'), null);
+    // Another model passes -> last-known-good
+    recordModelGateResult('recursive/flint', true);
+    assert.equal(selectModel(['nemotron', 'recursive/flint']), 'recursive/flint');
+});
+
+test('model fallback: skips benched models in preference order', () => {
+    resetModelState();
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false); // benched
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false); // benched
+    recordModelGateResult('particle-ai', true); // passes
+    // Should pick particle-ai (first non-benched in list)
+    assert.equal(selectModel(['nemotron', 'recursive/flint', 'particle-ai']), 'particle-ai');
+});
+
+test('model fallback: monotonic pass sequence breaks same-timestamp ties', () => {
+    resetModelState();
+    // Simulate two passes at same timestamp by recording them sequentially
+    // (Date.now() would return same value if called quickly)
+    recordModelGateResult('model-a', true);
+    recordModelGateResult('model-b', true);
+    // model-b has higher passSeq, should be selected as more recent
+    assert.equal(selectModel(['model-a', 'model-b']), 'model-b');
+    // Reverse preference order: model-a preferred but model-b passed later
+    assert.equal(selectModel(['model-b', 'model-a']), 'model-b');
+});
+
+test('model fallback: falls back to last-known-good when all preferred are benched', () => {
+    resetModelState();
+    recordModelGateResult('nemotron', true); // last-known-good
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false); // benched
+    // nemotron not in preferred list, but is last-known-good
+    assert.equal(selectModel(['recursive/flint', 'particle-ai']), 'nemotron');
+});
+
+test('model fallback: no known-good returns null when all preferred benched', () => {
+    resetModelState();
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false);
+    recordModelGateResult('nemotron', false); // benched
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false);
+    recordModelGateResult('recursive/flint', false); // benched
+    // No model has ever passed, all preferred are benched
+    assert.equal(selectModel(['nemotron', 'recursive/flint']), null);
+});
+
+test('model fallback: a fresh served model with no record is selected', () => {
+    resetModelState();
+    assert.equal(selectModel(['nemotron', 'recursive/flint'], 'nemotron'), 'nemotron');
+    // a served model outside the candidate list is still ignored
+    assert.equal(selectModel(['recursive/flint'], 'nemotron'), null);
 });
