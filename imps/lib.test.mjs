@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -41,6 +41,8 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     const cands = [{ repo: 'vhs', number: 1, labels: [], createdAt: '1' }, { repo: 'fire', number: 2, labels: [], createdAt: '2' }];
     assert.deepEqual(pickIssues({ candidates: cands, repos: {}, ...b }).map((i) => i.repo), ['fire']);
     assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
+    assert.deepEqual(Object.keys(loopBudget(rows, now, { cooldownMs: 0 }).cooldown), []); // config.json cooldownMs: 0 turns cooldowns off
+    assert.deepEqual(Object.keys(loopBudget(rows, now, { cooldownMs: 72 * 3600_000 }).cooldown).sort(), ['vhs', 'vigil']);
 
     const recovery = loopBudget([
         { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },
@@ -2137,4 +2139,12 @@ test('coveringMergeAt matches a Fixes line or a closing reference in the same re
     ];
     assert.equal(coveringMergeAt(prs, 7, 'nitsuah/r'), '2026-11-02T00:00:00Z');
     assert.equal(coveringMergeAt(prs, 8, 'nitsuah/r'), null);
+});
+
+test('configNumber accepts non-negative numbers from config.json and falls back on anything else', () => {
+    assert.equal(configNumber({ dailyCap: 400 }, 'dailyCap', 100), 400);
+    assert.equal(configNumber({ dailyCap: '250' }, 'dailyCap', 100), 250);
+    assert.equal(configNumber({ cooldownMs: 0 }, 'cooldownMs', 5), 0);
+    for (const bad of [undefined, null, 'x', '', -1, NaN, Infinity, true, {}]) assert.equal(configNumber({ dailyCap: bad }, 'dailyCap', 100), 100);
+    assert.equal(configNumber(undefined, 'dailyCap', 100), 100);
 });
