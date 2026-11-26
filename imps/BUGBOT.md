@@ -25,6 +25,8 @@ Be adversarial but honest: every finding must point at a line you can see in the
 - **Do not report intended behaviour as a bug.** If a comment, the PR description or a test in the diff says the behaviour is deliberate, it is not a finding unless you can show a concrete case where it causes harm.
 - **Do not report a test as missing a case that another test in the diff already covers.** Read every test hunk first.
 - If you are not sure, leave it out, or report it as `minor` with the doubt stated. A `blocker` or `major` must be something you would bet on.
+- **Every `blocker` or `major` needs a `quote`:** one line copied exactly from the diff (an added or context line, without the leading `+` or space) that shows the problem. The runner checks it against the diff and turns a blocker or major without a matching quote into `minor`.
+- **A claim that a key, option, flag or API does not exist or is invalid is `minor` at most**, unless the diff itself shows it failing. Your knowledge of tools and APIs may be out of date; the runner downgrades these.
 
 ## Line numbers
 
@@ -39,7 +41,7 @@ Keep the reasoning short and finish with exactly one fenced `json` block, and no
   "verdict": "approve | comment | request_changes",
   "summary": "Two or three sentences: what the PR does and whether it is safe to merge.",
   "findings": [
-    { "severity": "blocker | major | minor | nit", "file": "path/from/repo/root", "line": 42, "title": "Short claim", "detail": "What goes wrong (input or sequence), the evidence in the diff, and the fix." }
+    { "severity": "blocker | major | minor | nit", "file": "path/from/repo/root", "line": 42, "title": "Short claim", "quote": "exact line from the diff (blocker/major only)", "detail": "What goes wrong (input or sequence), the evidence in the diff, and the fix." }
   ]
 }
 ```

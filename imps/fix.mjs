@@ -24,7 +24,6 @@ import { parseArgs } from 'node:util';
 import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, fixRoundProgress } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
 import { prRisk, dropStaleAck } from './checks.mjs';
-import { writeTelemetry } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -121,7 +120,7 @@ if (noThreadProgress || unanswered) {
     if (!dry) {
         sh('gh', ['label', 'create', 'imp:failed', '-R', slug, '-c', 'b60205', '-d', 'The imp did not pass the gate; needs a new brief or a human', '--force']);
         sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:failed']);
-        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\\nFix round ${round} failed: ${reason}.\\n\\nLabelled \`imp:failed\`.`]);
+        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} failed: ${reason}.\n\nLabelled \`imp:failed\`.`]);
     }
     update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, failure: reason, pushed: false }] }));
     say('gate-fail', { reasons: [reason] });

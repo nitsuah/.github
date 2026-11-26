@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULTS } from './defaults.mjs';
+import { mergedByAgentCommitBody } from './lib.mjs';
 import { evaluateChecks, cleanMergesForRepo, fetchGithubSeedTrust, mayAutoMerge, prRisk, fetchPrPaths, riskMergeGate } from './checks.mjs';
 import { bugbotVerdictFor, isCodeRabbit } from './bugbot-lib.mjs';
 import { HOME, rows, update, sh, kitSha, machineName, applyRiskLabel } from './runner.mjs';
@@ -147,7 +148,8 @@ async function main() {
         } else if (a.action === 'rereview') {
             sh(process.execPath, [fileURLToPath(new URL('./review.mjs', import.meta.url)), r.id]);
         } else if (a.action === 'merge') {
-            const merge = gh(['pr', 'merge', r.pr, '--squash', '--delete-branch', '--match-head-commit', pr.headRefOid]);
+            const mergeBody = mergedByAgentCommitBody(pr.commits, machineName());
+            const merge = gh(['pr', 'merge', r.pr, '--squash', '--delete-branch', '--match-head-commit', pr.headRefOid, '--body', mergeBody]);
             if (!merge.code) update(r.id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true, mergedBy: 'demonguard' });
             else out.push(`${tag} merge refused: ${String(merge.err).slice(0, 120)}`);
         } else if (a.action === 'needs-human') {

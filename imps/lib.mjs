@@ -496,6 +496,27 @@ export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty
     return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
 }
 
+/** Format the squash-merge trailer that attributes the merge to an imp machine. */
+export function formatMergedByAgentTrailer(machine) {
+    const name = String(machine ?? '').trim();
+    return name ? `Merged-by-agent: imp-${name}` : 'Merged-by-agent: imp-';
+}
+
+/** Build a squash body that retains the PR commit list and unique co-author trailers. */
+export function mergedByAgentCommitBody(commits, machine) {
+    const rows = Array.isArray(commits) ? commits : [];
+    const headlines = rows.map((c) => String(c?.commit?.messageHeadline || '').trim()).filter(Boolean);
+    const coAuthors = [...new Set(rows.flatMap((c) => String(c?.commit?.messageBody || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => /^Co-Authored-By:/i.test(line))))];
+    return [
+        headlines.map((headline) => `* ${headline}`).join('\n'),
+        coAuthors.join('\n'),
+        formatMergedByAgentTrailer(machine),
+    ].filter(Boolean).join('\n\n');
+}
+
 // ── risk class ────────────────────────────────────────────────────────────
 // How much a change can hurt, decided from its paths alone. Merge rules key off
 // it (checks.mjs riskMergeGate), so no model's opinion can lower it.
@@ -1412,6 +1433,7 @@ export function parseReview(text = '') {
             line: Number.isFinite(Number(f.line)) ? Number(f.line) : null,
             title: String(f.title),
             detail: String(f.detail || ''),
+            quote: String(f.quote || ''),
         }));
     const counts = Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s).length]));
     const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
@@ -1506,19 +1528,7 @@ export function fixRoundProgress(items = [], decisions = []) {
     const threads = items.filter((item) => item.kind === 'thread');
     const addressedThreads = threads.filter((item) => {
         const decision = byId.get(item.id);
-        return decision?.action === 'fix' || (decision?.action === 'skip' && decision.reply.trim().length > 0);
-    });
-    const unanswered = items.filter((item) => !byId.get(item.id)?.answered);
-    return { hasThreads: threads.length > 0, addressedThreads: addressedThreads.length, unanswered: unanswered.map((item) => item.id) };
-}
-
-/** Measure actual fix-round progress separately for review threads and CI feedback. */
-export function fixRoundProgress(items = [], decisions = []) {
-    const byId = new Map(decisions.map((decision) => [decision.id, decision]));
-    const threads = items.filter((item) => item.kind === 'thread');
-    const addressedThreads = threads.filter((item) => {
-        const decision = byId.get(item.id);
-        return decision?.action === 'fix' || (decision?.action === 'skip' && decision.reply.trim().length > 0);
+        return decision?.action === 'fix' || (['skip', 'pushback'].includes(decision?.action) && decision.reply.trim().length > 0);
     });
     const unanswered = items.filter((item) => !byId.get(item.id)?.answered);
     return { hasThreads: threads.length > 0, addressedThreads: addressedThreads.length, unanswered: unanswered.map((item) => item.id) };

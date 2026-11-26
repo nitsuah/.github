@@ -473,3 +473,95 @@ export function decodeContents(json = '') {
     const text = Buffer.from(d.content, 'base64').toString('utf8');
     return text.includes('\u0000') ? null : text;
 }
+
+// ── settled findings ──────────────────────────────────────────────────────
+// A finding bugbot raised, someone pushed back on with evidence, and bugbot
+// accepted, is settled for the PR. A later review of a new head must not raise
+// it again (vhs#208 got the same false blocker twice). Threads accepted as
+// "Fixed in …" are not settled: a regression there must still be caught.
+const FIX_REPLY = /^\s*(<!--[^>]*-->\s*)*\**\s*fixed\b/i;
+const titleWords = (s = '') => new Set(String(s).toLowerCase().replace(/[`'"*_]/g, '').split(/[^a-z0-9.:-]+/).filter((w) => w.length > 2));
+
+/** Findings bugbot accepted a pushback on: [{ path, title, reply }]. Pure. */
+export function settledFindings(threads = []) {
+    const out = [];
+    for (const t of threads) {
+        const cs = t.comments || [];
+        const first = String(cs[0]?.body || '');
+        if (!first.includes(THREAD_MARK)) continue;
+        const at = cs.findIndex((c, i) => i > 0 && String(c.body || '').includes(ACCEPTED_MARK));
+        if (at < 0) continue;
+        const answer = [...cs.slice(1, at)].reverse().find((c) => !String(c.body || '').includes(THREAD_MARK));
+        if (!answer || FIX_REPLY.test(String(answer.body || ''))) continue;
+        const m = first.match(/\*\*(?:blocker|major|minor|nit)\*\*\s*·\s*(.+)/);
+        if (!m) continue;
+        out.push({ path: t.path || '', title: m[1].trim(), reply: String(answer.body || '').split('\n').filter((l) => !l.trim().startsWith('<!--')).join('\n').replace(/[<>]/g, '').trim().slice(0, 500) });
+    }
+    return out;
+}
+
+/** Same file and most title words shared (Jaccard ≥ 0.5). */
+export function matchesSettled(f, settled = []) {
+    const a = titleWords(f.title);
+    return settled.find((s) => {
+        if (!s.path || s.path !== f.file) return false;
+        const b = titleWords(s.title);
+        const inter = [...a].filter((w) => b.has(w)).length;
+        const union = new Set([...a, ...b]).size;
+        return union > 0 && inter / union >= 0.5;
+    }) || null;
+}
+
+/** The review without settled findings, counts and verdict recomputed. Pure. */
+export function withoutSettled(rv, settled = []) {
+    if (!settled.length || !rv?.findings) return { rv, dropped: [] };
+    const dropped = [];
+    const findings = rv.findings.filter((f) => (matchesSettled(f, settled) ? (dropped.push(f), false) : true));
+    if (!dropped.length) return { rv, dropped };
+    return { rv: recount(rv, findings), dropped };
+}
+
+function recount(rv, findings) {
+    const sev = ['blocker', 'major', 'minor', 'nit'];
+    const counts = Object.fromEntries(sev.map((s) => [s, findings.filter((f) => f.severity === s).length]));
+    const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
+    return { ...rv, findings, counts, verdict };
+}
+
+// ── evidence rule ─────────────────────────────────────────────────────────
+// A blocker or major blocks the merge, so it must quote a line that is really
+// in the diff. "X is not a valid key / does not exist" claims come from the
+// model's possibly stale knowledge (vhs#208: a documented key called invalid
+// twice) and never block on their own.
+const EXISTENCE_CLAIM = /\b(invalid|not (a )?valid|unsupported|not supported|does not exist|doesn't exist|unknown (key|option|flag|property|field)|no such (key|option|flag|api|method)|not a recognized)\b/i;
+const squash = (s = '') => String(s).replace(/\s+/g, ' ').trim();
+
+/** Added and context lines of a unified diff, whitespace-squashed. Pure. */
+export function diffLineSet(diff = '') {
+    const out = new Set();
+    for (const l of String(diff).split('\n')) {
+        if (l.startsWith('+++') || l.startsWith('---')) continue;
+        if (l.startsWith('+') || l.startsWith(' ')) {
+            const t = squash(l.slice(1));
+            if (t) out.add(t);
+        }
+    }
+    return out;
+}
+
+/** Downgrade unproven blockers/majors to minor and recompute the verdict. Pure. */
+export function requireEvidence(rv, diff = '') {
+    if (!rv?.findings) return { rv, downgraded: [] };
+    const lines = diffLineSet(diff);
+    const downgraded = [];
+    const findings = rv.findings.map((f) => {
+        if (f.severity !== 'blocker' && f.severity !== 'major') return f;
+        const q = squash(f.quote).replace(/^[+ ]/, '').trim();
+        const quoted = q.length >= 6 && [...lines].some((l) => l.includes(q));
+        const why = !quoted ? 'no quoted diff line' : EXISTENCE_CLAIM.test(`${f.title} ${f.detail}`) ? 'existence claim without a reproduction' : null;
+        if (!why) return f;
+        downgraded.push({ ...f, why });
+        return { ...f, severity: 'minor', detail: `${f.detail}\n\n_Downgraded from ${f.severity}: ${why}._` };
+    });
+    return { rv: downgraded.length ? recount(rv, findings) : rv, downgraded };
+}

@@ -60,7 +60,7 @@ export const kitSha = () => {
 // heartbeat issues, claim comments, ledger rows, dispatch events.
 // Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
 export function resolveMachine(config = {}, env = process.env) {
-    return env.IMPS_MACHINE || config.machine || hostname();
+    return (env.IMPS_MACHINE || '').trim() || config.machine || hostname();
 }
 export const machineName = () => resolveMachine({}, process.env);
 // How many edit-less tool calls a run may make: env, then ~/.imps/config.json, then defaults.
