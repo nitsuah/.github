@@ -41,6 +41,8 @@ test('loopBudget counts the last 24 h and cools down a repo after two straight g
     const cands = [{ repo: 'vhs', number: 1, labels: [], createdAt: '1' }, { repo: 'fire', number: 2, labels: [], createdAt: '2' }];
     assert.deepEqual(pickIssues({ candidates: cands, repos: {}, ...b }).map((i) => i.repo), ['fire']);
     assert.equal(pickIssues({ candidates: cands, repos: {}, dailyCap: 4, runsLast24h: 4 }).length, 0);
+    assert.deepEqual(Object.keys(loopBudget(rows, now, { cooldownMs: 0 }).cooldown), []); // config.json cooldownMs: 0 turns cooldowns off
+    assert.deepEqual(Object.keys(loopBudget(rows, now, { cooldownMs: 72 * 3600_000 }).cooldown).sort(), ['vhs', 'vigil']);
 
     const recovery = loopBudget([
         { id: 'imp_7', repo: 'fire', startedAt: '2026-10-23T09:00:00Z', outcome: COMMIT_RECOVERY_FAILED, gate: { pass: false, reasons: ['tests exit 1'] } },

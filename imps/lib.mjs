@@ -881,7 +881,7 @@ export function staleImpLabels(labels = []) {
 // whose issue has moved on since (see isStaleFailure) leaves that streak.
 // `evidence(repo, issue)` is asked only about failures that could still cause a
 // cooldown; without it, or when it returns null, every failure counts.
-export function loopBudget(rows, now = Date.now(), { kit, evidence } = {}) {
+export function loopBudget(rows, now = Date.now(), { kit, evidence, cooldownMs = DEFAULTS.cooldownMs } = {}) {
     const day = 24 * 3600_000;
     const runs = rows.filter((r) => r.startedAt && !r.ingested && /^imp_\d/.test(r.id));
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
@@ -893,7 +893,7 @@ export function loopBudget(rows, now = Date.now(), { kit, evidence } = {}) {
         for (let n = gated.length - 1; n >= 0 && streak.length < 2; n--) {
             const r = gated[n];
             // The newest failure that counts must be recent, and older rows are older still.
-            if (!streak.length && now - Date.parse(r.startedAt) >= DEFAULTS.cooldownMs) break;
+            if (!streak.length && now - Date.parse(r.startedAt) >= cooldownMs) break;
             // Only failures go stale: a pass still breaks the streak after its issue closes.
             if (r.gate.pass) break;
             if (evidence && r.issue != null && isStaleFailure(r, evidence(repo, r.issue))) continue;

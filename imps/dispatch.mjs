@@ -36,7 +36,7 @@ const { values: o } = parseArgs({
         wip: { type: 'string', default: String(DEFAULTS.wip) },
         'per-repo': { type: 'string', default: String(DEFAULTS.perRepo) },
         concurrency: { type: 'string', default: String(DEFAULTS.concurrency) },
-        'daily-cap': { type: 'string', default: String(DEFAULTS.dailyCap) },
+        'daily-cap': { type: 'string', default: String(loadHomeConfig().dailyCap ?? DEFAULTS.dailyCap) },
         owner: { type: 'string', default: DEFAULTS.owner },
         'dry-run': { type: 'boolean', default: false },
         only: { type: 'string', default: '' }, // controlled runs: --only vhs#102,skyview#213
@@ -803,7 +803,7 @@ const cooldownEvidence = (repo, issue) => {
     }
     return evidenceCache.get(key);
 };
-const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha, evidence: cooldownEvidence });
+const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha, evidence: cooldownEvidence, cooldownMs: Number(loadHomeConfig().cooldownMs ?? DEFAULTS.cooldownMs) });
 // The other cycle's accepted-but-unstarted picks have no ledger row yet; count them so main and overflow
 // together never exceed the daily cap.
 budget.runsLast24h += pendingPicks(otherLock(), readLedger());
