@@ -16,8 +16,8 @@ test('missing machine identity cannot produce an attribution trailer or merge bo
 
 test('squash body preserves commit headlines and unique co-author trailers', () => {
     const body = mergedByAgentCommitBody([
-        { commit: { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' } },
-        { commit: { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' } },
+        { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' },
+        { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' },
     ], 'build-box');
     assert.match(body, /\* first change/);
     assert.match(body, /\* second change/);
