@@ -72,3 +72,10 @@ Agent: <your agent ID or "anonymous">
 - When switching from one repository to another mid-plan.
 - When a blocking dependency requires waiting on an external event.
 - When the task scope has changed significantly from what was planned.
+
+
+## Merge attribution and sensitive changes
+
+When you merge a PR, include a commit-body trailer identifying the acting agent: `Merged-by-agent: <ChatGPT|Claude|Grok>`. For Imp automation use `Merged-by-agent: imp-<machine>` from the recorded run identity. Preserve the original squash commit list and all distinct `Co-Authored-By:` trailers; do not replace them.
+
+Do not merge sensitive changes without the `owner-approved` label and explicit owner approval. Sensitive scope includes `.github/workflows/**`, `**/auth/**`, `**/security/**`, `SECURITY.md`, lockfiles, and PRs labeled `security` or `auth`. Green CI alone is insufficient.
