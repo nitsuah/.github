@@ -8,12 +8,17 @@ import { join } from 'node:path';
 const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
 const previousHome = process.env.IMPS_HOME;
 process.env.IMPS_HOME = tempHome;
-const { runClaude, resolveMaxTurns, appendRow, claimCommitRecovery, update, COMMIT_RECOVERY_CLAIM_TTL_MS } = await import('./runner.mjs');
+const { runClaude, resolveMaxTurns, appendRow, claimCommitRecovery, update, resolveMachine, COMMIT_RECOVERY_CLAIM_TTL_MS } = await import('./runner.mjs');
 
 after(() => {
     if (previousHome === undefined) delete process.env.IMPS_HOME;
     else process.env.IMPS_HOME = previousHome;
     rmSync(tempHome, { recursive: true, force: true });
+});
+
+test('resolveMachine trims blank and padded environment overrides', () => {
+    assert.equal(resolveMachine({ machine: 'configured' }, { IMPS_MACHINE: '   ' }), 'configured');
+    assert.equal(resolveMachine({ machine: 'configured' }, { IMPS_MACHINE: '  box-01  ' }), 'box-01');
 });
 
 function fakeCli(toolTurns = 0) {
