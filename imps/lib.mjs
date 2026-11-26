@@ -496,6 +496,12 @@ export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty
     return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
 }
 
+/** Format the squash-merge trailer that attributes the merge to an imp machine. */
+export function formatMergedByAgentTrailer(machine) {
+    const name = String(machine ?? '').trim();
+    return name ? `Merged-by-agent: imp-${name}` : 'Merged-by-agent: imp-';
+}
+
 // ── risk class ────────────────────────────────────────────────────────────
 // How much a change can hurt, decided from its paths alone. Merge rules key off
 // it (checks.mjs riskMergeGate), so no model's opinion can lower it.

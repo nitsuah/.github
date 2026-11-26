@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, formatMergedByAgentTrailer } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
@@ -731,7 +731,8 @@ function openPr(id) {
     try { headSha = String(JSON.parse(live.out || '{}').headRefOid || ''); } catch { /* fall through */ }
     const ready = mergeReady({ headSha, pushedHead, checks: finalChecks });
     if (!ready.ok) return console.log(`pre-merge recheck failed: ${ready.reason}, leaving the PR open`);
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead]);
+    const trailer = formatMergedByAgentTrailer(machineName());
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', trailer]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
     console.log('merged (squash); every check was green');
