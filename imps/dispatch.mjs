@@ -15,7 +15,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -44,6 +44,9 @@ const { values: o } = parseArgs({
         rsi: { type: 'boolean', default: false },
     },
 });
+const ownerWasExplicit = process.argv.slice(2).some((arg) => arg === '--owner' || arg.startsWith('--owner='));
+const queueOwners = resolveQueueOwners(HOME_CONFIG, ownerWasExplicit ? o.owner : null, DEFAULTS.owner);
+const excludedRepos = new Set(normalizeRepoExclusions(HOME_CONFIG.excludeRepos));
 let briefAuthors;
 try {
     briefAuthors = parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS);
@@ -740,13 +743,16 @@ if (!overflow) {
     }
 }
 
-const queuedRaw = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
+const queuedRaw = [...new Map(queueOwners.flatMap((owner) => ghJson(['search', 'issues', '--owner', owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
-    .map((i) => ({ repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) }))
+    .map((i) => {
+        const repoOwner = i.repository.owner?.login || i.repository.nameWithOwner?.split('/')[0] || owner;
+        return { owner: repoOwner, repo: i.repository.name, number: i.number, title: i.title, createdAt: i.createdAt, labels: i.labels.map((l) => l.name) };
+    })
+    .filter((i) => !excludedRepos.has(`${i.owner}/${i.repo}`.toLowerCase()))
     .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)))
-    .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`))
-    // Never two cycles in one repo: same-repo imps share a node_modules volume and would race.
-    .filter((i) => !otherBusy().includes(i.repo));
+    .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`)))
+    .map((i) => [`${i.owner.toLowerCase()}/${i.repo.toLowerCase()}#${i.number}`, i]))].values()];
 
 // Preflight target checkouts before pickIssues so a missing repo neither consumes
 // a --max slot nor gets claimed/relabeled. `.git` may be a directory or worktree file.
