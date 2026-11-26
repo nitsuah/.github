@@ -15,7 +15,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -901,6 +901,11 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
     });
     if (blockers.length) {
         log({ event: 'blocked-dep', repo: i.repo, number: i.number, on: blockers.map((b) => `${b.owner ? b.owner + '/' : ''}${b.repo}#${b.number}`) });
+        continue;
+    }
+    // Skip if another machine has a live claim on this issue
+    if (foreignLiveClaim(comments, MACHINE, Date.now())) {
+        log({ event: 'skip-foreign-claim', repo: i.repo, number: i.number });
         continue;
     }
     i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);
