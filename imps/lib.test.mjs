@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
     assert.deepEqual(parseBriefAuthors(undefined), ['nitsuah']);
@@ -746,6 +746,32 @@ test('commit recovery requires exactly one non-empty commit, clean status, and t
     assert.deepEqual(verifyCommitRecovery({ beforeHead: 'old', afterHead: 'new', commitCount: 1, dirty: false, changed: true, trailerValid: false }), {
         pass: false, newCommit: true, exactlyOneCommit: true, clean: true, hasChanges: true, trailerValid: false, reason: 'required commit trailer missing or incorrect',
     });
+});
+
+test('formatMergedByAgentTrailer produces correct trailer for normal machine names', () => {
+    assert.equal(formatMergedByAgentTrailer('build-box-01'), 'Merged-by-agent: imp-build-box-01');
+    assert.equal(formatMergedByAgentTrailer('ci-runner-42'), 'Merged-by-agent: imp-ci-runner-42');
+    assert.equal(formatMergedByAgentTrailer('my-machine'), 'Merged-by-agent: imp-my-machine');
+});
+
+test('mergedByAgentCommitBody preserves commit headlines and unique coauthor trailers', () => {
+    const body = mergedByAgentCommitBody([
+        { commit: { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' } },
+        { commit: { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' } },
+    ], 'build-box');
+    assert.match(body, /\* first change/);
+    assert.match(body, /\* second change/);
+    assert.equal((body.match(/Co-Authored-By:/g) || []).length, 2);
+    assert.match(body, /Merged-by-agent: imp-build-box$/);
+});
+
+test('formatMergedByAgentTrailer handles whitespace and empty input safely', () => {
+    assert.equal(formatMergedByAgentTrailer('  build-box  '), 'Merged-by-agent: imp-build-box');
+    assert.equal(formatMergedByAgentTrailer('\tci-runner\n'), 'Merged-by-agent: imp-ci-runner');
+    assert.equal(formatMergedByAgentTrailer(''), 'Merged-by-agent: imp-');
+    assert.equal(formatMergedByAgentTrailer('   '), 'Merged-by-agent: imp-');
+    assert.equal(formatMergedByAgentTrailer(null), 'Merged-by-agent: imp-');
+    assert.equal(formatMergedByAgentTrailer(undefined), 'Merged-by-agent: imp-');
 });
 
 test('commit-recovery failure blocks stale requeue until a newer claim exists', () => {

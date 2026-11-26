@@ -496,6 +496,27 @@ export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty
     return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
 }
 
+/** Format the squash-merge trailer that attributes the merge to an imp machine. */
+export function formatMergedByAgentTrailer(machine) {
+    const name = String(machine ?? '').trim();
+    return name ? `Merged-by-agent: imp-${name}` : 'Merged-by-agent: imp-';
+}
+
+/** Build a squash body that retains the PR commit list and unique co-author trailers. */
+export function mergedByAgentCommitBody(commits, machine) {
+    const rows = Array.isArray(commits) ? commits : [];
+    const headlines = rows.map((c) => String(c?.commit?.messageHeadline || '').trim()).filter(Boolean);
+    const coAuthors = [...new Set(rows.flatMap((c) => String(c?.commit?.messageBody || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => /^Co-Authored-By:/i.test(line))))];
+    return [
+        headlines.map((headline) => `* ${headline}`).join('\n'),
+        coAuthors.join('\n'),
+        formatMergedByAgentTrailer(machine),
+    ].filter(Boolean).join('\n\n');
+}
+
 // ── risk class ────────────────────────────────────────────────────────────
 // How much a change can hurt, decided from its paths alone. Merge rules key off
 // it (checks.mjs riskMergeGate), so no model's opinion can lower it.

@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, mergedByAgentCommitBody } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
@@ -731,7 +731,13 @@ function openPr(id) {
     try { headSha = String(JSON.parse(live.out || '{}').headRefOid || ''); } catch { /* fall through */ }
     const ready = mergeReady({ headSha, pushedHead, checks: finalChecks });
     if (!ready.ok) return console.log(`pre-merge recheck failed: ${ready.reason}, leaving the PR open`);
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead]);
+    const commitInfo = sh('gh', ['pr', 'view', pr.out, '-R', slug, '--json', 'commits']);
+    if (commitInfo.code) return console.log(`could not collect squash attribution: ${commitInfo.err}, leaving the PR open`);
+    let commits = [];
+    try { commits = JSON.parse(commitInfo.out || '{}').commits || []; }
+    catch { return console.log('could not parse PR commits for squash attribution, leaving the PR open'); }
+    const mergeBody = mergedByAgentCommitBody(commits, machineName());
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
     console.log('merged (squash); every check was green');
