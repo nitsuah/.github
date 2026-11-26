@@ -15,7 +15,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -30,13 +30,14 @@ function loadHomeConfig() {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.IMPS_HOME || join(homedir(), '.imps');
+const HOME_CONFIG = loadHomeConfig();
 const { values: o } = parseArgs({
     options: {
         max: { type: 'string', default: String(DEFAULTS.max) },
         wip: { type: 'string', default: String(DEFAULTS.wip) },
         'per-repo': { type: 'string', default: String(DEFAULTS.perRepo) },
         concurrency: { type: 'string', default: String(DEFAULTS.concurrency) },
-        'daily-cap': { type: 'string', default: String(loadHomeConfig().dailyCap ?? DEFAULTS.dailyCap) },
+        'daily-cap': { type: 'string', default: String(configNumber(HOME_CONFIG, 'dailyCap', DEFAULTS.dailyCap)) },
         owner: { type: 'string', default: DEFAULTS.owner },
         'dry-run': { type: 'boolean', default: false },
         only: { type: 'string', default: '' }, // controlled runs: --only vhs#102,skyview#213
@@ -803,7 +804,7 @@ const cooldownEvidence = (repo, issue) => {
     }
     return evidenceCache.get(key);
 };
-const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha, evidence: cooldownEvidence, cooldownMs: Number(loadHomeConfig().cooldownMs ?? DEFAULTS.cooldownMs) });
+const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha, evidence: cooldownEvidence, cooldownMs: configNumber(HOME_CONFIG, 'cooldownMs', DEFAULTS.cooldownMs) });
 // The other cycle's accepted-but-unstarted picks have no ledger row yet; count them so main and overflow
 // together never exceed the daily cap.
 budget.runsLast24h += pendingPicks(otherLock(), readLedger());

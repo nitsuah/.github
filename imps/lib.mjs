@@ -881,6 +881,13 @@ export function staleImpLabels(labels = []) {
 // whose issue has moved on since (see isStaleFailure) leaves that streak.
 // `evidence(repo, issue)` is asked only about failures that could still cause a
 // cooldown; without it, or when it returns null, every failure counts.
+// A non-negative number from ~/.imps/config.json, else the fallback (bad or missing values never reach the budget as NaN).
+export function configNumber(cfg, key, fallback) {
+    const v = cfg?.[key];
+    const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 export function loopBudget(rows, now = Date.now(), { kit, evidence, cooldownMs = DEFAULTS.cooldownMs } = {}) {
     const day = 24 * 3600_000;
     const runs = rows.filter((r) => r.startedAt && !r.ingested && /^imp_\d/.test(r.id));
