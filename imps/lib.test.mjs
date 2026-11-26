@@ -50,6 +50,21 @@ test('fixRoundProgress requires thread progress independently of CI feedback', (
     assert.deepEqual(unanswered.unanswered, ['thread-1', 'ci:test']);
 });
 
+test('resolveQueueOwners defaults to nitsuah and honors an explicit --owner', () => {
+    assert.deepEqual(resolveQueueOwners({}, null), ['nitsuah']);
+    assert.deepEqual(resolveQueueOwners({ owners: ['nitsuah', 'Nitsuah-Labs'] }, null), ['nitsuah', 'Nitsuah-Labs']);
+    assert.deepEqual(resolveQueueOwners({ owners: ['Nitsuah-Labs'] }, 'nitsuah'), ['nitsuah']);
+});
+
+test('resolveQueueOwners removes duplicate owners case-insensitively', () => {
+    assert.deepEqual(resolveQueueOwners({ owners: ['nitsuah', 'Nitsuah', 'Nitsuah-Labs', 'nitsuah-labs'] }), ['nitsuah', 'Nitsuah-Labs']);
+});
+
+test('normalizeRepoExclusions is case-insensitive and cannot remove deployer exclusion', () => {
+    assert.deepEqual(normalizeRepoExclusions(['Nitsuah-Labs/Other', 'nitsuah-labs/other', 'invalid']), ['nitsuah-labs/deployer', 'nitsuah-labs/other']);
+    assert.deepEqual(normalizeRepoExclusions([]), ['nitsuah-labs/deployer']);
+});
+
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
     assert.deepEqual(parseBriefAuthors(undefined), ['nitsuah']);
     assert.deepEqual(parseBriefAuthors(' Maintainer, nitsuah,MAINTAINER '), ['maintainer', 'nitsuah']);
