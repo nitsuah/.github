@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress, feedbackCutoff, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, resolveQueueOwners, normalizeRepoExclusions, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress, feedbackCutoff, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
 
 test('failed fix rounds retain the previous issue-comment cutoff', () => {
     const previousSince = '2026-11-26T12:00:00.000Z';
@@ -48,6 +48,21 @@ test('fixRoundProgress requires thread progress independently of CI feedback', (
         { id: 'thread-1', kind: 'thread', action: null, reply: 'Not addressed', answered: false },
     ]);
     assert.deepEqual(unanswered.unanswered, ['thread-1', 'ci:test']);
+});
+
+test('resolveQueueOwners defaults to nitsuah and honors an explicit --owner', () => {
+    assert.deepEqual(resolveQueueOwners({}, null), ['nitsuah']);
+    assert.deepEqual(resolveQueueOwners({ owners: ['nitsuah', 'Nitsuah-Labs'] }, null), ['nitsuah', 'Nitsuah-Labs']);
+    assert.deepEqual(resolveQueueOwners({ owners: ['Nitsuah-Labs'] }, 'nitsuah'), ['nitsuah']);
+});
+
+test('resolveQueueOwners removes duplicate owners case-insensitively', () => {
+    assert.deepEqual(resolveQueueOwners({ owners: ['nitsuah', 'Nitsuah', 'Nitsuah-Labs', 'nitsuah-labs'] }), ['nitsuah', 'Nitsuah-Labs']);
+});
+
+test('normalizeRepoExclusions is case-insensitive and cannot remove deployer exclusion', () => {
+    assert.deepEqual(normalizeRepoExclusions(['Nitsuah-Labs/Other', 'nitsuah-labs/other', 'invalid']), ['nitsuah-labs/deployer', 'nitsuah-labs/other']);
+    assert.deepEqual(normalizeRepoExclusions([]), ['nitsuah-labs/deployer']);
 });
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
