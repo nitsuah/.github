@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, formatMergedByAgentTrailer } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, mergedByAgentCommitBody } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
@@ -736,17 +736,7 @@ function openPr(id) {
     let commits = [];
     try { commits = JSON.parse(commitInfo.out || '{}').commits || []; }
     catch { return console.log('could not parse PR commits for squash attribution, leaving the PR open'); }
-    const commitHeadlines = commits.map((c) => String(c.commit?.messageHeadline || '').trim()).filter(Boolean);
-    const coAuthors = [...new Set(commits.flatMap((c) => String(c.commit?.messageBody || '')
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^Co-Authored-By:/i.test(line))))];
-    const trailer = formatMergedByAgentTrailer(machineName());
-    const mergeBody = [
-        commitHeadlines.map((headline) => `* ${headline}`).join('\n'),
-        coAuthors.join('\n'),
-        trailer,
-    ].filter(Boolean).join('\n\n');
+    const mergeBody = mergedByAgentCommitBody(commits, machineName());
     const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
