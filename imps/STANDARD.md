@@ -133,15 +133,15 @@ A brief's `risk:` front matter raises the class and never lowers it; an unknown 
 | Record | the class is stored as `risk` on the run row (a later gate never lowers it) and the PR is labelled `risk:<class>`; demonguard and fix rounds re-apply it | `imp.mjs gate` / `pr`, `fix.mjs`, `demonguard.mjs` |
 | Named high paths | the gate fails a high-risk path unless `allow:` has that exact path, or a prefix that is itself sensitive (`src/auth/`, not `src/`). Commits only a human pushed are exempt, as for scope | `gate` |
 | Auto-merge | only `risk:low`, on top of the review, green-check and earned-trust rules. A missing class fails closed | `mayAutoMerge`, `assessPr` |
-| Merging `medium` | green CI, no open thread and a full-scope bugbot `approve` on the head commit (`comment` is not enough) | `bugbot.mjs merge-check` |
-| Merging `high` | never automatic. Labelled `imp:needs-human` unless CodeRabbit approved and bugbot approved the head; even then `merge-check` also needs `risk-ack`, last added by the owner | `imp.mjs pr`, `demonguard.mjs`, `merge-check` |
-| Acknowledgement | a fix-round push removes `risk-ack` | `fix.mjs` |
+| Merging `medium` | green CI, no open thread and a full-scope bugbot `approve` on the head commit. `comment` is not enough, including a verdict cleared by answering its threads: that PR needs a new commit and review, or a person | `bugbot.mjs merge-check` |
+| Merging `high` | never automatic. Labelled `imp:needs-human` when it opens, and by demonguard while CodeRabbit and bugbot have not both approved the head. Only a person removes the label, since other failures set it too. Even with both approvals `merge-check` also needs `risk-ack`, last added by the owner | `imp.mjs pr`, `demonguard.mjs`, `merge-check` |
+| Acknowledgement | a fix round removes `risk-ack` before it pushes, and pushes nothing if that fails | `fix.mjs` |
 | CI: CHANGELOG | a PR that changes a non-docs file (tests included) without changing `CHANGELOG.md` or `docs/CHANGELOG.md` fails, unless labelled `no-changelog` | `risk-guard.yml` → `ci-guard.mjs` |
 | CI: high risk | a PR that is `risk:high`, by label or by its paths, fails without an owner's `risk-ack` | `risk-guard.yml` → `ci-guard.mjs` |
 
 **Adopting the CI guard:** copy `repo-health/templates/risk-guard.yml` to the repo's `.github/workflows/` and pin it to a `nitsuah/.github` main SHA, as for repo-health; the guard code is checked out at that same SHA. It reads the PR through the API and never checks out its code. The check blocks merges only where branch protection requires it, and a PR that edits the caller file runs the edited version (such a PR is `risk:high`). Imp diffs may not touch the CHANGELOG, so an imp PR that changes non-docs files waits for a person to add the line or `no-changelog`; the fix round ignores this check.
 
-**Every merge helper runs `node imps/bugbot.mjs merge-check <owner/repo#n>` first.** It exits 0 only when the review gate (§ Bugbot) and the table above both pass. It prints the head SHA: merge with `--match-head-commit <sha>`, and never with `--auto`. An `imp:needs-human` PR is skipped by the fix sweep and demonguard, so a high-risk one is finished by hand.
+**Every merge by a person or session runs `node imps/bugbot.mjs merge-check <owner/repo#n>` first.** The two automatic paths (`imp.mjs pr`, demonguard) merge only `risk:low` imp PRs, under their own rules above. It exits 0 only when the review gate (§ Bugbot) and the table above both pass. It prints the head SHA: merge in the same command, with `--match-head-commit <sha>`, and never with `--auto`. The head binding catches a new commit, not a label or review changed in the seconds between; only branch protection can close that gap. An `imp:needs-human` PR is skipped by the fix sweep and demonguard, so a high-risk one is finished by hand.
 
 ## Guardrails
 

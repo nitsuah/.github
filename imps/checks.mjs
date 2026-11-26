@@ -202,6 +202,17 @@ export function fetchAckEvents(slug, number, { run }) {
     });
 }
 
+/**
+ * I/O: take `risk-ack` off before a new commit is published. Throws when the removal fails, so the push
+ * never happens: an acknowledgement given to the old commit must not cover the new one.
+ */
+export function dropStaleAck(slug, number, labels = [], { run }) {
+    if (!labelNames(labels).includes(RISK_ACK_LABEL)) return false;
+    const r = run(['pr', 'edit', String(number), '-R', slug, '--remove-label', RISK_ACK_LABEL]);
+    if (r.code) throw new Error(`could not remove ${RISK_ACK_LABEL}, so nothing is pushed: ${r.err}`);
+    return true;
+}
+
 /** Bugbot said `approve`, on this exact head, having seen the whole diff. `comment` is not approval. */
 export const bugbotApproved = (bugbot, headSha) => Boolean(headSha && bugbot && bugbot.sha === headSha && bugbot.verdict === 'approve' && bugbot.scope !== 'partial');
 

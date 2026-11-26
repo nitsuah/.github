@@ -200,10 +200,12 @@ export function ensureRiskLabel(slug, level) {
 
 /** Put exactly one `risk:*` label on a PR. */
 export function applyRiskLabel(url, slug, level) {
-    const add = ensureRiskLabel(slug, level);
+    // Add before removing: if the add fails, the old label stays rather than leaving none.
+    const added = sh('gh', ['pr', 'edit', url, '--add-label', ensureRiskLabel(slug, level)]);
+    if (added.code) return added;
     for (const other of Object.keys(RISK_COLORS).filter((l) => l !== level))
         sh('gh', ['pr', 'edit', url, '--remove-label', `risk:${other}`]);
-    return sh('gh', ['pr', 'edit', url, '--add-label', add]);
+    return added;
 }
 
 export const sh = (bin, args, opts = {}) => {

@@ -41,7 +41,7 @@ Don't wait on the user (they've delegated this). Merge when all of these hold: t
 2. In the run's worktree: fast-forward to the PR branch, merge `origin/main` in, and resolve CHANGELOG/TASKS conflicts by keeping both sides.
 3. Tick or strike the issue in the repo's TASKS.md (`~~#n …~~ (fixed in #PR)` inside shared bullets), and commit as `Austin J. Hardy <88273576+nitsuah@users.noreply.github.com>`.
 4. Push as separate commands: `git remote set-url --push origin "$(git remote get-url origin)"`, `git push origin HEAD`, `git remote set-url --push origin no_push`. **Confirm the push landed** (`git log origin/<branch> -1`) before merging; a failed push once merged two PRs without their TASKS strike.
-5. Check `git diff origin/main...HEAD --stat` includes TASKS and CHANGELOG, then wait for checks, run `merge-check` again and `gh pr merge --squash --delete-branch --match-head-commit <head it printed>`. Never `--auto`: it ignores the risk rules.
+5. Check `git diff origin/main...HEAD --stat` includes TASKS and CHANGELOG, then wait for checks. The push made a new head, and approvals do not carry over to it: run `node $K/bugbot.mjs review <owner/repo#n> --force` on it, and for `risk:high` also wait for CodeRabbit to approve it (`@coderabbitai review`, then `@coderabbitai approve`). Then run `merge-check` again, chained with the merge in one command so nothing happens between them: `node $K/bugbot.mjs merge-check <owner/repo#n> && gh pr merge <n> -R <owner/repo> --squash --delete-branch --match-head-commit <head SHA>`. Never `--auto`: it ignores the risk rules.
 
 ## `/imp status`
 
