@@ -743,7 +743,7 @@ if (!overflow) {
     }
 }
 
-const queuedRaw = [...new Map(queueOwners.flatMap((owner) => ghJson(['search', 'issues', '--owner', owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
+const queuedRaw = Array.from(new Map(queueOwners.flatMap((owner) => ghJson(['search', 'issues', '--owner', owner, '--state', 'open', '--label', 'imp:ready', '--limit', '100',
     '--json', 'repository,number,labels,createdAt,title'])
     .map((i) => {
         const repoOwner = i.repository.owner?.login || i.repository.nameWithOwner?.split('/')[0] || owner;
@@ -752,7 +752,7 @@ const queuedRaw = [...new Map(queueOwners.flatMap((owner) => ghJson(['search', '
     .filter((i) => !excludedRepos.has(`${i.owner}/${i.repo}`.toLowerCase()))
     .filter((i) => !i.labels.some((l) => ['imp:working', 'imp:pr'].includes(l)))
     .filter((i) => !o.only || o.only.split(',').map((s) => s.trim()).includes(`${i.repo}#${i.number}`)))
-    .map((i) => [`${i.owner.toLowerCase()}/${i.repo.toLowerCase()}#${i.number}`, i]))].values()];
+    .map((i) => [`${i.owner.toLowerCase()}/${i.repo.toLowerCase()}#${i.number}`, i])).values());
 
 // Preflight target checkouts before pickIssues so a missing repo neither consumes
 // a --max slot nor gets claimed/relabeled. `.git` may be a directory or worktree file.
