@@ -26,7 +26,8 @@ jobs:
         with:
           repository: nitsuah/.github
           # The guard comes from the same commit as this workflow file, so a caller pinned to a SHA
-          # runs exactly the code that SHA contains.
+          # runs exactly the code that SHA contains. It must be job.workflow_sha: in a called workflow,
+          # github.workflow_sha is the caller's commit.
           ref: ${{ job.workflow_sha }}
           path: .risk-guard-kit
           persist-credentials: false

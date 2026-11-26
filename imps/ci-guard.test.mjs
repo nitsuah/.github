@@ -19,6 +19,7 @@ test('a non-docs change needs a CHANGELOG line in either place, or the no-change
         assert.deepEqual(check({ paths: [path], labels: ['no-changelog'] }), []);
     }
     assert.match(check({ paths: ['src/app.ts', 'packages/x/CHANGELOG.md'] })[0], /CHANGELOG/, 'only the repo CHANGELOG counts');
+    assert.match(check({ paths: ['src/app.ts', 'CHANGELOG'] })[0], /CHANGELOG/, 'the .md file, not any file of that name');
 });
 
 test('a PR labelled risk:high fails without an owner risk-ack', () => {
