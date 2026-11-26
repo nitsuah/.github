@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
-    parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
+    parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
@@ -860,6 +860,63 @@ test('parseClaim / claimExpired', () => {
     assert.equal(claimExpired(parsed, now), true);  // 91 min elapsed
     assert.equal(claimExpired({ ...parsed, heartbeatAt: '2026-10-27T11:30:00Z' }, now), false); // 30 min
     assert.equal(claimExpired(null, now), false);
+});
+
+test('foreignLiveClaim', () => {
+    const now = new Date('2026-10-27T12:00:00Z').getTime();
+    const machine = 'THIS-MACHINE';
+
+    // 10-minute bare claim -> true (foreign and live)
+    const bareFresh = [
+        { body: '<!-- imp-claim -->\nClaimed by `OTHER-MACHINE` as `imp_1` at 2026-10-27T11:50:00.000Z', createdAt: '2026-10-27T11:50:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(bareFresh, machine, now), true);
+
+    // >90-minute bare claim -> false (stale)
+    const bareStale = [
+        { body: '<!-- imp-claim -->\nClaimed by `OTHER-MACHINE` as `imp_1` at 2026-10-27T10:00:00.000Z', createdAt: '2026-10-27T10:00:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(bareStale, machine, now), false);
+
+    // Own JSON claim -> false (not foreign)
+    const ownJson = [
+        { body: '<!-- imp-claim -->\n<!-- {"machine":"THIS-MACHINE","startedAt":"2026-10-27T11:00:00Z","heartbeatAt":"2026-10-27T11:30:00Z"} -->', createdAt: '2026-10-27T11:00:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(ownJson, machine, now), false);
+
+    // No claim -> false
+    assert.equal(foreignLiveClaim([], machine, now), false);
+
+    // Newer unrelated comment after older claim -> still uses latest claim comment
+    const mixed = [
+        { body: '<!-- imp-claim -->\nClaimed by `OLD-MACHINE` as `imp_1` at 2026-10-27T10:00:00.000Z', createdAt: '2026-10-27T10:00:00.000Z' },
+        { body: 'Just a comment', createdAt: '2026-10-27T11:30:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(mixed, machine, now), false); // latest claim is 10:00, stale
+
+    // Fresh foreign JSON claim -> true
+    const foreignJsonFresh = [
+        { body: '<!-- imp-claim -->\n<!-- {"machine":"OTHER-MACHINE","startedAt":"2026-10-27T11:40:00Z","heartbeatAt":"2026-10-27T11:50:00Z"} -->', createdAt: '2026-10-27T11:40:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(foreignJsonFresh, machine, now), true);
+
+    // Stale foreign JSON claim -> false
+    const foreignJsonStale = [
+        { body: '<!-- imp-claim -->\n<!-- {"machine":"OTHER-MACHINE","startedAt":"2026-10-27T10:00:00Z","heartbeatAt":"2026-10-27T10:10:00Z"} -->', createdAt: '2026-10-27T10:00:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(foreignJsonStale, machine, now), false);
+
+    // Malformed JSON (fail-closed as bare) fresh -> true
+    const malformedFresh = [
+        { body: '<!-- imp-claim -->\n<!-- not-valid-json -->', createdAt: '2026-10-27T11:50:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(malformedFresh, machine, now), true);
+
+    // Malformed JSON stale -> false
+    const malformedStale = [
+        { body: '<!-- imp-claim -->\n<!-- not-valid-json -->', createdAt: '2026-10-27T10:00:00.000Z' },
+    ];
+    assert.equal(foreignLiveClaim(malformedStale, machine, now), false);
 });
 
 test('claimBody format and IMP_MARK.test', () => {

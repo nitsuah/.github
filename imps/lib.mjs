@@ -1188,6 +1188,81 @@ export function isPidAlive(pid) {
 // lock already serialises this machine). Returns a reason string or null.
 // ledgerRow can be the full row to check endedAt; if true, treat as row without endedAt.
 // If the claim has a PR (claim.pr), do not reclaim — the PR is the delivery artifact.
+// Extract claim timestamp from comment body (handles JSON, legacy prose, and malformed JSON)
+function claimTimeFromBody(body) {
+    const lines = body.split('\n');
+    if (lines.length < 2) return null;
+
+    // Try JSON from line 1
+    const line1 = lines[1].trim();
+    if (line1.startsWith('<!-- ') && line1.endsWith(' -->')) {
+        try {
+            const parsed = JSON.parse(line1.slice(5, -4));
+            return Date.parse(parsed.heartbeatAt || parsed.startedAt || '');
+        } catch {
+            // Malformed JSON - fall through to prose
+        }
+    }
+
+    // Try prose from line 2: "Imp claim: **MACHINE**, started TIME, last heartbeat TIME"
+    if (lines.length >= 3) {
+        const line2 = lines[2];
+        const match = line2.match(/last heartbeat\s+([^,]+)/);
+        if (match) return Date.parse(match[1].trim());
+        const match2 = line2.match(/started\s+([^,]+)/);
+        if (match2) return Date.parse(match2[1].trim());
+    }
+
+    return null;
+}
+
+/**
+ * Check if the latest claim on an issue is from another machine and still fresh.
+ * - Bare session claim (no JSON or malformed JSON): foreign and live for < CLAIM_HEARTBEAT_TTL_MS (90 min)
+ * - Older bare claim: stale (false)
+ * - Valid JSON claim from this machine: not foreign (false)
+ * - Valid JSON claim from another machine: foreign and live if heartbeat < TTL
+ * - No claim: false
+ * - Malformed JSON: fail-closed as foreign while fresh
+ */
+export function foreignLiveClaim(comments, machine, now = Date.now()) {
+    const claim = latestClaim(comments);
+    if (!claim) return false;
+
+    const body = claim.body || '';
+    const lines = body.split('\n');
+    if (lines.length < 2) return false;
+
+    const line1 = lines[1].trim();
+
+    // Check if it's a JSON claim
+    if (line1.startsWith('<!-- ') && line1.endsWith(' -->')) {
+        try {
+            const parsed = JSON.parse(line1.slice(5, -4));
+            // Valid JSON claim
+            if (parsed.machine === machine) {
+                return false; // Our own claim
+            }
+            // Foreign JSON claim - check if fresh
+            const heartbeatAt = Date.parse(parsed.heartbeatAt || '');
+            if (Number.isFinite(heartbeatAt) && now - heartbeatAt < CLAIM_HEARTBEAT_TTL_MS) {
+                return true;
+            }
+            return false;
+        } catch {
+            // Malformed JSON - treat as bare claim, fail-closed as foreign while fresh
+        }
+    }
+
+    // Bare claim (legacy prose or malformed JSON)
+    // Get timestamp from body or comment createdAt
+    const at = claimTimeFromBody(body) || Date.parse(claim.createdAt || '');
+    if (!Number.isFinite(at)) return false;
+
+    // Bare claim is foreign and live if fresh
+    return now - at < CLAIM_HEARTBEAT_TTL_MS;
+}
+
 export function staleClaim({ labels = [], comments = [], ledgerHasRow = false, ledgerRow = null, machine = '', ttl = CLAIM_HEARTBEAT_TTL_MS, now = Date.now() } = {}) {
     if (!labels.includes('imp:working')) return null;
     // A ledger row only exempts the claim if the run is still alive (no endedAt).
