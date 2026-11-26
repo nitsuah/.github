@@ -1,0 +1,5 @@
+- Tests run through the compose `test` profile: `docker compose -f config/docker-compose.yml --profile test run --rm test`; hand-run pytest outside it exited 4 (avatar#59, avatar#60).
+- Doc-only briefs (CONTRIBUTING, TASKS, CHANGELOG) have grep/`git diff --check` as their test; never install packages or run pytest for them (avatar#59).
+- Docs live in `docs/` (`docs/TASKS.md`, `docs/CHANGELOG.md`), not the repo root.
+- Ruff and black settings live in `pyproject.toml` (line length 120, quotes preserved, ruff `S` bandit rules on); match that style and never edit it to pass lint.
+- Code is in `avatar/`, tests in `tests/test_utils.py`; do not edit `notebooks/*.ipynb` for a utils change (avatar#60 burned 61 turns).
