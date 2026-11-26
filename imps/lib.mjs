@@ -1533,7 +1533,7 @@ export function fixRoundProgress(items = [], decisions = []) {
     const threads = items.filter((item) => item.kind === 'thread');
     const addressedThreads = threads.filter((item) => {
         const decision = byId.get(item.id);
-        return decision?.action === 'fix' || (['skip', 'pushback'].includes(decision?.action) && decision.reply.trim().length > 0);
+        return decision?.action === 'fix' || (['skip', 'pushback'].includes(decision?.action) && decision.reply?.trim().length > 0);
     });
     const unanswered = items.filter((item) => !byId.get(item.id)?.answered);
     return { hasThreads: threads.length > 0, addressedThreads: addressedThreads.length, unanswered: unanswered.map((item) => item.id) };
