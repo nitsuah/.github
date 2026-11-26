@@ -1081,6 +1081,30 @@ export function pickIssues({
 export const BRIEF_MARK = '<!-- imp-brief -->';
 
 // Parse the trusted author allowlist once, and fail closed on an explicitly empty value.
+/** Resolve owner-aware queue searches; an explicit --owner keeps the legacy single-owner behavior. */
+export function resolveQueueOwners(config = {}, cliOwner = null, defaultOwner = 'nitsuah') {
+    const explicit = String(cliOwner ?? '').trim();
+    const configured = Array.isArray(config?.owners) ? config.owners : [];
+    const source = explicit ? [explicit] : configured.length ? configured : [defaultOwner];
+    const seen = new Set();
+    return source.map((owner) => String(owner ?? '').trim()).filter((owner) => {
+        const key = owner.toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+/** Normalize configured repo exclusions while retaining the permanent deployer exclusion. */
+export function normalizeRepoExclusions(configured = []) {
+    const exclusions = new Set(['nitsuah-labs/deployer']);
+    for (const value of Array.isArray(configured) ? configured : []) {
+        const slug = String(value ?? '').trim().replace(/\\/g, '/').toLowerCase();
+        if (/^[^/]+\/[^/]+$/.test(slug)) exclusions.add(slug);
+    }
+    return [...exclusions].sort();
+}
+
 export function parseBriefAuthors(value) {
     const names = value == null ? ['nitsuah'] : String(value).split(',').map((name) => name.trim()).filter(Boolean);
     const normalized = [...new Set(names.map((name) => name.toLowerCase()))];
