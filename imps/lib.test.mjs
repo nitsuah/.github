@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress, feedbackCutoff, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
+
+test('failed fix rounds retain the previous issue-comment cutoff', () => {
+    const previousSince = '2026-11-26T12:00:00.000Z';
+    const failedAt = '2026-11-26T12:05:00.000Z';
+    assert.equal(feedbackCutoff({ previousSince, failed: true, completedAt: failedAt }), previousSince);
+    assert.equal(feedbackCutoff({ previousSince, failed: false, completedAt: failedAt }), failedAt);
+});
 
 test('fixRoundProgress requires thread progress independently of CI feedback', () => {
     const items = [
