@@ -731,8 +731,23 @@ function openPr(id) {
     try { headSha = String(JSON.parse(live.out || '{}').headRefOid || ''); } catch { /* fall through */ }
     const ready = mergeReady({ headSha, pushedHead, checks: finalChecks });
     if (!ready.ok) return console.log(`pre-merge recheck failed: ${ready.reason}, leaving the PR open`);
+    const commitInfo = sh('gh', ['pr', 'view', pr.out, '-R', slug, '--json', 'commits']);
+    if (commitInfo.code) return console.log(`could not collect squash attribution: ${commitInfo.err}, leaving the PR open`);
+    let commits = [];
+    try { commits = JSON.parse(commitInfo.out || '{}').commits || []; }
+    catch { return console.log('could not parse PR commits for squash attribution, leaving the PR open'); }
+    const commitHeadlines = commits.map((c) => String(c.commit?.messageHeadline || '').trim()).filter(Boolean);
+    const coAuthors = [...new Set(commits.flatMap((c) => String(c.commit?.messageBody || '')
+        .split(/\\r?\\n/)
+        .map((line) => line.trim())
+        .filter((line) => /^Co-Authored-By:/i.test(line))))];
     const trailer = formatMergedByAgentTrailer(machineName());
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', trailer]);
+    const mergeBody = [
+        commitHeadlines.map((headline) => `* ${headline}`).join('\\n'),
+        coAuthors.join('\\n'),
+        trailer,
+    ].filter(Boolean).join('\\n\\n');
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
     console.log('merged (squash); every check was green');
