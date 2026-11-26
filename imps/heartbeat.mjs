@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { HOME, LEDGER, rows, kitSha, machineName } from './runner.mjs';
 import { resolveMachine } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
-import { loopBudget, activeCooldowns } from './lib.mjs';
+import { loopBudget, activeCooldowns, configNumber } from './lib.mjs';
 
 const dry = process.argv.includes('--dry-run');
 const config = (() => {
@@ -52,9 +52,11 @@ const today = new Date().toISOString().slice(0, 10);
 const runsToday = rows().filter((r) => (r.startedAt || '').startsWith(today)).length;
 
 // Local cooldowns from this machine's ledger and current kit SHA
-const budget = loopBudget(rows(), Date.now(), { kit: kitSha() });
+// Same window the dispatcher uses: config.json `cooldownMs` overrides the default (#361).
+const cooldownMs = configNumber(config, 'cooldownMs', DEFAULTS.cooldownMs);
+const budget = loopBudget(rows(), Date.now(), { kit: kitSha(), cooldownMs });
 const SLUG = /^[A-Za-z0-9._-]+$/;
-const cooldowns = activeCooldowns(budget).filter((c) => SLUG.test(c.repo) && c.repo !== '.' && c.repo !== '..');
+const cooldowns = activeCooldowns(budget, Date.now(), cooldownMs).filter((c) => SLUG.test(c.repo) && c.repo !== '.' && c.repo !== '..');
 const cooldownLines = cooldowns.length
     ? cooldowns.map((c) => `| ${c.repo} | \`${c.cooldownUntil}\` |`).join('\n')
     : '| none | |';

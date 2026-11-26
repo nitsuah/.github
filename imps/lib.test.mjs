@@ -1818,6 +1818,20 @@ test('activeCooldowns: two active failures returns sorted repo + ISO expiry', ()
     assert.match(cd[1].cooldownUntil, /^2026-10-30T10:00:00/);
 });
 
+test('activeCooldowns: honors a configured cooldownMs window', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    const fail = (id, hoursAgo) => ({ id, repo: 'fire', issue: 1, kitSha: 'kit1', startedAt: new Date(now - hoursAgo * 3600_000).toISOString(), gate: { pass: false, reasons: ['lint exit 1'] } });
+    const rows = [fail('imp_1', 3), fail('imp_2', 2)];
+    const cooldownMs = 6 * 3600_000;
+    const budget = loopBudget(rows, now, { kit: 'kit1', cooldownMs });
+    // latest failure 2h ago + 6h window -> 4h from now, not 22h
+    const cd = activeCooldowns(budget, now, cooldownMs);
+    assert.equal(cd.length, 1);
+    assert.match(cd[0].cooldownUntil, /^2026-10-29T16:00:00/);
+    // a 6h window that already passed reports nothing
+    assert.deepEqual(activeCooldowns(loopBudget([fail('imp_3', 8), fail('imp_4', 7)], now, { kit: 'kit1', cooldownMs }), now, cooldownMs), []);
+});
+
 test('activeCooldowns: expired cooldown returns empty', () => {
     const now = Date.parse('2026-10-29T12:00:00Z');
     // Failure 30h ago -> expired (cooldownMs = 24h)
