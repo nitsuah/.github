@@ -1828,8 +1828,8 @@ test('activeCooldowns: honors a configured cooldownMs window', () => {
     const cd = activeCooldowns(budget, now, cooldownMs);
     assert.equal(cd.length, 1);
     assert.match(cd[0].cooldownUntil, /^2026-10-29T16:00:00/);
-    // a 6h window that already passed reports nothing
-    assert.deepEqual(activeCooldowns(loopBudget([fail('imp_3', 8), fail('imp_4', 7)], now, { kit: 'kit1', cooldownMs }), now, cooldownMs), []);
+    // Expiry is evaluated against the already-created active budget.
+    assert.deepEqual(activeCooldowns(budget, now + 7 * 3600_000, cooldownMs), []);
 });
 
 test('activeCooldowns: expired cooldown returns empty', () => {
