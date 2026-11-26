@@ -934,14 +934,16 @@ export function coveringMergeAt(prs = [], issue, slug = '') {
 /**
  * Build a sorted list of active cooldowns with their expiry timestamps.
  * Uses the `cooldown` object from loopBudget (repo -> latest failed-gate startedAt).
+ * `cooldownMs` must be the same window the budget was computed with (config.json
+ * `cooldownMs` overrides the default), or the reported expiry is wrong.
  * Returns [{ repo, cooldownUntil }] sorted by cooldownUntil ascending.
  * Empty array when no active cooldowns.
  */
-export function activeCooldowns(loopBudgetResult, now = Date.now()) {
+export function activeCooldowns(loopBudgetResult, now = Date.now(), cooldownMs = DEFAULTS.cooldownMs) {
     const { cooldown } = loopBudgetResult;
     const out = [];
     for (const [repo, failedAt] of Object.entries(cooldown)) {
-        const until = Date.parse(failedAt) + DEFAULTS.cooldownMs;
+        const until = Date.parse(failedAt) + cooldownMs;
         if (until > now) out.push({ repo, cooldownUntil: new Date(until).toISOString() });
     }
     out.sort((a, b) => a.cooldownUntil.localeCompare(b.cooldownUntil));
