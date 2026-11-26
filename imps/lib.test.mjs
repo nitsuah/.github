@@ -32,6 +32,11 @@ test('fixRoundProgress requires thread progress independently of CI feedback', (
         { id: 'ci:test', kind: 'ci', action: 'fix', reply: '', answered: true },
     ]);
     assert.equal(progressed.addressedThreads, 1);
+    const missingReply = fixRoundProgress(
+        [{ id: 'thread-optional-reply', kind: 'thread' }],
+        [{ id: 'thread-optional-reply', action: 'skip', answered: true }],
+    );
+    assert.equal(missingReply.addressedThreads, 0);
 
     const rebutted = fixRoundProgress(items, [
         { id: 'thread-1', kind: 'thread', action: 'pushback', reply: 'False finding: the guard already covers this path.', answered: true },
