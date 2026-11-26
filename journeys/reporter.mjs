@@ -12,12 +12,13 @@
 // --mode summary  PRs: only write the step summary. Never touches issues.
 // Env: GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID,
 //      GITHUB_SHA, GITHUB_STEP_SUMMARY (all set by Actions).
-import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { basename } from 'node:path';
 import {
     FP_MARK, META_MARK, flattenReport, failureOf, readMarker, pickImages,
     issueTitle, issueBody, plan, bugsMarkdown, coverage, fingerprint, journeyId, isInfraError,
+    vercelSkipFiles,
 } from './lib.mjs';
 
 const { values: opt } = parseArgs({
@@ -116,6 +117,18 @@ async function commitToBranch(files, message) {
     if (parent) await gh('PATCH', `/repos/${repo}/git/refs/heads/${opt.branch}`, { sha: c.sha });
     else await gh('POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${opt.branch}`, sha: c.sha });
     return c.sha;
+}
+
+// Directories (top level) of the checked-out repo that hold a vercel.json, so
+// a Vercel project with a Root Directory also skips the bot branch.
+function vercelRoots() {
+    try {
+        return readdirSync('.', { withFileTypes: true })
+            .filter((d) => d.isDirectory() && !d.name.startsWith('.') && existsSync(`${d.name}/vercel.json`))
+            .map((d) => d.name);
+    } catch {
+        return [];
+    }
 }
 
 async function readBranchFile(path) {
@@ -275,6 +288,7 @@ if (opt.mode === 'file') {
         [
             { path: 'BUGS.md', content: bugs },
             { path: `metrics/${month}.jsonl`, content: prev + line + '\n' },
+            ...vercelSkipFiles(opt.branch, vercelRoots()),
         ],
         `journeys: ${counts.passed}/${counts.total} green on ${today}`,
     );
