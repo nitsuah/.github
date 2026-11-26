@@ -1433,6 +1433,9 @@ const reviewBot = (login = '') => /^(coderabbitai|copilot-pull-request-reviewer)
 //   checks: [{ name, state }]   impReview: the run's ledger review (or null)
 // Noise (bot summaries, skip/rate-limit notices, deploy previews, confirmations,
 // our own replies) never becomes an item: no model is woken for it.
+// The reusable guard's own job, as a caller reports it ("guard / Risk guard"). Not any check that mentions it.
+const RISK_GUARD_CHECK = /^([^/]+ \/ )?Risk guard$/;
+
 export function feedbackItems({ threads = [], comments = [], checks = [], impReview = null, since = null, allowedAuthors = ['nitsuah'] }) {
     const items = [];
     const trusted = new Set(allowedAuthors.map((name) => String(name).trim().toLowerCase()).filter(Boolean));
@@ -1465,9 +1468,10 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
             if (f.severity === 'blocker' || f.severity === 'major')
                 items.push({ kind: 'review', id: `r${i}`, author: 'imp-reviewer', path: f.file, line: f.line, text: `${f.severity}: ${f.title}\n${f.detail}` });
     for (const c of checks)
-        // The risk guard asks for a CHANGELOG line or an owner's label, neither of which an imp may add.
+        // The risk guard stays red and still blocks the merge. Only the fix round skips it: it asks for a
+        // CHANGELOG line or an owner's label, neither of which an imp may add.
         // Netlify's deploy checks ("Pages changed - x", "Header rules - x", "Redirect rules - x") aren't code feedback.
-        if (/^(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|fail)$/i.test(c.state || '') && !/netlify|coderabbit|risk guard|^(Pages changed|Header rules|Redirect rules) - /i.test(c.name))
+        if (/^(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|fail)$/i.test(c.state || '') && !/netlify|coderabbit|^(Pages changed|Header rules|Redirect rules) - /i.test(c.name) && !RISK_GUARD_CHECK.test(c.name))
             items.push({ kind: 'ci', id: `ci:${c.name}`, author: 'ci', text: `Check "${c.name}" is failing.${c.log ? `\n\n${c.log}` : ''}` });
     return items;
 }

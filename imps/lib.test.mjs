@@ -2289,6 +2289,7 @@ test('gate fails a high-risk path that allow: did not name, and reports the clas
 });
 
 test('feedbackItems never hands the risk guard to an imp', () => {
-    const items = feedbackItems({ threads: [], comments: [], checks: [{ name: 'guard / Risk guard', state: 'FAILURE' }, { name: 'test', state: 'FAILURE', log: 'boom' }] });
-    assert.deepEqual(items.map((i) => i.id), ['ci:test']);
+    const failing = (name) => ({ name, state: 'FAILURE' });
+    const items = feedbackItems({ threads: [], comments: [], checks: ['guard / Risk guard', 'Risk guard', 'test', 'risk guard unit tests'].map(failing) });
+    assert.deepEqual(items.map((i) => i.id), ['ci:test', 'ci:risk guard unit tests'], 'only the guard job itself is skipped');
 });
