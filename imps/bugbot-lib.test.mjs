@@ -378,3 +378,46 @@ test('decodeContents: keeps leading blank lines so line numbers stay exact', () 
     assert.equal(decodeContents(JSON.stringify({ type: 'dir' })), null);
     assert.equal(decodeContents('not json'), null);
 });
+
+// ── settled findings ──
+{
+    const { settledFindings, withoutSettled, matchesSettled, THREAD_MARK: TM, ACCEPTED_MARK: AM } = await import('./bugbot-lib.mjs');
+    const thread = (path, title, answer, judged = `${TM}${AM}\n**Resolved:** ok`) => ({
+        path, isResolved: true,
+        comments: [{ body: `${TM}\n**blocker** · ${title}\n\nwhy` }, { body: answer }, { body: judged }],
+    });
+    const pushback = thread('.github/workflows/deploy.yml', "Invalid concurrency option 'queue: max'", '<!-- imp-reply -->\nNot a bug: queue is documented.');
+    const fixed = thread('src/a.js', 'Null check missing', '<!-- imp-reply -->\nFixed in abc123.');
+    const kept = thread('src/b.js', 'Leaks handle', 'Not a bug', `${TM}\n**Still open:** no`);
+
+    test('settledFindings: accepted pushbacks only, not fixes or kept threads', () => {
+        const s = settledFindings([pushback, fixed, kept, { path: 'x', comments: [{ body: 'human' }] }]);
+        assert.equal(s.length, 1);
+        assert.equal(s[0].path, '.github/workflows/deploy.yml');
+        assert.match(s[0].title, /queue: max/);
+        assert.match(s[0].reply, /^Not a bug/);
+    });
+
+    test('withoutSettled drops a reworded repeat on the same file and recomputes the verdict', () => {
+        const s = settledFindings([pushback]);
+        const rv = { verdict: 'request_changes', counts: { blocker: 1, major: 0, minor: 1, nit: 0 }, findings: [
+            { severity: 'blocker', file: '.github/workflows/deploy.yml', line: 47, title: "Invalid concurrency option 'queue: max'", detail: '' },
+            { severity: 'minor', file: '.github/workflows/deploy.yml', line: 85, title: 'Smoke check retries 10 times', detail: '' },
+        ] };
+        const out = withoutSettled(rv, s);
+        assert.equal(out.dropped.length, 1);
+        assert.equal(out.rv.verdict, 'comment');
+        assert.deepEqual(out.rv.counts, { blocker: 0, major: 0, minor: 1, nit: 0 });
+    });
+
+    test('matchesSettled ignores other files and unrelated titles', () => {
+        const s = settledFindings([pushback]);
+        assert.equal(matchesSettled({ file: 'other.yml', title: "Invalid concurrency option 'queue: max'" }, s), null);
+        assert.equal(matchesSettled({ file: '.github/workflows/deploy.yml', title: 'Secret printed to the log' }, s), null);
+    });
+
+    test('withoutSettled is a no-op with nothing settled', () => {
+        const rv = { verdict: 'approve', findings: [] };
+        assert.equal(withoutSettled(rv, []).rv, rv);
+    });
+}

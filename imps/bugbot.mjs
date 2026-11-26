@@ -25,7 +25,7 @@ import { HOME, sh, chat, rows } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
-    ACCEPTED_MARK, acceptedButOpen, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
+    ACCEPTED_MARK, acceptedButOpen, settledFindings, withoutSettled, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
     latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
@@ -192,13 +192,15 @@ async function runReview(pr, reason) {
     const fullDiff = d.out;
     const partial = fullDiff.length > MAX_DIFF;
     const diff = partial ? fullDiff.slice(0, MAX_DIFF) + '\n… (diff truncated)' : fullDiff;
+    const settled = settledFindings(pr.threads);
     const issues = pr.issues.map((i) => `### Issue #${i.number}: ${i.title}\n\n${(i.body || '').slice(0, 4000)}`).join('\n\n') || '(no linked issue)';
     const prompt = [
         readFileSync(join(HERE, 'BUGBOT.md'), 'utf8'),
         `---\n\n## PR ${pr.slug}#${pr.number}: ${pr.title}\n\n${pr.body.slice(0, 6000)}`,
         `## Linked issues (background)\n\n${issues}`,
         `## The diff (head ${pr.headSha})\n\n\`\`\`diff\n${diff}\n\`\`\``,
-    ].join('\n\n');
+        settled.length ? `## Already settled on this PR\n\nYou raised these on an earlier head and accepted the pushback. Do not raise them again.\n\n${settled.map((x) => `- \`${x.path}\`: ${x.title}. Answer: ${x.reply.replace(/\s+/g, ' ')}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
     const RETRY = `\n\n**Your previous answer ended without the \`json\` block. Output only that block, nothing before it.**`;
     let metrics;
     let rv;
@@ -211,6 +213,10 @@ async function runReview(pr, reason) {
         log({ event: 'bugbot-error', pr: pr.url, sha: pr.headSha, error: rv.error, end: metrics.end, detail: metrics.error ? String(metrics.error).slice(0, 200) : undefined });
         return null;
     }
+    // Deterministic backstop: the model may raise a settled finding anyway.
+    const kept = withoutSettled(rv, settled);
+    if (kept.dropped.length) log({ event: 'bugbot-settled-dropped', pr: pr.url, sha: pr.headSha, dropped: kept.dropped.map((f) => `${f.file}: ${f.title}`) });
+    rv = kept.rv;
     const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served, partial });
     let url = null;
     if (!o['dry-run']) {
