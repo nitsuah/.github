@@ -1512,6 +1512,18 @@ export function fixRoundProgress(items = [], decisions = []) {
     return { hasThreads: threads.length > 0, addressedThreads: addressedThreads.length, unanswered: unanswered.map((item) => item.id) };
 }
 
+/** Measure actual fix-round progress separately for review threads and CI feedback. */
+export function fixRoundProgress(items = [], decisions = []) {
+    const byId = new Map(decisions.map((decision) => [decision.id, decision]));
+    const threads = items.filter((item) => item.kind === 'thread');
+    const addressedThreads = threads.filter((item) => {
+        const decision = byId.get(item.id);
+        return decision?.action === 'fix' || (decision?.action === 'skip' && decision.reply.trim().length > 0);
+    });
+    const unanswered = items.filter((item) => !byId.get(item.id)?.answered);
+    return { hasThreads: threads.length > 0, addressedThreads: addressedThreads.length, unanswered: unanswered.map((item) => item.id) };
+}
+
 // The fix imp ends with a json block: { "decisions": [{ id, action, reply }] }.
 // Missing, malformed, duplicate and unknown ids stay unanswered (null), never a
 // synthesised skip, so incomplete threads do not close silently.
