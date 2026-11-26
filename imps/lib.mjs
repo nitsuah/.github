@@ -1412,6 +1412,7 @@ export function parseReview(text = '') {
             line: Number.isFinite(Number(f.line)) ? Number(f.line) : null,
             title: String(f.title),
             detail: String(f.detail || ''),
+            quote: String(f.quote || ''),
         }));
     const counts = Object.fromEntries(SEVERITIES.map((s) => [s, findings.filter((f) => f.severity === s).length]));
     const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
