@@ -13,6 +13,7 @@ import {
     earnedTrustCount,
     labelWatchEnabled,
     fetchGithubSeedTrust,
+    riskMergeGate, prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, dropStaleAck,
 } from './checks.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -62,17 +63,18 @@ test('cleanMergesForRepo and mayAutoMerge enforce earned trust', () => {
         { repo: 'fire', outcome: 'merged', gate: { pass: true }, review: { verdict: 'approve' } },
     ];
     assert.equal(cleanMergesForRepo(rows, 'stash'), 2);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 3 }).ok, false);
-    assert.match(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 3 }).reason, /2\/3/);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 2 }).ok, true);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'comment', rows, trust: 0 }).ok, false);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 0, autoMergeEnv: '0' }).ok, false);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 'three' }).ok, false);
-    assert.equal(mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: NaN }).ok, false);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 3 }).ok, false);
+    assert.match(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 3 }).reason, /2\/3/);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 2 }).ok, true);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'comment', rows, trust: 0 }).ok, false);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 0, autoMergeEnv: '0' }).ok, false);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 'three' }).ok, false);
+    assert.equal(mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: NaN }).ok, false);
 });
 
 test('mayAutoMerge fails closed on githubSeedError', () => {
     const r = mayAutoMerge({
+        risk: 'low',
         repo: 'stash',
         reviewVerdict: 'approve',
         rows: [],
@@ -89,12 +91,12 @@ test('mayAutoMerge uses max(ledger, github) seed', () => {
     ];
     // Ledger alone is 1; github seed 3 → trust met.
     assert.equal(
-        mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 3, githubCount: 3 }).ok,
+        mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 3, githubCount: 3 }).ok,
         true,
     );
     // Ledger 1, github 0 → still short.
     assert.equal(
-        mayAutoMerge({ repo: 'stash', reviewVerdict: 'approve', rows, trust: 3, githubCount: 0 }).ok,
+        mayAutoMerge({ risk: 'low', repo: 'stash', reviewVerdict: 'approve', rows, trust: 3, githubCount: 0 }).ok,
         false,
     );
 });
@@ -286,13 +288,87 @@ test('imps folder has no gh pr merge --auto calls (#55)', async () => {
 test('a diff over 100 lines with no test file is never auto-merged', () => {
     const rows = [{ repo: 'stash', outcome: 'merged', gate: { pass: true }, review: { verdict: 'approve' } }];
     const base = { repo: 'stash', reviewVerdict: 'approve', rows, trust: 1 };
-    assert.equal(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js'] } }).ok, false);
-    assert.match(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js'] } }).reason, /no test file/);
-    assert.equal(mayAutoMerge({ ...base, gate: { lines: 130, files: ['app/a.js', 'tests/unit/a.test.mjs'] } }).ok, true);
-    assert.equal(mayAutoMerge({ ...base, gate: { lines: 100, files: ['app/a.js'] } }).ok, true, 'at the line, not over');
-    assert.equal(mayAutoMerge(base).ok, true, 'no gate info: unchanged behaviour');
+    assert.equal(mayAutoMerge({ risk: 'low', ...base, gate: { lines: 130, files: ['app/a.js'] } }).ok, false);
+    assert.match(mayAutoMerge({ risk: 'low', ...base, gate: { lines: 130, files: ['app/a.js'] } }).reason, /no test file/);
+    assert.equal(mayAutoMerge({ risk: 'low', ...base, gate: { lines: 130, files: ['app/a.js', 'tests/unit/a.test.mjs'] } }).ok, true);
+    assert.equal(mayAutoMerge({ risk: 'low', ...base, gate: { lines: 100, files: ['app/a.js'] } }).ok, true, 'at the line, not over');
+    assert.equal(mayAutoMerge({ risk: 'low', ...base }).ok, true, 'no gate info: unchanged behaviour');
     assert.equal(bigUntestedDiff({ lines: 101, files: ['x.py', 'test_x.py'] }), false);
     assert.equal(bigUntestedDiff({ lines: 101, files: [] }), true);
     assert.equal(bigUntestedDiff({ lines: 101, files: ['app/a.js', 'tests/fixtures/input.json'] }), true, 'a fixture is not a test file');
     assert.equal(bigUntestedDiff({ lines: 101, files: ['app/a.js', 'tests/unit/a.mjs'] }), false);
+});
+
+test('mayAutoMerge: only risk:low is ever auto-merged, and a missing class fails closed', () => {
+    const rows = [{ repo: 'r', outcome: 'merged', gate: { pass: true }, review: { verdict: 'approve' } }];
+    const ask = (risk) => mayAutoMerge({ repo: 'r', reviewVerdict: 'approve', rows, trust: 1, autoMergeEnv: '1', risk });
+    assert.equal(ask('low').ok, true);
+    for (const risk of ['medium', 'high', 'LOW', undefined, null]) assert.equal(ask(risk).ok, false, String(risk));
+    assert.match(ask('medium').reason, /never auto-merged/);
+});
+
+const HEAD = 'a'.repeat(40);
+const approval = { sha: HEAD, verdict: 'approve', scope: 'full' };
+const merge = (over) => riskMergeGate({ checksGreen: true, headSha: HEAD, ...over });
+
+test('riskMergeGate low: green checks and no open thread', () => {
+    assert.equal(merge({ risk: 'low' }).ok, true);
+    assert.equal(merge({ risk: 'low', checksGreen: false }).ok, false);
+    assert.equal(merge({ risk: 'low', openThreads: 1 }).ok, false);
+});
+
+test('riskMergeGate medium: needs a full bugbot approve of this head, plus green CI', () => {
+    assert.equal(merge({ risk: 'medium', bugbot: approval }).ok, true);
+    assert.equal(merge({ risk: 'medium', bugbot: approval, checksGreen: false }).ok, false);
+    for (const bugbot of [null, { ...approval, verdict: 'comment' }, { ...approval, verdict: 'request_changes' }, { ...approval, scope: 'partial' }, { ...approval, sha: 'b'.repeat(40) }])
+        assert.equal(merge({ risk: 'medium', bugbot }).ok, false, JSON.stringify(bugbot));
+});
+
+test('riskMergeGate high: both reviews of the head and the owner acknowledgement', () => {
+    const all = { risk: 'high', bugbot: approval, crApprovedHead: true, ownerAcked: true };
+    assert.equal(merge(all).ok, true);
+    for (const missing of [{ bugbot: null }, { crApprovedHead: false }, { ownerAcked: false }, { checksGreen: false }])
+        assert.equal(merge({ ...all, ...missing }).ok, false, JSON.stringify(missing));
+    assert.equal(merge({ ...all, ownerAcked: false }).needsHuman, false, 'both reviews are in: it only waits for the acknowledgement');
+    assert.equal(merge({ ...all, crApprovedHead: false }).needsHuman, true);
+    assert.equal(merge({ ...all, risk: 'unheard-of', ownerAcked: false }).ok, false, 'an unknown class is treated as high');
+});
+
+test('prRisk takes the highest of paths, run record and labels; unreadable paths are high', () => {
+    assert.equal(prRisk({ paths: ['README.md'] }), 'low');
+    assert.equal(prRisk({ paths: ['README.md'], recorded: 'medium' }), 'medium');
+    assert.equal(prRisk({ paths: ['README.md'], labels: [{ name: 'risk:high' }] }), 'high');
+    assert.equal(prRisk({ paths: ['src/auth.ts'], recorded: 'low', labels: ['risk:low'] }), 'high', 'a label cannot lower it');
+    assert.equal(prRisk({ paths: ['README.md'], error: 'boom' }), 'high');
+});
+
+test('fetchPrPaths reads both names of a rename and reports every failure', () => {
+    const run = (out, code = 0) => () => ({ code, out, err: code ? 'nope' : '' });
+    assert.deepEqual(fetchPrPaths('o/r', 1, { run: run('docs/a.md\tsrc/auth.ts\nb.md\t') }).paths, ['docs/a.md', 'src/auth.ts', 'b.md']);
+    assert.equal(fetchPrPaths('o/r', 1, { run: run('', 1) }).error, 'nope');
+    assert.ok(fetchPrPaths('o/r', 1, { run: run('') }).error);
+    assert.ok(fetchPrPaths('o/r', 1, { run: run(Array(3000).fill('a.md').join('\n')) }).error);
+});
+
+test('ownerAcknowledged: the label counts only when an owner added it last', () => {
+    const labels = [{ name: 'risk-ack' }];
+    const by = (actor, event = 'labeled') => ({ event, actor });
+    const ack = (events, l = labels) => ownerAcknowledged({ labels: l, events, owners: ['Nitsuah'] });
+    assert.equal(ack([by('nitsuah')]), true);
+    assert.equal(ack([by('nitsuah'), by('someone', 'unlabeled'), by('someone')]), false);
+    assert.equal(ack([by('github-actions[bot]')]), false);
+    assert.equal(ack([]), false);
+    assert.equal(ack([by('nitsuah')], []), false, 'the label must still be there');
+    assert.deepEqual(fetchAckEvents('o/r', 1, { run: () => ({ code: 1, out: '', err: 'x' }) }), []);
+    assert.deepEqual(fetchAckEvents('o/r', 1, { run: () => ({ code: 0, out: 'labeled\tnitsuah\n' }) }), [{ event: 'labeled', actor: 'nitsuah' }]);
+});
+
+test('dropStaleAck removes a present risk-ack and throws when the removal fails', () => {
+    const calls = [];
+    const run = (code) => (args) => { calls.push(args); return { code, out: '', err: 'nope' }; };
+    assert.equal(dropStaleAck('o/r', 1, [{ name: 'risk:high' }], { run: run(1) }), false);
+    assert.equal(calls.length, 0, 'nothing to remove');
+    assert.equal(dropStaleAck('o/r', 1, [{ name: 'risk-ack' }], { run: run(0) }), true);
+    assert.deepEqual(calls[0], ['pr', 'edit', '1', '-R', 'o/r', '--remove-label', 'risk-ack']);
+    assert.throws(() => dropStaleAck('o/r', 1, ['risk-ack'], { run: run(1) }), /nothing is pushed/);
 });

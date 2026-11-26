@@ -189,6 +189,25 @@ export const appendRow = (row) => withLedgerLock(() => appendFileSync(LEDGER, JS
 // ── processes ─────────────────────────────────────────────────────────────
 const LOG_FILE = join(HOME, 'logs', 'tool-errors.log');
 mkdirSync(dirname(LOG_FILE), { recursive: true });
+const RISK_COLORS = { low: '0e8a16', medium: 'fbca04', high: 'b60205' };
+
+/** Create the `risk:<level>` label if the repo lacks it, and return its name. */
+export function ensureRiskLabel(slug, level) {
+    const name = `risk:${level}`;
+    sh('gh', ['label', 'create', name, '-R', slug, '-c', RISK_COLORS[level], '-d', 'Risk class, set from the changed paths (imps/STANDARD.md)', '--force']);
+    return name;
+}
+
+/** Put exactly one `risk:*` label on a PR. */
+export function applyRiskLabel(url, slug, level) {
+    // Add before removing: if the add fails, the old label stays rather than leaving none.
+    const added = sh('gh', ['pr', 'edit', url, '--add-label', ensureRiskLabel(slug, level)]);
+    if (added.code) return added;
+    for (const other of Object.keys(RISK_COLORS).filter((l) => l !== level))
+        sh('gh', ['pr', 'edit', url, '--remove-label', `risk:${other}`]);
+    return added;
+}
+
 export const sh = (bin, args, opts = {}) => {
     const start = Date.now();
     const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, ...opts });

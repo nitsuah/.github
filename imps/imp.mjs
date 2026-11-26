@@ -24,12 +24,12 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
 import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
-import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped } from './runner.mjs';
+import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped, ensureRiskLabel } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -551,6 +551,7 @@ async function runGate(id) {
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
         humanOnlyPaths: humanOnly,
+        briefRisk: meta.risk,
     });
     // The run and any commit-recovery round both count: a recovery served by an unexpected model fails too.
     for (const sc of [r.servedCheck, (commitRecovery || r.commitRecovery)?.servedCheck])
@@ -561,6 +562,8 @@ async function runGate(id) {
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
     update(id, (current) => ({
         ...(current.outcome === COMMIT_RECOVERY_FAILED ? { outcome: null } : {}),
+        // Never lowered by a later gate of the same run (a fix round that reverts the sensitive file).
+        risk: current.risk ? maxRisk(current.risk, g.risk) : g.risk,
         gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), testExit, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
     }));
     writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
@@ -651,13 +654,16 @@ function openPr(id) {
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (push.code) throw new Error(push.err);
+    // Classed from the branch itself, so a manual gate cannot skip it.
+    const changed = git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean);
+    const risk = maxRisk(riskClass(changed), r.risk);
     // The imp's own message, never the runner's format commit.
     const title = git(r.worktree, 'log', '-1', '--format=%s', '--invert-grep', '--fixed-strings', '--grep=(imp runner)', `${r.baseSha}..HEAD`).out;
     const body = [
         `Fixes #${r.issue}`, '',
         '> **Imp PR.** Written by a headless worker through 9router, then gated by the runner (tests in Docker, diff size, scope, trailer). ' +
-        'If the imp reviewer approves, every check (required *and* optional) is green, and the repo has earned auto-merge trust, ' +
-        'the runner squash-merges immediately. Nothing merges on red or pending CI.', '',
+        'A `risk:low` PR (tests and docs only) is squash-merged when the imp reviewer approves, every check (required *and* optional) is green, ' +
+        'and the repo has earned auto-merge trust. Other risk classes are never auto-merged. Nothing merges on red or pending CI.', '',
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
@@ -666,9 +672,15 @@ function openPr(id) {
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
-    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
+    const labels = ['imp', ensureRiskLabel(repoSlug, risk)];
+    // Nothing is approved yet, so a high-risk PR starts out as a human's.
+    if (risk === 'high') {
+        sh('gh', ['label', 'create', NEEDS_HUMAN_LABEL, '-R', repoSlug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
+        labels.push(NEEDS_HUMAN_LABEL);
+    }
+    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, ...labels.flatMap((l) => ['--label', l]), '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
-    update(id, { pr: pr.out, outcome: 'open', authorModel: (m.served || [])[0] || r.model });
+    update(id, { risk, pr: pr.out, outcome: 'open', authorModel: (m.served || [])[0] || r.model });
     console.log(pr.out);
     // Auto-review, then merge only on approve + all checks green + earned trust.
     // Merge immediately (no `gh pr merge --auto`): GitHub auto-merge only waits
@@ -701,6 +713,7 @@ function openPr(id) {
         githubCount,
         githubSeedError,
         gate: r.gate,
+        risk,
     });
     if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);
