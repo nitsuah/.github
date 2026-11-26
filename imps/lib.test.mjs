@@ -2216,3 +2216,8 @@ test('gate fails a high-risk path that allow: did not name, and reports the clas
     assert.equal(gateFor(['src/a.ts'], ['src/'], { briefRisk: 'high' }).risk, 'high');
     assert.deepEqual(unnamed(gateFor(['src/auth.ts'], ['src/'], { humanOnlyPaths: ['src/auth.ts'] })), [], 'a human push is not the imp\u2019s doing');
 });
+
+test('feedbackItems never hands the risk guard to an imp', () => {
+    const items = feedbackItems({ threads: [], comments: [], checks: [{ name: 'guard / Risk guard', state: 'FAILURE' }, { name: 'test', state: 'FAILURE', log: 'boom' }] });
+    assert.deepEqual(items.filter((i) => i.kind === 'check').map((i) => i.author), ['test']);
+});

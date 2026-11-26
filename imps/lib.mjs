@@ -1388,8 +1388,9 @@ export function feedbackItems({ threads = [], comments = [], checks = [], impRev
             if (f.severity === 'blocker' || f.severity === 'major')
                 items.push({ kind: 'review', id: `r${i}`, author: 'imp-reviewer', path: f.file, line: f.line, text: `${f.severity}: ${f.title}\n${f.detail}` });
     for (const c of checks)
+        // The risk guard asks for a CHANGELOG line or an owner's label, neither of which an imp may add.
         // Netlify's deploy checks ("Pages changed - x", "Header rules - x", "Redirect rules - x") aren't code feedback.
-        if (/^(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|fail)$/i.test(c.state || '') && !/netlify|coderabbit|^(Pages changed|Header rules|Redirect rules) - /i.test(c.name))
+        if (/^(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|fail)$/i.test(c.state || '') && !/netlify|coderabbit|risk guard|^(Pages changed|Header rules|Redirect rules) - /i.test(c.name))
             items.push({ kind: 'ci', id: `ci:${c.name}`, author: 'ci', text: `Check "${c.name}" is failing.${c.log ? `\n\n${c.log}` : ''}` });
     return items;
 }

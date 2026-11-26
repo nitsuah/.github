@@ -136,6 +136,10 @@ A brief's `risk:` front matter raises the class and never lowers it; an unknown 
 | Merging `medium` | green CI, no open thread and a full-scope bugbot `approve` on the head commit (`comment` is not enough) | `bugbot.mjs merge-check` |
 | Merging `high` | never automatic. Labelled `imp:needs-human` unless CodeRabbit approved and bugbot approved the head; even then `merge-check` also needs `risk-ack`, last added by the owner | `imp.mjs pr`, `demonguard.mjs`, `merge-check` |
 | Acknowledgement | a fix-round push removes `risk-ack` | `fix.mjs` |
+| CI: CHANGELOG | a PR that changes a non-docs file (tests included) without changing `CHANGELOG.md` or `docs/CHANGELOG.md` fails, unless labelled `no-changelog` | `risk-guard.yml` → `ci-guard.mjs` |
+| CI: high risk | a PR that is `risk:high`, by label or by its paths, fails without an owner's `risk-ack` | `risk-guard.yml` → `ci-guard.mjs` |
+
+**Adopting the CI guard:** copy `repo-health/templates/risk-guard.yml` to the repo's `.github/workflows/` and pin it to a `nitsuah/.github` main SHA, as for repo-health; the guard code is checked out at that same SHA. It reads the PR through the API and never checks out its code. The check blocks merges only where branch protection requires it, and a PR that edits the caller file runs the edited version (such a PR is `risk:high`). Imp diffs may not touch the CHANGELOG, so an imp PR that changes non-docs files waits for a person to add the line or `no-changelog`; the fix round ignores this check.
 
 **Every merge helper runs `node imps/bugbot.mjs merge-check <owner/repo#n>` first.** It exits 0 only when the review gate (§ Bugbot) and the table above both pass. It prints the head SHA: merge with `--match-head-commit <sha>`, and never with `--auto`. An `imp:needs-human` PR is skipped by the fix sweep and demonguard, so a high-risk one is finished by hand.
 
