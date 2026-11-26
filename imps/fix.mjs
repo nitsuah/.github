@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, fixRoundProgress } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
 import { prRisk, dropStaleAck } from './checks.mjs';
 import { writeTelemetry } from './telemetry.mjs';
@@ -105,18 +105,25 @@ const metrics = await runClaude({
 const decisions = parseFixDecisions(metrics.finalText, items);
 const committed = git(r.worktree, 'rev-parse', 'HEAD').out !== before;
 
-// Check for zero substantive resolutions
-const addressed = decisions.filter((d) => d.action === 'fix' || (d.action === 'skip' && d.reply.trim().length > 0));
-if (committed && addressed.length === 0 && decisions.length > 0) {
-    // Fix round produced commits but addressed nothing - fail the PR
-    git(r.worktree, 'reset', '-q', '--hard', before);
-    const reason = 'Fix round produced changes but resolved zero review threads (no fix/skip with evidence)';
+const record = {
+    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
+    committed, gate: null,
+    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
+};
+const progress = fixRoundProgress(items, decisions);
+const noThreadProgress = progress.hasThreads && progress.addressedThreads === 0;
+const unanswered = progress.unanswered.length > 0;
+if (noThreadProgress || unanswered) {
+    if (committed) git(r.worktree, 'reset', '-q', '--hard', before);
+    const reason = noThreadProgress
+        ? 'Fix round addressed zero review threads; CI-only fixes do not count as thread progress'
+        : `Fix round left feedback decisions unanswered: ${progress.unanswered.join(', ')}`;
     if (!dry) {
         sh('gh', ['label', 'create', 'imp:failed', '-R', slug, '-c', 'b60205', '-d', 'The imp did not pass the gate; needs a new brief or a human', '--force']);
         sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:failed']);
-        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} failed: ${reason}.\n\nLabelled \`imp:failed\`.`]);
+        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\\nFix round ${round} failed: ${reason}.\\n\\nLabelled \`imp:failed\`.`]);
     }
-    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, pushed: false }] }));
+    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, failure: reason, pushed: false }] }));
     say('gate-fail', { reasons: [reason] });
     process.exit(1);
 }
@@ -130,11 +137,7 @@ if (committed) {
     gatePass = !!g?.pass;
     reasons = g?.reasons || [];
 }
-const record = {
-    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
-    committed, gate: committed ? { pass: gatePass, reasons } : null,
-    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
-};
+record.gate = committed ? { pass: gatePass, reasons } : null;
 if (committed && !gatePass) {
     git(r.worktree, 'reset', '-q', '--hard', before);
     sh('gh', ['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
