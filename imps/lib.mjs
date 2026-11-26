@@ -1102,7 +1102,7 @@ export function normalizeRepoExclusions(configured = []) {
         const slug = String(value ?? '').trim().replace(/\\/g, '/').toLowerCase();
         if (/^[^/]+\/[^/]+$/.test(slug)) exclusions.add(slug);
     }
-    return [...exclusions].sort();
+    return [...exclusions];
 }
 
 export function parseBriefAuthors(value) {
