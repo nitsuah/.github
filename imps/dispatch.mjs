@@ -67,6 +67,26 @@ const log = (ev) => {
     console.log(JSON.stringify(line));
     if (!dry) appendFileSync(LOG, JSON.stringify(line) + '\n');
 };
+
+// Generate batch ID for this dispatch cycle
+const BATCH_ID = `batch_${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}_${MACHINE.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+// Model quarantine within batch: track gate failures by served model
+const modelFailures = new Map(); // model -> count
+
+function recordModelFailure(servedModel) {
+    if (!servedModel) return;
+    const count = (modelFailures.get(servedModel) || 0) + 1;
+    modelFailures.set(servedModel, count);
+    log({ event: 'model-quarantine', batchId: BATCH_ID, servedModel, failureCount: count });
+    if (count >= 3) {
+        log({ event: 'model-quarantined', batchId: BATCH_ID, servedModel, reason: '3 gate failures in batch' });
+    }
+}
+
+function isModelQuarantined(servedModel) {
+    return (modelFailures.get(servedModel) || 0) >= 3;
+}
 const gh = (args) => {
     const r = runGhWithReadRetry(args,
         (command) => spawnSync('gh', command, { encoding: 'utf8', windowsHide: true }),
