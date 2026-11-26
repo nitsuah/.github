@@ -2,6 +2,7 @@
 // the RSI report. No I/O beyond defaults.mjs. Tested in lib.test.mjs (node --test).
 import { DEFAULTS } from './defaults.mjs';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, posix, relative, resolve, sep, win32 } from 'node:path';
@@ -876,18 +877,51 @@ export function staleImpLabels(labels = []) {
 // Limits learned from the ledger, so a bad day can't turn into a runaway:
 // `runsLast24h` counts imp runs in the last 24 h (the daily cap), and a repo
 // whose last two gated runs both failed sits out for 24 h after the latest
-// failure (`cooldown`), until triage fixes the brief or the cause.
-export function loopBudget(rows, now = Date.now(), { kit } = {}) {
+// failure (`cooldown`), until triage fixes the brief or the cause. A failure
+// whose issue has moved on since (see isStaleFailure) leaves that streak.
+// `evidence(repo, issue)` is asked only about failures that could still cause a
+// cooldown; without it, or when it returns null, every failure counts.
+export function loopBudget(rows, now = Date.now(), { kit, evidence } = {}) {
     const day = 24 * 3600_000;
     const runs = rows.filter((r) => r.startedAt && !r.ingested && /^imp_\d/.test(r.id));
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
         const gated = runs.filter((r) => r.repo === repo && r.gate && r.outcome !== COMMIT_RECOVERY_FAILED && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
-        const [a, b] = gated.slice(-2);
-        if (a && b && !a.gate.pass && !b.gate.pass && now - Date.parse(b.startedAt) < DEFAULTS.cooldownMs) cooldown[repo] = b.startedAt;
+        if (gated.length < 2) continue;
+        const streak = []; // newest first
+        for (let n = gated.length - 1; n >= 0 && streak.length < 2; n--) {
+            const r = gated[n];
+            // The newest failure that counts must be recent, and older rows are older still.
+            if (!streak.length && now - Date.parse(r.startedAt) >= DEFAULTS.cooldownMs) break;
+            // Only failures go stale: a pass still breaks the streak after its issue closes.
+            if (r.gate.pass) break;
+            if (evidence && r.issue != null && isStaleFailure(r, evidence(repo, r.issue))) continue;
+            streak.push(r);
+        }
+        if (streak.length === 2) cooldown[repo] = streak[0].startedAt;
     }
     return { runsLast24h, cooldown };
+}
+
+/** Identity of an issue's brief as posted, before labels or retry feedback are added to it. */
+export const briefSourceHash = (brief) => createHash('sha1').update(String(brief).replace(/\r\n/g, '\n').trim()).digest('hex');
+
+// Has this failed run stopped saying anything about its issue? Yes when the issue
+// is closed, a PR merged since the run started covers it, or its brief changed.
+// A row with no recorded `sourceBriefHash` cannot be compared, so it still counts.
+export function isStaleFailure(row, ev) {
+    if (!ev) return false;
+    if (ev.closed) return true;
+    if (ev.mergedAt && Date.parse(ev.mergedAt) >= Date.parse(row.startedAt)) return true;
+    return Boolean(row.sourceBriefHash && ev.briefHash && row.sourceBriefHash !== ev.briefHash);
+}
+
+/** When the latest of the merged PRs that covers `issue` in `slug` (owner/repo) merged, or null. */
+export function coveringMergeAt(prs = [], issue, slug = '') {
+    const covers = (p) => closesIssue(p.body, issue, slug) || (p.closingIssuesReferences || []).some((ref) => Number(ref.number) === Number(issue)
+        && `${ref.repository?.owner?.login}/${ref.repository?.name}`.toLowerCase() === slug.toLowerCase());
+    return prs.filter((p) => p.mergedAt && covers(p)).map((p) => p.mergedAt).sort().at(-1) || null;
 }
 
 /**

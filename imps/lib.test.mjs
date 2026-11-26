@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -2072,4 +2072,69 @@ test('foldChatStream accumulates deltas across chunk boundaries and keeps usage 
     assert.equal(state.model, 'm1');
     assert.deepEqual(state.usage, { prompt_tokens: 5, completion_tokens: 2 });
     assert.equal(rest, '');
+});
+
+const STALE_NOW = Date.parse('2026-11-26T12:00:00Z');
+const failedRun = (issue, hoursAgo, extra = {}) => ({
+    id: `imp_${issue}_${hoursAgo}`, repo: 'r', issue, startedAt: new Date(STALE_NOW - hoursAgo * 3600_000).toISOString(),
+    sourceBriefHash: 'old', gate: { pass: false, reasons: ['tests exit 1'] }, ...extra,
+});
+const unchanged = { closed: false, mergedAt: null, briefHash: 'old' };
+const cooledWith = (rows, byIssue = {}) => 'r' in loopBudget(rows, STALE_NOW, { evidence: (repo, issue) => byIssue[issue] ?? unchanged }).cooldown;
+
+test('loopBudget keeps the cooldown for two failures on open issues with unchanged briefs', () => {
+    assert.ok(cooledWith([failedRun(1, 3), failedRun(2, 2)]));
+});
+
+for (const [label, change] of [
+    ['its issue is closed', { closed: true }],
+    ['a PR merged since the run covers its issue', { mergedAt: new Date(STALE_NOW - 3600_000).toISOString() }],
+    ['the brief has changed', { briefHash: 'new' }],
+]) {
+    test(`loopBudget drops a failure from the streak when ${label}`, () => {
+        assert.equal(cooledWith([failedRun(1, 3), failedRun(2, 2)], { 2: { ...unchanged, ...change } }), false);
+    });
+}
+
+test('loopBudget counts a failure when it cannot tell whether it is stale', () => {
+    const rows = [failedRun(1, 3), failedRun(2, 2, { sourceBriefHash: undefined })];
+    assert.ok(cooledWith(rows, { 2: { ...unchanged, briefHash: 'new' } }), 'row recorded no brief hash');
+    assert.ok(cooledWith([failedRun(1, 3), failedRun(2, 2)], { 2: { ...unchanged, briefHash: null } }), 'no current brief');
+    assert.ok('r' in loopBudget(rows, STALE_NOW, { evidence: () => null }).cooldown, 'lookup failed');
+    assert.ok(cooledWith(rows, { 2: { ...unchanged, mergedAt: new Date(STALE_NOW - 9 * 3600_000).toISOString() } }), 'merge predates the run');
+});
+
+test('loopBudget on mixed histories looks past stale failures but never past a pass', () => {
+    const closed = { ...unchanged, closed: true };
+    assert.ok(cooledWith([failedRun(1, 4), failedRun(2, 3), failedRun(3, 2)], { 3: closed }), 'two live failures remain');
+    assert.equal(cooledWith([failedRun(1, 40), failedRun(2, 30), failedRun(3, 2)], { 3: closed }), false, 'what remains is over 24 h old');
+    const pass = failedRun(3, 2, { gate: { pass: true } });
+    assert.equal(cooledWith([failedRun(1, 4), failedRun(2, 3), pass], { 3: closed }), false, 'a pass on a closed issue still ends the streak');
+});
+
+test('loopBudget asks for evidence only about failures that can still cool a repo, and leaves other budgets alone', () => {
+    const rows = [failedRun(1, 60), failedRun(2, 50), failedRun(3, 3, { repo: 's' }), failedRun(4, 2, { repo: 's' })];
+    const asked = [];
+    const b = loopBudget(rows, STALE_NOW, { evidence: (repo, issue) => { asked.push(`${repo}#${issue}`); return unchanged; } });
+    assert.deepEqual(asked, ['s#4', 's#3']);
+    assert.deepEqual(Object.keys(b.cooldown), ['s']);
+    assert.equal(b.runsLast24h, 2, 'the daily cap still counts every run');
+});
+
+test('briefSourceHash ignores line endings and outer whitespace only', () => {
+    assert.equal(briefSourceHash('a\r\nb\n'), briefSourceHash('a\nb'));
+    assert.notEqual(briefSourceHash('a\nb'), briefSourceHash('a\nc'));
+    assert.equal(isStaleFailure(failedRun(1, 1), undefined), false);
+});
+
+test('coveringMergeAt matches a Fixes line or a closing reference in the same repo', () => {
+    const ref = (name) => [{ number: 7, repository: { name, owner: { login: 'nitsuah' } } }];
+    const prs = [
+        { body: 'Fixes #7', mergedAt: '2026-11-01T00:00:00Z' },
+        { body: '', closingIssuesReferences: ref('r'), mergedAt: '2026-11-02T00:00:00Z' },
+        { body: '', closingIssuesReferences: ref('other'), mergedAt: '2026-11-03T00:00:00Z' },
+        { body: 'Fixes #7', mergedAt: null },
+    ];
+    assert.equal(coveringMergeAt(prs, 7, 'nitsuah/r'), '2026-11-02T00:00:00Z');
+    assert.equal(coveringMergeAt(prs, 8, 'nitsuah/r'), null);
 });
