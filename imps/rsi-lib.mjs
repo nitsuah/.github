@@ -58,6 +58,64 @@ export function gateSignature(reason = '') {
         .slice(0, 120);
 }
 
+/** Internal model state for the fallback policy. */
+const modelState = new Map();
+
+/**
+ * Record a gate result for a model.
+ * @param {string} model - Model identifier (e.g., "nemotron", "recursive/flint")
+ * @param {boolean} passed - Whether the gate passed
+ */
+export function recordModelGateResult(model, passed) {
+    if (!model) return;
+    const state = modelState.get(model) || { streak: 0, benched: false, lastPassedAt: null };
+    if (passed) {
+        state.streak = 0;
+        state.benched = false;
+        state.lastPassedAt = Date.now();
+    } else {
+        state.streak += 1;
+        if (state.streak >= 3) {
+            state.benched = true;
+        }
+    }
+    modelState.set(model, state);
+}
+
+/**
+ * Select a model from the given list, skipping benched models and
+ * falling back to the most recent last-known-good model.
+ * @param {string[]} models - Ordered list of candidate models (preferred first)
+ * @returns {string|null} Selected model or null if none available
+ */
+export function selectModel(models = []) {
+    // First, find the first non-benched model in preference order
+    // Only consider models that have been recorded (have state)
+    for (const model of models) {
+        const state = modelState.get(model);
+        if (state && !state.benched) {
+            return model;
+        }
+    }
+    // All preferred models are benched or unrecorded; fall back to last-known-good
+    let lastGood = null;
+    let lastGoodTime = -1;
+    for (const [model, state] of modelState) {
+        if (!state.benched && state.lastPassedAt && state.lastPassedAt > lastGoodTime) {
+            lastGood = model;
+            lastGoodTime = state.lastPassedAt;
+        }
+    }
+    return lastGood;
+}
+
+/**
+ * Reset all model state (for testing).
+ */
+export function resetModelState() {
+    modelState.clear();
+}
+
 /** Extract a brief `test:` line from an issue body, or null. */
 export function testFromIssueBody(body = '') {
     const m = String(body).match(/(?:^|\n)\s*test:\s*(.+?)\s*(?:\n|$)/i);
