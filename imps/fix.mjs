@@ -21,9 +21,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, riskClass, maxRisk } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
-import { RISK_ACK_LABEL } from './checks.mjs';
+import { prRisk, dropStaleAck } from './checks.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -128,15 +128,22 @@ if (committed && !gatePass) {
     process.exit(1);
 }
 if (committed) {
+    // Re-class and drop any acknowledgement before the new commit is published.
+    const live = sh('gh', ['pr', 'view', String(number), '-R', slug, '--json', 'labels']);
+    if (live.code) throw new Error(`could not read the PR's labels, so nothing is pushed: ${live.err}`);
+    const { labels } = JSON.parse(live.out);
+    dropStaleAck(slug, number, labels, { run: (args) => sh('gh', args) });
+    // Live labels count, so a class someone raised by hand is never written back lower.
+    const level = prRisk({
+        paths: git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean),
+        recorded: rows().find((x) => x.id === id).risk, labels,
+    });
+    update(id, { risk: level });
+    applyRiskLabel(r.pr, slug, level);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', 'origin', `HEAD:${pr.headRefName}`);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (push.code) throw new Error(`push failed: ${push.err}`);
-    // The push changed what the PR touches: re-class it, and drop an acknowledgement given to the old commit.
-    const level = maxRisk(riskClass(git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean)), rows().find((x) => x.id === id).risk);
-    update(id, { risk: level });
-    applyRiskLabel(r.pr, slug, level);
-    sh('gh', ['pr', 'edit', String(number), '-R', slug, '--remove-label', RISK_ACK_LABEL]);
 }
 const sha = git(r.worktree, 'rev-parse', '--short', 'HEAD').out;
 const label = { fix: `Fixed in ${sha}`, pushback: 'Pushing back', skip: 'Not in this PR' };

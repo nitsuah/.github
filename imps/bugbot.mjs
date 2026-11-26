@@ -18,10 +18,10 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseReview } from './lib.mjs';
+import { parseReview, maxRisk } from './lib.mjs';
 import { evaluateChecks, prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, riskMergeGate } from './checks.mjs';
 import { DEFAULTS } from './defaults.mjs';
-import { HOME, sh, chat } from './runner.mjs';
+import { HOME, sh, chat, rows } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
@@ -515,7 +515,9 @@ async function main() {
         const [slug, n] = parseTarget(target);
         const pr = loadPr(slug, n);
         const a = assess(pr);
-        const risk = prRisk({ ...fetchPrPaths(slug, n, { run: gh }), labels: pr.labels });
+        // The run record holds a brief's raised class even if the label was since removed.
+        const recorded = maxRisk(...rows().filter((x) => x.pr === pr.url).map((x) => x.risk));
+        const risk = prRisk({ ...fetchPrPaths(slug, n, { run: gh }), recorded, labels: pr.labels });
         const ownerAcked = ownerAcknowledged({ labels: pr.labels, events: fetchAckEvents(slug, n, { run: gh }), owners: [owner] });
         const riskGate = riskMergeGate({ risk, checksGreen: pr.checksGreen, openThreads: pr.openThreads, headSha: pr.headSha, bugbot: a.bugbot, crApprovedHead: pr.crApprovedHead, ownerAcked });
         const ok = pr.state === 'OPEN' && !pr.isDraft && a.gate.ok && riskGate.ok;

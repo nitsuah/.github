@@ -13,7 +13,7 @@ import {
     earnedTrustCount,
     labelWatchEnabled,
     fetchGithubSeedTrust,
-    riskMergeGate, prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged,
+    riskMergeGate, prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, dropStaleAck,
 } from './checks.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -361,4 +361,14 @@ test('ownerAcknowledged: the label counts only when an owner added it last', () 
     assert.equal(ack([by('nitsuah')], []), false, 'the label must still be there');
     assert.deepEqual(fetchAckEvents('o/r', 1, { run: () => ({ code: 1, out: '', err: 'x' }) }), []);
     assert.deepEqual(fetchAckEvents('o/r', 1, { run: () => ({ code: 0, out: 'labeled\tnitsuah\n' }) }), [{ event: 'labeled', actor: 'nitsuah' }]);
+});
+
+test('dropStaleAck removes a present risk-ack and throws when the removal fails', () => {
+    const calls = [];
+    const run = (code) => (args) => { calls.push(args); return { code, out: '', err: 'nope' }; };
+    assert.equal(dropStaleAck('o/r', 1, [{ name: 'risk:high' }], { run: run(1) }), false);
+    assert.equal(calls.length, 0, 'nothing to remove');
+    assert.equal(dropStaleAck('o/r', 1, [{ name: 'risk-ack' }], { run: run(0) }), true);
+    assert.deepEqual(calls[0], ['pr', 'edit', '1', '-R', 'o/r', '--remove-label', 'risk-ack']);
+    assert.throws(() => dropStaleAck('o/r', 1, ['risk-ack'], { run: run(1) }), /nothing is pushed/);
 });
