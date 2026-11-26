@@ -189,3 +189,10 @@ test('model fallback: no known-good returns null when all preferred benched', ()
     // No model has ever passed, all preferred are benched
     assert.equal(selectModel(['nemotron', 'recursive/flint']), null);
 });
+
+test('model fallback: a fresh served model with no record is selected', () => {
+    resetModelState();
+    assert.equal(selectModel(['nemotron', 'recursive/flint'], 'nemotron'), 'nemotron');
+    // a served model outside the candidate list is still ignored
+    assert.equal(selectModel(['recursive/flint'], 'nemotron'), null);
+});

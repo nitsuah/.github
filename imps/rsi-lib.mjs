@@ -96,10 +96,10 @@ export function recordModelGateResult(model, passed) {
  * @returns {string|null} Selected model or null if none available
  */
 export function selectModel(models = [], servedModel = null) {
-    // First pass: served model - can be retried if not benched (0-2 failures OK without pass)
+    // First pass: served model - used unless benched (a fresh model with no record is allowed)
     if (servedModel && models.includes(servedModel)) {
         const state = modelState.get(servedModel);
-        if (state && !state.benched) {
+        if (!state || !state.benched) {
             return servedModel;
         }
     }
