@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors } from './lib.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, fixRoundProgress, feedbackCutoff } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
 import { prRisk, dropStaleAck } from './checks.mjs';
 
@@ -104,6 +104,35 @@ const metrics = await runClaude({
 const decisions = parseFixDecisions(metrics.finalText, items);
 const committed = git(r.worktree, 'rev-parse', 'HEAD').out !== before;
 
+const record = {
+    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
+    committed, gate: null,
+    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
+};
+const progress = fixRoundProgress(items, decisions);
+const noThreadProgress = progress.hasThreads && progress.addressedThreads === 0;
+const unanswered = progress.unanswered.length > 0;
+if (noThreadProgress || unanswered) {
+    let rollbackFailure = null;
+    if (committed) {
+        const rollback = git(r.worktree, 'reset', '-q', '--hard', before);
+        if (rollback.code) rollbackFailure = (rollback.err || 'git reset failed').trim();
+    }
+    const reason = noThreadProgress
+        ? 'Fix round addressed zero review threads; CI-only fixes do not count as thread progress'
+        : `Fix round left feedback decisions unanswered: ${progress.unanswered.join(', ')}`;
+    record.at = feedbackCutoff({ previousSince: since, failed: true, completedAt: record.at });
+    if (!dry) {
+        sh('gh', ['label', 'create', 'imp:failed', '-R', slug, '-c', 'b60205', '-d', 'The imp did not pass the gate; needs a new brief or a human', '--force']);
+        const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:failed']);
+        const labelNote = labelResult.code === 0 ? 'Labelled imp:failed.' : `Failed to apply imp:failed label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} failed: ${reason}.${rollbackFailure ? ` Rollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
+    }
+    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, failure: reason, rollbackFailure, pushed: false }] }));
+    say('gate-fail', { reasons: [reason] });
+    process.exit(1);
+}
+
 // ── 4. gate, push, reply ─────────────────────────────────────────────────
 let gatePass = true;
 let reasons = [];
@@ -113,17 +142,16 @@ if (committed) {
     gatePass = !!g?.pass;
     reasons = g?.reasons || [];
 }
-const record = {
-    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
-    committed, gate: committed ? { pass: gatePass, reasons } : null,
-    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
-};
+record.gate = committed ? { pass: gatePass, reasons } : null;
 if (committed && !gatePass) {
-    git(r.worktree, 'reset', '-q', '--hard', before);
+    const rollback = git(r.worktree, 'reset', '-q', '--hard', before);
+    const rollbackFailure = rollback.code ? (rollback.err || 'git reset failed').trim() : null;
+    record.at = feedbackCutoff({ previousSince: since, failed: true, completedAt: record.at });
     sh('gh', ['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
-    sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:needs-human']);
-    sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} didn't pass the gate, so nothing was pushed:\n\n${reasons.map((x) => `- ${x}`).join('\n')}\n\nLabelled \`imp:needs-human\`.`]);
-    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, pushed: false }] }));
+    const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:needs-human']);
+    const labelNote = labelResult.code === 0 ? 'Labelled imp:needs-human.' : `Failed to apply imp:needs-human label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+    sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} didn't pass the gate, so nothing was pushed:\n\n${reasons.map((x) => `- ${x}`).join('\n')}${rollbackFailure ? `\nRollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
+    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, rollbackFailure, pushed: false }] }));
     say('gate-fail', { reasons });
     process.exit(1);
 }
