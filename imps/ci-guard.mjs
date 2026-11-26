@@ -8,7 +8,7 @@ import { isDocPath } from './lib.mjs';
 import { prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, RISK_ACK_LABEL } from './checks.mjs';
 
 export const NO_CHANGELOG_LABEL = 'no-changelog';
-const CHANGELOG = /^(docs\/)?CHANGELOG\.md$/i;
+const CHANGELOG = /^CHANGELOG\.md$/i;
 
 /** Why the PR fails the guard; an empty list passes. `error` is a failed file listing. */
 export function guardFailures({ paths = [], currentPaths = paths, error = null, labels = [], ackEvents = [], owners = [] } = {}) {
