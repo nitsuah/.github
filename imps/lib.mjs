@@ -1522,6 +1522,11 @@ export function shouldResolveFixDecision(decision) {
     return ['fix', 'skip'].includes(decision?.action);
 }
 
+/** Preserve the previous feedback cutoff when a fix round fails and is rolled back. */
+export function feedbackCutoff({ previousSince = null, failed = false, completedAt = null } = {}) {
+    return failed ? previousSince : completedAt;
+}
+
 /** Measure actual fix-round progress separately for review threads and CI feedback. */
 export function fixRoundProgress(items = [], decisions = []) {
     const byId = new Map(decisions.map((decision) => [decision.id, decision]));
