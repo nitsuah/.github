@@ -11,15 +11,17 @@ test('a docs-only PR passes with no CHANGELOG', () => {
     assert.deepEqual(check({ paths: ['README.md', 'docs/TASKS.md', 'docs/shot.png'] }), []);
 });
 
-test('a non-docs change needs a CHANGELOG line in either place, or the no-changelog label', () => {
+test('a non-docs change needs the root CHANGELOG.md line, or the no-changelog label', () => {
     for (const path of ['src/app.ts', 'tests/app.test.ts']) {
         assert.match(check({ paths: [path] })[0], /CHANGELOG/, path);
         assert.deepEqual(check({ paths: [path, 'CHANGELOG.md'] }), []);
-        assert.deepEqual(check({ paths: [path, 'docs/CHANGELOG.md'] }), []);
+        assert.match(check({ paths: [path, 'docs/CHANGELOG.md'] })[0], /CHANGELOG/);
         assert.deepEqual(check({ paths: [path], labels: ['no-changelog'] }), []);
     }
-    assert.match(check({ paths: ['src/app.ts', 'packages/x/CHANGELOG.md'] })[0], /CHANGELOG/, 'only the repo CHANGELOG counts');
-    assert.match(check({ paths: ['src/app.ts', 'CHANGELOG'] })[0], /CHANGELOG/, 'the .md file, not any file of that name');
+    assert.match(check({ paths: ['src/app.ts', 'packages/x/CHANGELOG.md'] })[0], /CHANGELOG/, 'only the repo root CHANGELOG counts');
+    assert.match(check({ paths: ['src/app.ts', 'CHANGELOG'] })[0], /CHANGELOG/, 'the .md file is required');
+    assert.match(check({ paths: ['src/app.ts', 'CHANGELOG.md'], currentPaths: ['src/app.ts', 'docs/archive.md'] })[0], /CHANGELOG/, 'renamed-away root CHANGELOG does not count');
+    assert.match(check({ paths: ['src/app.ts', 'CHANGELOG.md'], currentPaths: ['src/app.ts'] })[0], /CHANGELOG/, 'deleted root CHANGELOG does not count');
 });
 
 test('a PR labelled risk:high fails without an owner risk-ack', () => {
