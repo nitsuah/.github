@@ -15,7 +15,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -460,6 +460,12 @@ async function work(issue) {
             note(repo, number, `Imp run didn't start:\n\n\`\`\`\n${run.out.slice(-1500)}\n\`\`\``);
             return log({ event: 'run-error', repo, number, out: run.out.slice(-500) });
         }
+        // Which brief this run was given, so a later re-brief retires its failure from the repo cooldown.
+        try {
+            updateRun(id, { sourceBriefHash: issue.sourceBriefHash });
+        } catch (e) {
+            log({ event: 'ledger-note-error', repo, number, id, error: String(e.message).slice(0, 200) });
+        }
         if (ledgerRow(id)?.metrics?.end === 'spawn-failed') {
             // No claude binary here: nothing was tried on the issue, so put it back
             // and say nothing on it. `doctor.ps1` reports the missing binary.
@@ -775,7 +781,29 @@ for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
 const picked = [];
 // Read the ledger again: the fix sweep above may have added rounds.
 // readLedger, not readFileSync: a fresh machine has no runs.jsonl yet.
-const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha });
+// Live GitHub state for the failures behind a cooldown. A failed lookup returns null: the failure still counts.
+const evidenceCache = new Map();
+const mergedPrCache = new Map();
+const cooldownEvidence = (repo, issue) => {
+    const key = `${repo}#${issue}`;
+    if (!evidenceCache.has(key)) {
+        let found = null;
+        try {
+            const slug = `${o.owner}/${repo}`;
+            const data = ghJson(['issue', 'view', String(issue), '-R', slug, '--json', 'state,comments']);
+            const current = briefFromComments(data.comments || [], { allowedAuthors: briefAuthors });
+            found = { closed: data.state === 'CLOSED', mergedAt: null, briefHash: current ? briefSourceHash(current) : null };
+            // Looked up last: if it fails, what the issue itself showed still stands.
+            if (!mergedPrCache.has(repo)) mergedPrCache.set(repo, ghJson(['pr', 'list', '-R', slug, '--state', 'merged', '--limit', '100', '--json', 'body,mergedAt,closingIssuesReferences']));
+            found.mergedAt = coveringMergeAt(mergedPrCache.get(repo), issue, slug);
+        } catch (e) {
+            log({ event: 'cooldown-evidence-error', repo, number: issue, error: String(e.message).slice(0, 200) });
+        }
+        evidenceCache.set(key, found);
+    }
+    return evidenceCache.get(key);
+};
+const budget = loopBudget(readLedger(), Date.now(), { kit: PROVENANCE.kitSha, evidence: cooldownEvidence });
 // The other cycle's accepted-but-unstarted picks have no ledger row yet; count them so main and overflow
 // together never exceed the daily cap.
 budget.runsLast24h += pendingPicks(otherLock(), readLedger());
@@ -875,6 +903,7 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
         continue;
     }
     i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);
+    i.sourceBriefHash = briefSourceHash(brief);
     // A second attempt gets the first one's recorded failing output (see retry-feedback above).
     let briefText = withKind(brief, i.labels);
     if (process.env.IMPS_RETRY_FEEDBACK !== '0' && fails === 1) {
