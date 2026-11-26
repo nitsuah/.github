@@ -142,7 +142,7 @@ The brief MUST be valid front-matter + body:
   Use python:3.12-slim, golang:1.23 or rust:1 instead of node:22 when the repo is not Node (then drop the node_modules volume).
   Never use $, backticks, %, ! or backslashes inside the quotes. Add "npx tsc --noEmit &&" before the tests for TypeScript repos.
 - maxLines: at most ${maxLines}
-- allow: comma-separated repo-relative path prefixes the imp may touch (e.g. "src/lib/,tests/lib/,CHANGELOG.md"); no globs
+- allow: comma-separated repo-relative path prefixes the imp may touch (e.g. "src/lib/,tests/lib/"); no globs. Never include CHANGELOG.md or release-note files; the owner updates release notes after merge.
 - no inline # comments in the front matter; no depends: line unless the issue names an unmerged dependency
 - The imp must NOT touch .github/, lockfiles, .env files, or secrets
 - Body: "## Issue ${owner}/${repo}#${issue}", then "## The fix" (file, function and change) and "## Done when". Inner code blocks use ~~~ fences, never triple backticks.
