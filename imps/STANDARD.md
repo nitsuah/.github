@@ -116,6 +116,29 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 
 Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for that repo need a look before more model time goes there.
 
+## Risk controls
+
+Code decides these from the changed paths. No model's verdict lowers a class, and a failed lookup counts as high.
+
+| Class | Paths (`riskClass` in `lib.mjs`) |
+| --- | --- |
+| `high` | auth, session, OAuth/OIDC, token, JWT, crypto, secret and CSP words in a source path; payments, billing, Plaid, Stripe; `next.config.*`, `middleware.*`, headers files; migrations, `*.sql`, `schema.prisma`; `.github/workflows/` and actions; Dockerfile and compose; wrangler, Netlify, Vercel and Cloudflare config, `_headers`, `_redirects`; `.env*`; `CODEOWNERS`; anything under `security/`; a lockfile change with no manifest change |
+| `medium` | any other non-test source. Also Markdown that instructs an agent (`CLAUDE.md`, `AGENTS.md`, `SKILL.md`, `PREAMBLE.md`, `REVIEW.md`, `BUGBOT.md`, `FIX.md`), manifests, `requirements*.txt`, `.mdx`, `.svg` |
+| `low` | only tests, docs, CHANGELOG and TASKS. The word and headers-file rules skip these; the path rules (workflows, `security/`, Dockerfile and the like) do not |
+
+A brief's `risk:` front matter raises the class and never lowers it; an unknown value is `high`.
+
+| Control | Rule | Enforced by |
+| --- | --- | --- |
+| Record | the class is stored as `risk` on the run row (a later gate never lowers it) and the PR is labelled `risk:<class>`; demonguard and fix rounds re-apply it | `imp.mjs gate` / `pr`, `fix.mjs`, `demonguard.mjs` |
+| Named high paths | the gate fails a high-risk path unless `allow:` has that exact path, or a prefix that is itself sensitive (`src/auth/`, not `src/`). Commits only a human pushed are exempt, as for scope | `gate` |
+| Auto-merge | only `risk:low`, on top of the review, green-check and earned-trust rules. A missing class fails closed | `mayAutoMerge`, `assessPr` |
+| Merging `medium` | green CI, no open thread and a full-scope bugbot `approve` on the head commit (`comment` is not enough) | `bugbot.mjs merge-check` |
+| Merging `high` | never automatic. Labelled `imp:needs-human` unless CodeRabbit approved and bugbot approved the head; even then `merge-check` also needs `risk-ack`, last added by the owner | `imp.mjs pr`, `demonguard.mjs`, `merge-check` |
+| Acknowledgement | a fix-round push removes `risk-ack` | `fix.mjs` |
+
+**Every merge helper runs `node imps/bugbot.mjs merge-check <owner/repo#n>` first.** It exits 0 only when the review gate (§ Bugbot) and the table above both pass. It prints the head SHA: merge with `--match-head-commit <sha>`, and never with `--auto`. An `imp:needs-human` PR is skipped by the fix sweep and demonguard, so a high-risk one is finished by hand.
+
 ## Guardrails
 
 - **Clean environment.** The imp gets PATH and the 9router URL and key, nothing else. No Claude session tokens, no GitHub token.
@@ -136,7 +159,7 @@ Each cycle logs `runsLast24h` and `cooldown`. A cooldown means the briefs for th
   - **One PR per issue.** `prGuard` (run before claiming and again before pushing) refuses a closed issue, an open `imp/<n>-*` PR, a merged `imp/<n>-*` PR, or a merged PR whose body has the kit's own `Fixes #n` line. The sweep closes any open imp PR whose issue a merged imp PR already fixed and records `outcome: closed-duplicate`.
 - **Guardrail values are human-only.** The gate denies `imps/defaults.mjs` and any `imps-config.yml`, so an imp can never raise its own limits (stash#311).
   - **No merge without a bound head.** `mergeReady` requires the checks to be green *and* GitHub's `headRefOid` to equal the commit the runner pushed — a push between the poll and the merge leaves the PR open.
-- **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust**: `max(ledger clean merges, GitHub-seeded count of past merged imp PRs that passed checks and were not reverted)`. Seed query errors fail closed. Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
+- **Review + merge.** Imp PRs open labelled `imp`, saying `Fixes #n`. `review.mjs` posts a read-only COMMENT and a recomputed verdict. Auto-merge runs only for `risk:low` (§ Risk controls), and only when (1) verdict is `approve`, (2) **every** check from `gh pr checks` is finished and green for two stable polls (required *and* optional — never `gh pr merge --auto`, which ignores non-required reds; see stash#305), (3) the repo has **earned trust**: `max(ledger clean merges, GitHub-seeded count of past merged imp PRs that passed checks and were not reverted)`. Seed query errors fail closed. Otherwise the PR stays open for `fix.mjs` / a human. Kill switch: `IMPS_AUTO_MERGE=0`.
 
 - **Workflow approval is a human gate, not a check result.** If a check is `action_required` / waiting for approval and the run has **zero jobs**, do not classify it as pending, running, or green; do not repeatedly rerun it or merge. Record the exact PR head and run, then request maintainer approval/re-run. After approval, verify the resulting required checks complete successfully on that exact head. If approval is withheld, leave the PR open.
 
@@ -341,11 +364,11 @@ Before commit recovery and before its verification, the runner deletes untracked
 
 | Action | When | What it does |
 | --- | --- | --- |
-| `merge` | imp review `approve`, every check green, repo trust earned, no open bot threads | squash-merge with `--match-head-commit`; the same rules as `imp.mjs pr`, applied later |
+| `merge` | `risk:low`, imp review `approve`, every check green, repo trust earned, no open bot threads | squash-merge with `--match-head-commit`; the same rules as `imp.mjs pr`, applied later |
 | `rereview` | no imp review recorded | reruns `review.mjs` (9router) |
 | `dismiss-stale-review` | a bot's latest review is CHANGES_REQUESTED and none of its threads is open | dismisses it |
-| `owner` | all good but trust is not earned | logged in the `demonguard` event's `owner` list; never merged |
-| `needs-human` | red checks, conflicts or a non-approve review for over 24 h | labels the PR `imp:needs-human` |
+| `owner` | all good but trust is not earned, or the PR is not `risk:low` | logged in the `demonguard` event's `owner` list; never merged |
+| `needs-human` | red checks, conflicts or a non-approve review for over 24 h; at once for `risk:high` without both a CodeRabbit and a bugbot approval of the head | labels the PR `imp:needs-human` |
 | `wait` / `wait-fix` | too young (< 30 min), checks pending, or the fix-sweep is on it | nothing |
 
 Each tick logs one `demonguard` event with the counts. It never uses `--admin`. Kill switch: `IMPS_DEMONGUARD=0`; manual: `node imps/demonguard.mjs --dry-run`.

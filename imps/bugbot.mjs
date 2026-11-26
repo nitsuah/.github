@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseReview } from './lib.mjs';
-import { evaluateChecks } from './checks.mjs';
+import { evaluateChecks, prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, riskMergeGate } from './checks.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { HOME, sh, chat } from './runner.mjs';
 import {
@@ -500,7 +500,7 @@ async function main() {
     if (process.env.IMPS_BUGBOT === '0') {
         console.log('bugbot disabled (IMPS_BUGBOT=0)');
         // `status` promises exit 0 only when the gate passes; an unassessed PR must not read as passed.
-        if (cmd === 'status') process.exit(3);
+        if (cmd === 'status' || cmd === 'merge-check') process.exit(3);
         return;
     }
     if (cmd === 'status') {
@@ -509,6 +509,18 @@ async function main() {
         const a = assess(pr);
         console.log(JSON.stringify({ pr: pr.url, head: pr.headSha, coderabbit: a.crStatus, bugbot: a.bugbot, openThreads: pr.openThreads, checksGreen: pr.checksGreen, gate: a.gate, dismissCodeRabbit: a.dismiss }, null, 2));
         process.exit(a.gate.ok ? 0 : 3);
+    }
+    // The one check any merge helper runs: the review gate plus what the PR's risk class demands.
+    if (cmd === 'merge-check') {
+        const [slug, n] = parseTarget(target);
+        const pr = loadPr(slug, n);
+        const a = assess(pr);
+        const risk = prRisk({ ...fetchPrPaths(slug, n, { run: gh }), labels: pr.labels });
+        const ownerAcked = ownerAcknowledged({ labels: pr.labels, events: fetchAckEvents(slug, n, { run: gh }), owners: [owner] });
+        const riskGate = riskMergeGate({ risk, checksGreen: pr.checksGreen, openThreads: pr.openThreads, headSha: pr.headSha, bugbot: a.bugbot, crApprovedHead: pr.crApprovedHead, ownerAcked });
+        const ok = pr.state === 'OPEN' && !pr.isDraft && a.gate.ok && riskGate.ok;
+        console.log(JSON.stringify({ pr: pr.url, head: pr.headSha, ok, risk, reviewGate: a.gate, riskGate }, null, 2));
+        process.exit(ok ? 0 : 3);
     }
     // Without its own identity bugbot cannot tell its reviews from pasted markers, so none would ever count:
     // stop loudly instead of posting reviews that can never pass the gate.

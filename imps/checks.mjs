@@ -1,6 +1,7 @@
 // Pure helpers for CI check evaluation and earned-trust auto-merge.
 // No I/O (except callers that seed from gh). Tested in checks.test.mjs.
 import { DEFAULTS } from './defaults.mjs';
+import { RISK_LEVELS, maxRisk, riskClass } from './lib.mjs';
 
 const PENDING = new Set(['PENDING', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'EXPECTED']);
 const GREEN = new Set(['SUCCESS', 'SKIPPED', 'NEUTRAL', 'pass', 'skipping']);
@@ -151,14 +152,87 @@ export function bigUntestedDiff(gate) {
     return !(gate.files || []).some((p) => TEST_PATH.test(String(p)));
 }
 
+export const RISK_ACK_LABEL = 'risk-ack';
+export const NEEDS_HUMAN_LABEL = 'imp:needs-human';
+export const riskLabel = (level) => `risk:${level}`;
+const labelNames = (labels = []) => labels.map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+
+/**
+ * A PR's risk class from everything that may raise it: the paths GitHub reports,
+ * the class recorded on the run (which holds the brief's `risk:`) and any
+ * `risk:*` label. Unreadable paths are high, so a failed lookup never lowers it.
+ */
+export function prRisk({ paths = [], error = null, recorded = null, labels = [] } = {}) {
+    const labelled = labelNames(labels).filter((n) => n.startsWith('risk:')).map((n) => n.slice('risk:'.length));
+    return maxRisk(error ? 'high' : riskClass(paths), recorded, ...labelled);
+}
+
+// The files endpoint stops here, so a longer list cannot be proven complete.
+const PR_FILES_CAP = 3000;
+
+/** I/O: every path a PR touches, both names of a rename. `run(args)` invokes gh. */
+export function fetchPrPaths(slug, number, { run }) {
+    const r = run(['api', `repos/${slug}/pulls/${number}/files`, '--paginate', '--jq', '.[] | [.filename, .previous_filename // ""] | @tsv']);
+    if (r.code) return { paths: [], error: r.err || 'could not list PR files' };
+    const rows = String(r.out || '').split('\n').filter(Boolean);
+    if (!rows.length) return { paths: [], error: 'PR lists no files' };
+    if (rows.length >= PR_FILES_CAP) return { paths: [], error: `PR lists ${PR_FILES_CAP} or more files` };
+    return { paths: rows.flatMap((row) => row.split('\t')).map((p) => p.trim()).filter(Boolean), error: null };
+}
+
+/**
+ * Is `risk-ack` on the PR because an owner put it there? `events` is the label's
+ * timeline, oldest first: [{ event: 'labeled'|'unlabeled', actor }].
+ */
+export function ownerAcknowledged({ labels = [], events = [], owners = [] } = {}) {
+    if (!labelNames(labels).includes(RISK_ACK_LABEL)) return false;
+    const last = events.at(-1);
+    const allowed = owners.map((o) => String(o).toLowerCase());
+    return last?.event === 'labeled' && allowed.includes(String(last.actor || '').toLowerCase());
+}
+
+/** I/O: the `risk-ack` label timeline of a PR. A failed lookup returns [], so nothing counts as acknowledged. */
+export function fetchAckEvents(slug, number, { run }) {
+    const r = run(['api', `repos/${slug}/issues/${number}/timeline`, '--paginate', '--jq',
+        `.[] | select((.event == "labeled" or .event == "unlabeled") and .label.name == "${RISK_ACK_LABEL}") | [.event, .actor.login] | @tsv`]);
+    if (r.code) return [];
+    return String(r.out || '').split('\n').filter(Boolean).map((row) => {
+        const [event, actor] = row.split('\t');
+        return { event, actor: (actor || '').trim() };
+    });
+}
+
+/** Bugbot said `approve`, on this exact head, having seen the whole diff. `comment` is not approval. */
+export const bugbotApproved = (bugbot, headSha) => Boolean(headSha && bugbot && bugbot.sha === headSha && bugbot.verdict === 'approve' && bugbot.scope !== 'partial');
+
+/**
+ * What a risk class demands before any merge, by hand or by machine.
+ *   low     green checks and no open thread
+ *   medium  also a bugbot `approve` on the head
+ *   high    also a CodeRabbit approval of the head and an owner's `risk-ack`
+ * `needsHuman` marks a high-risk PR that lacks either review.
+ */
+export function riskMergeGate({ risk, checksGreen = false, openThreads = 0, headSha, bugbot = null, crApprovedHead = false, ownerAcked = false } = {}) {
+    const level = RISK_LEVELS.includes(risk) ? risk : 'high';
+    const approved = bugbotApproved(bugbot, headSha);
+    const needsHuman = level === 'high' && !(crApprovedHead && approved);
+    const no = (why) => ({ ok: false, needsHuman, reason: `risk:${level}: ${why}` });
+    if (!checksGreen) return no('checks are not green');
+    if (openThreads > 0) return no(`${openThreads} review thread(s) still open`);
+    if (level !== 'low' && !approved) return no('needs a bugbot approve verdict on the head commit');
+    if (level === 'high' && !crApprovedHead) return no('needs a CodeRabbit approval of the head commit');
+    if (level === 'high' && !ownerAcked) return no(`needs an owner to add the ${RISK_ACK_LABEL} label`);
+    return { ok: true, needsHuman, reason: `risk:${level} requirements met` };
+}
+
 /**
  * Should this run's PR be auto-merged?
- * Requires: review approve, all checks green, and earned trust for the repo.
+ * Requires: risk:low, review approve, all checks green, and earned trust for the repo.
  * Kill switch: IMPS_AUTO_MERGE=0.
  * Fail closed when githubSeedError is set (trust seed query failed).
  * A diff over BIG_DIFF_LINES that touches no test file is never auto-merged (a larger cap needs a tighter reviewer).
  *
- * @param {{ repo: string, reviewVerdict?: string, rows?: object[], trust?: number, githubCount?: number, githubSeedError?: string|null, autoMergeEnv?: string, gate?: { lines?: number, files?: string[] } }} opts
+ * @param {{ repo: string, reviewVerdict?: string, rows?: object[], trust?: number, githubCount?: number, githubSeedError?: string|null, autoMergeEnv?: string, gate?: { lines?: number, files?: string[] }, risk?: string }} opts
  */
 export function mayAutoMerge({
     repo,
@@ -169,9 +243,14 @@ export function mayAutoMerge({
     githubSeedError = null,
     autoMergeEnv = process.env.IMPS_AUTO_MERGE,
     gate = null,
+    risk = null,
 } = {}) {
     if (autoMergeEnv === '0' || autoMergeEnv === 'false') {
         return { ok: false, reason: 'auto-merge disabled (IMPS_AUTO_MERGE=0)' };
+    }
+    // Only tests-and-docs changes merge themselves. A missing class fails closed.
+    if (risk !== 'low') {
+        return { ok: false, reason: `risk:${risk || 'unknown'} is never auto-merged; leaving PR open` };
     }
     if (reviewVerdict !== 'approve') {
         return { ok: false, reason: `review was ${reviewVerdict || 'missing'}, not approve` };

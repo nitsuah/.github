@@ -36,12 +36,12 @@ Find the run: the row in `~/.imps/runs.jsonl` whose `pr` matches. Then `node $K/
 
 ## `/imp merge <pr>`: land a passing imp PR
 
-Don't wait on the user (they've delegated this). Merge when all of these hold: the gate passed, the imp review isn't `request_changes`, CI is green, no CodeRabbit block remains, and there's no `imp:needs-human` label.
+Don't wait on the user (they've delegated this). Merge when all of these hold: the gate passed, the imp review isn't `request_changes`, CI is green, no CodeRabbit block remains, and there's no `imp:needs-human` label. Then `node $K/bugbot.mjs merge-check <owner/repo#n>` must exit 0 (STANDARD.md § Risk controls): `risk:medium` needs a bugbot `approve` on the head (`bugbot.mjs review <owner/repo#n> --force`), and `risk:high` also needs a CodeRabbit approval and the owner's `risk-ack`. Never add `risk-ack` yourself.
 1. `gh pr ready`.
 2. In the run's worktree: fast-forward to the PR branch, merge `origin/main` in, and resolve CHANGELOG/TASKS conflicts by keeping both sides.
 3. Tick or strike the issue in the repo's TASKS.md (`~~#n …~~ (fixed in #PR)` inside shared bullets), and commit as `Austin J. Hardy <88273576+nitsuah@users.noreply.github.com>`.
 4. Push as separate commands: `git remote set-url --push origin "$(git remote get-url origin)"`, `git push origin HEAD`, `git remote set-url --push origin no_push`. **Confirm the push landed** (`git log origin/<branch> -1`) before merging; a failed push once merged two PRs without their TASKS strike.
-5. Check `git diff origin/main...HEAD --stat` includes TASKS and CHANGELOG, then `gh pr merge --squash --delete-branch` (add `--auto` if checks are pending).
+5. Check `git diff origin/main...HEAD --stat` includes TASKS and CHANGELOG, then wait for checks, run `merge-check` again and `gh pr merge --squash --delete-branch --match-head-commit <head it printed>`. Never `--auto`: it ignores the risk rules.
 
 ## `/imp status`
 

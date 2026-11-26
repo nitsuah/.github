@@ -18,8 +18,9 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULTS } from './defaults.mjs';
-import { evaluateChecks, cleanMergesForRepo, fetchGithubSeedTrust, mayAutoMerge } from './checks.mjs';
-import { HOME, rows, update, sh, kitSha, machineName } from './runner.mjs';
+import { evaluateChecks, cleanMergesForRepo, fetchGithubSeedTrust, mayAutoMerge, prRisk, fetchPrPaths, riskMergeGate } from './checks.mjs';
+import { bugbotVerdictFor, isCodeRabbit } from './bugbot-lib.mjs';
+import { HOME, rows, update, sh, kitSha, machineName, applyRiskLabel } from './runner.mjs';
 
 export const MIN_AGE_MS = 30 * 60_000;
 export const HUMAN_AFTER_MS = 24 * 3600_000;
@@ -37,8 +38,10 @@ export const HUMAN_AFTER_MS = 24 * 3600_000;
  * @param {boolean} [p.botChangesRequested]  a bot's latest review is CHANGES_REQUESTED
  * @param {number} [p.openThreads]      unresolved review threads
  */
-export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeState = '', checks = [], verdict, trust = { ok: false, reason: 'trust unknown' }, botChangesRequested = false, openThreads = 0, minAgeMs = MIN_AGE_MS, humanAfterMs = HUMAN_AFTER_MS, reviewedAt, lastCommitAt } = {}) {
+export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeState = '', checks = [], verdict, trust = { ok: false, reason: 'trust unknown' }, botChangesRequested = false, openThreads = 0, minAgeMs = MIN_AGE_MS, humanAfterMs = HUMAN_AFTER_MS, reviewedAt, lastCommitAt, risk, riskNeedsHuman = true } = {}) {
     if (state !== 'OPEN') return { action: 'none', reason: `PR is ${state.toLowerCase()}` };
+    // A high-risk PR without both reviews goes to a human at once, whatever its age. An unknown class is high.
+    if (!['low', 'medium'].includes(risk) && riskNeedsHuman) return { action: 'needs-human', reason: 'risk:high without both a CodeRabbit and a bugbot approval of the head' };
     const age = now - Date.parse(createdAt || '') || 0;
     const old = age >= humanAfterMs;
     if (age < minAgeMs) return { action: 'wait', reason: 'young; give review and CI time' };
@@ -52,6 +55,7 @@ export function assessPr({ now = Date.now(), createdAt, state = 'OPEN', mergeSta
     if (!ev.green) return old ? { action: 'needs-human', reason: `checks not green for over a day (${ev.reason})` } : { action: 'wait', reason: `checks: ${ev.reason}` };
     if (openThreads > 0) return { action: 'wait', reason: `${openThreads} review thread(s) still open` };
     if (botChangesRequested) return { action: 'wait', reason: 'a bot still requests changes' };
+    if (risk !== 'low') return { action: 'owner', reason: `risk:${risk || 'unknown'} is never auto-merged` };
     if (!trust.ok) return { action: 'owner', reason: trust.reason };
     return { action: 'merge', reason: trust.reason };
 }
@@ -93,6 +97,8 @@ async function main() {
     const ledger = rows();
     const open = ledger.filter((r) => r.pr && (!r.outcome || r.outcome === 'open')).slice(-30);
     const summary = { assessed: 0, actions: {}, owner: [], humans: [] };
+    const me = gh(['api', 'user', '--jq', '.login']);
+    const bugbotAuthors = [...(me.code ? [] : [me.out.trim()]), ...(cfg.bugbot?.trustedAuthors || [])].filter(Boolean);
     const out = [];
     for (const r of open) {
         const m = r.pr.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
@@ -114,8 +120,16 @@ async function main() {
             githubCount = seed.count;
             githubSeedError = seed.error;
         }
-        const trust = mayAutoMerge({ repo: r.repo, reviewVerdict: verdict, rows: ledger, trust: threshold, githubCount, githubSeedError, gate: r.gate });
-        const a = assessPr({ createdAt: pr.createdAt, state: pr.state, mergeState: pr.mergeStateStatus, checks, verdict, trust, botChangesRequested, openThreads, minAgeMs, reviewedAt: r.review?.at, lastCommitAt: (pr.commits || []).at(-1)?.committedDate });
+        // Classed from what GitHub says the PR touches now, not from what the run first pushed.
+        const risk = prRisk({ ...fetchPrPaths(slug, num, { run: gh }), recorded: r.risk, labels: pr.labels });
+        const reviews = (pr.reviews || []).map((v) => ({ author: v.author?.login || '', commit: v.commit?.oid, body: v.body, submittedAt: v.submittedAt, state: v.state }));
+        const { needsHuman: riskNeedsHuman } = riskMergeGate({
+            risk, headSha: pr.headRefOid, bugbot: bugbotVerdictFor(reviews, pr.headRefOid, { trustedAuthors: bugbotAuthors }),
+            crApprovedHead: reviews.some((v) => isCodeRabbit(v.author) && v.state === 'APPROVED' && v.commit === pr.headRefOid),
+        });
+        if (!dry && !(pr.labels || []).some((l) => l.name === `risk:${risk}`)) applyRiskLabel(r.pr, slug, risk);
+        const trust = mayAutoMerge({ repo: r.repo, reviewVerdict: verdict, rows: ledger, trust: threshold, githubCount, githubSeedError, gate: r.gate, risk });
+        const a = assessPr({ createdAt: pr.createdAt, state: pr.state, mergeState: pr.mergeStateStatus, checks, verdict, trust, botChangesRequested, openThreads, minAgeMs, reviewedAt: r.review?.at, lastCommitAt: (pr.commits || []).at(-1)?.committedDate, risk, riskNeedsHuman });
         summary.assessed++;
         summary.actions[a.action] = (summary.actions[a.action] || 0) + 1;
         const tag = `${r.repo}#${num}`;
@@ -137,6 +151,7 @@ async function main() {
             if (!merge.code) update(r.id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true, mergedBy: 'demonguard' });
             else out.push(`${tag} merge refused: ${String(merge.err).slice(0, 120)}`);
         } else if (a.action === 'needs-human') {
+            gh(['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
             gh(['pr', 'edit', r.pr, '--add-label', 'imp:needs-human']);
         }
     }

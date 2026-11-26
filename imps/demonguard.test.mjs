@@ -6,7 +6,7 @@ import { assessPr, botChangesRequestedIn, HUMAN_AFTER_MS, MIN_AGE_MS } from './d
 const NOW = Date.parse('2026-10-29T12:00:00Z');
 const ago = (ms) => new Date(NOW - ms).toISOString();
 const green = [{ name: 'ci', state: 'SUCCESS' }];
-const base = { now: NOW, createdAt: ago(2 * 3600_000), state: 'OPEN', mergeState: 'CLEAN', checks: green, verdict: 'approve', trust: { ok: true, reason: 'earned trust 3/3' } };
+const base = { now: NOW, createdAt: ago(2 * 3600_000), state: 'OPEN', mergeState: 'CLEAN', checks: green, verdict: 'approve', trust: { ok: true, reason: 'earned trust 3/3' }, risk: 'low', riskNeedsHuman: false };
 const act = (over) => assessPr({ ...base, ...over }).action;
 
 test('a PR that is closed, merged or too young is left alone', () => {
@@ -73,4 +73,12 @@ test('a PR changed after a non-approving review is re-reviewed instead of waitin
     assert.equal(act({ ...changed, lastCommitAt: ago(4 * 3600_000) }), 'wait-fix', 'no commit since the review: still waiting for the fix-sweep');
     assert.equal(act({ ...changed, reviewedAt: undefined }), 'wait-fix', 'unknown review time: old behaviour');
     assert.equal(act({ ...changed, verdict: 'approve' }), 'merge', 'an approving review is never re-run');
+});
+
+test('risk decides first: high without both reviews goes to a human at once, and only low merges', () => {
+    assert.equal(act({ risk: 'high', riskNeedsHuman: true, createdAt: ago(60_000) }), 'needs-human');
+    assert.equal(act({ risk: undefined, riskNeedsHuman: true }), 'needs-human', 'unknown risk is high');
+    assert.equal(act({ risk: 'high', riskNeedsHuman: false }), 'owner', 'both reviews in: still never auto-merged');
+    assert.equal(act({ risk: 'medium', riskNeedsHuman: false }), 'owner');
+    assert.equal(act({ risk: 'low', riskNeedsHuman: false }), 'merge');
 });

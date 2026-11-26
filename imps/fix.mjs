@@ -21,8 +21,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors } from './lib.mjs';
-import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, riskClass, maxRisk } from './lib.mjs';
+import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
+import { RISK_ACK_LABEL } from './checks.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -131,6 +132,11 @@ if (committed) {
     const push = git(r.worktree, 'push', '-q', 'origin', `HEAD:${pr.headRefName}`);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (push.code) throw new Error(`push failed: ${push.err}`);
+    // The push changed what the PR touches: re-class it, and drop an acknowledgement given to the old commit.
+    const level = maxRisk(riskClass(git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean)), rows().find((x) => x.id === id).risk);
+    update(id, { risk: level });
+    applyRiskLabel(r.pr, slug, level);
+    sh('gh', ['pr', 'edit', String(number), '-R', slug, '--remove-label', RISK_ACK_LABEL]);
 }
 const sha = git(r.worktree, 'rev-parse', '--short', 'HEAD').out;
 const label = { fix: `Fixed in ${sha}`, pushback: 'Pushing back', skip: 'Not in this PR' };
