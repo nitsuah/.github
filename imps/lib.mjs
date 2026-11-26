@@ -905,7 +905,7 @@ export function loopBudget(rows, now = Date.now(), { kit, evidence } = {}) {
 }
 
 /** Identity of an issue's brief as posted, before labels or retry feedback are added to it. */
-export const briefSourceHash = (brief) => createHash('sha1').update(String(brief).replace(/\r\n/g, '\n').trim()).digest('hex');
+export const briefSourceHash = (brief) => createHash('sha256').update(String(brief).replace(/\r\n/g, '\n').trim()).digest('hex');
 
 // Has this failed run stopped saying anything about its issue? Yes when the issue
 // is closed, a PR merged since the run started covers it, or its brief changed.

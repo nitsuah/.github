@@ -791,9 +791,11 @@ const cooldownEvidence = (repo, issue) => {
         try {
             const slug = `${o.owner}/${repo}`;
             const data = ghJson(['issue', 'view', String(issue), '-R', slug, '--json', 'state,comments']);
-            if (!mergedPrCache.has(repo)) mergedPrCache.set(repo, ghJson(['pr', 'list', '-R', slug, '--state', 'merged', '--limit', '100', '--json', 'body,mergedAt,closingIssuesReferences']));
             const current = briefFromComments(data.comments || [], { allowedAuthors: briefAuthors });
-            found = { closed: data.state === 'CLOSED', mergedAt: coveringMergeAt(mergedPrCache.get(repo), issue, slug), briefHash: current ? briefSourceHash(current) : null };
+            found = { closed: data.state === 'CLOSED', mergedAt: null, briefHash: current ? briefSourceHash(current) : null };
+            // Looked up last: if it fails, what the issue itself showed still stands.
+            if (!mergedPrCache.has(repo)) mergedPrCache.set(repo, ghJson(['pr', 'list', '-R', slug, '--state', 'merged', '--limit', '100', '--json', 'body,mergedAt,closingIssuesReferences']));
+            found.mergedAt = coveringMergeAt(mergedPrCache.get(repo), issue, slug);
         } catch (e) {
             log({ event: 'cooldown-evidence-error', repo, number: issue, error: String(e.message).slice(0, 200) });
         }
