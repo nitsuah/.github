@@ -2287,3 +2287,9 @@ test('gate fails a high-risk path that allow: did not name, and reports the clas
     assert.equal(gateFor(['src/a.ts'], ['src/'], { briefRisk: 'high' }).risk, 'high');
     assert.deepEqual(unnamed(gateFor(['src/auth.ts'], ['src/'], { humanOnlyPaths: ['src/auth.ts'] })), [], 'a human push is not the imp\u2019s doing');
 });
+
+test('feedbackItems never hands the risk guard to an imp', () => {
+    const failing = (name) => ({ name, state: 'FAILURE' });
+    const items = feedbackItems({ threads: [], comments: [], checks: ['guard / Risk guard', 'Risk guard', 'test', 'risk guard unit tests'].map(failing) });
+    assert.deepEqual(items.map((i) => i.id), ['ci:test', 'ci:risk guard unit tests'], 'only the guard job itself is skipped');
+});

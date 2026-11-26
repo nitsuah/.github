@@ -172,12 +172,14 @@ const PR_FILES_CAP = 3000;
 
 /** I/O: every path a PR touches, both names of a rename. `run(args)` invokes gh. */
 export function fetchPrPaths(slug, number, { run }) {
-    const r = run(['api', `repos/${slug}/pulls/${number}/files`, '--paginate', '--jq', '.[] | [.filename, .previous_filename // ""] | @tsv']);
-    if (r.code) return { paths: [], error: r.err || 'could not list PR files' };
-    const rows = String(r.out || '').split('\n').filter(Boolean);
-    if (!rows.length) return { paths: [], error: 'PR lists no files' };
-    if (rows.length >= PR_FILES_CAP) return { paths: [], error: `PR lists ${PR_FILES_CAP} or more files` };
-    return { paths: rows.flatMap((row) => row.split('\t')).map((p) => p.trim()).filter(Boolean), error: null };
+    const r = run(['api', `repos/${slug}/pulls/${number}/files`, '--paginate', '--jq', '.[] | [.filename, .previous_filename // "", .status] | @tsv']);
+    if (r.code) return { paths: [], currentPaths: [], error: r.err || 'could not list PR files' };
+    const rows = String(r.out || '').split('\n').filter(Boolean).map((row) => row.split('\t'));
+    if (!rows.length) return { paths: [], currentPaths: [], error: 'PR lists no files' };
+    if (rows.length >= PR_FILES_CAP) return { paths: [], currentPaths: [], error: `PR lists ${PR_FILES_CAP} or more files` };
+    const paths = rows.flatMap(([filename, previous]) => [filename, previous]).map((p) => p.trim()).filter(Boolean);
+    const currentPaths = rows.filter(([, , status]) => status !== 'removed').map(([filename]) => filename.trim()).filter(Boolean);
+    return { paths, currentPaths, error: null };
 }
 
 /**

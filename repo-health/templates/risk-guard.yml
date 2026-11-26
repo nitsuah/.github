@@ -1,0 +1,18 @@
+name: Risk guard
+
+# Copy to .github/workflows/risk-guard.yml and replace REPLACE_WITH_KIT_SHA with the current
+# nitsuah/.github main commit. No model. See nitsuah/.github imps/STANDARD.md, Risk controls.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    uses: nitsuah/.github/.github/workflows/risk-guard.yml@REPLACE_WITH_KIT_SHA # main
+    permissions:
+      contents: read
+      pull-requests: read
