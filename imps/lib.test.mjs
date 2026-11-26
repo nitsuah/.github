@@ -811,10 +811,10 @@ test('mergedByAgentCommitBody preserves commit headlines and unique coauthor tra
 test('formatMergedByAgentTrailer handles whitespace and empty input safely', () => {
     assert.equal(formatMergedByAgentTrailer('  build-box  '), 'Merged-by-agent: imp-build-box');
     assert.equal(formatMergedByAgentTrailer('\tci-runner\n'), 'Merged-by-agent: imp-ci-runner');
-    assert.equal(formatMergedByAgentTrailer(''), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer('   '), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer(null), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer(undefined), 'Merged-by-agent: imp-');
+    assert.equal(formatMergedByAgentTrailer(''), null);
+    assert.equal(formatMergedByAgentTrailer('   '), null);
+    assert.equal(formatMergedByAgentTrailer(null), null);
+    assert.equal(formatMergedByAgentTrailer(undefined), null);
 });
 
 test('commit-recovery failure blocks stale requeue until a newer claim exists', () => {
