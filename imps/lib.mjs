@@ -445,8 +445,8 @@ export function writeStreamJsonMessage(stream, message, state) {
 
 // The kit's own defaults and each repo's guardrail config are off limits: an
 // imp that can edit its own limits can widen the gate it is judged by (#57).
-const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i,
-    /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|mix\.lock|pubspec\.lock|podfile\.lock|gradle\.lockfile|packages\.lock\.json|package\.resolved|flake\.lock|deno\.lock)$/i,
+const LOCKFILE = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|mix\.lock|pubspec\.lock|podfile\.lock|gradle\.lockfile|packages\.lock\.json|package\.resolved|flake\.lock|deno\.lock)$/i;
+const DENY = [/^\.github\//, /(^|\/)\.env/, /(^|\/)secrets?\//i, LOCKFILE,
     /^imps\/defaults\.mjs$/, /(^|\/)imps-config\.ya?ml$/, /(^|\/)CODEOWNERS$/];
 
 /** True when the gate rejects this path for every brief, however `allow:` is written (so an allowlist entry that reaches it can never pass). */
@@ -494,6 +494,82 @@ export function verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty
                         ? 'new commit has no changes'
                         : 'required commit trailer missing or incorrect';
     return { pass, newCommit, exactlyOneCommit, clean, hasChanges, trailerValid: exactTrailer, reason };
+}
+
+// ── risk class ────────────────────────────────────────────────────────────
+// How much a change can hurt, decided from its paths alone. Merge rules key off
+// it (checks.mjs riskMergeGate), so no model's opinion can lower it.
+export const RISK_LEVELS = ['low', 'medium', 'high'];
+
+/** The highest of the given levels. Blank entries are ignored; an unknown word counts as high. */
+export function maxRisk(...levels) {
+    let top = 0;
+    for (const level of levels) {
+        const word = String(level ?? '').trim().toLowerCase();
+        if (!word) continue;
+        const rank = RISK_LEVELS.indexOf(word);
+        top = Math.max(top, rank < 0 ? RISK_LEVELS.length - 1 : rank);
+    }
+    return RISK_LEVELS[top];
+}
+
+// High wherever they sit, tests and docs included.
+const HIGH_ANYWHERE = [
+    [/(^|\/)security\//i, 'security/ directory'],
+    [/(^|\/)\.github\/(workflows|actions)\/|(^|\/)action\.ya?ml$/i, 'CI workflow or action'],
+    [/(^|\/)CODEOWNERS$/, 'CODEOWNERS'],
+    [/(^|\/)\.env(\.[\w.-]+)?$/i, 'environment file'],
+    [/(^|\/)(Dockerfile|Containerfile)(\.[\w.-]+)?$|\.dockerfile$/i, 'container build'],
+    [/(^|\/)(docker-)?compose([.-][\w.-]+)?\.ya?ml$/i, 'compose file'],
+    [/(^|\/)(wrangler[\w.-]*\.(toml|jsonc?)|netlify\.toml|vercel\.json|_headers|_redirects)$|(^|\/)[\w.-]*cloudflare[\w.-]*\.(toml|ya?ml|jsonc?)$/i, 'edge or deploy config'],
+    [/(^|\/)migrations?\/|\.sql$|(^|\/)schema\.prisma$/i, 'migration or SQL'],
+];
+// High in source files: a word of the path names a sensitive area.
+const HIGH_WORD = /^(auth|authn|authz|authentication|authorization|authenticate|authorize|sessions?|tokens?|jwt|crypto|cryptography|secrets?|payments?|billing|csp)$/;
+const HIGH_FRAGMENT = /oauth|oidc|nextauth|plaid|stripe/i;
+// Files that set response headers or CSP without saying so in a word of their own.
+const HEADER_FILE = /(^|\/)((security[-_.]?)?headers\.\w+|next\.config\.\w+|middleware\.[cm]?[jt]s)$/i;
+
+// Markdown that instructs an agent changes behaviour, so it is not "just docs".
+const AGENT_PROMPT = /(^|\/)(CLAUDE|AGENTS|SKILL|PREAMBLE|REVIEW|BUGBOT|FIX|copilot-instructions)\.md$/i;
+const DEPENDENCY_TXT = /(^|\/)(requirements|constraints)[\w.-]*\.txt$|(^|\/)requirements\/|(^|\/)CMakeLists\.txt$/i;
+
+/** Prose and pictures only. Anything that can execute, configure a build or steer an agent is not a doc. */
+export function isDocPath(path) {
+    if (AGENT_PROMPT.test(path)) return false;
+    if (/\.txt$/i.test(path)) return !DEPENDENCY_TXT.test(path);
+    return /\.(md|rst|png|jpe?g|gif|webp|ico|pdf)$/i.test(path) || /(^|\/)(LICENSE|NOTICE|CHANGELOG|TASKS|ROADMAP|README)$/.test(path);
+}
+
+/** Why this path alone makes a change high risk, or null. */
+export function highRiskReason(path) {
+    const hit = HIGH_ANYWHERE.find(([re]) => re.test(path));
+    if (hit) return hit[1];
+    if (TEST_PATH.test(path) || isDocPath(path)) return null;
+    if (HEADER_FILE.test(path)) return 'headers or CSP';
+    const words = String(path).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/);
+    return HIGH_FRAGMENT.test(path) || words.some((w) => HIGH_WORD.test(w)) ? 'auth, crypto, secrets or payments' : null;
+}
+
+const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|Gemfile|composer\.json|Pipfile|mix\.exs|pubspec\.yaml|Podfile|build\.gradle(\.kts)?|Package\.swift|deno\.jsonc?|flake\.nix|[\w.-]+\.csproj)$/i;
+
+/**
+ * `low` (tests and docs only), `medium` (other source) or `high` for a diff.
+ * A brief's `risk:` can raise the class, never lower it. No paths means the diff
+ * could not be read, which is high.
+ */
+export function riskClass(diffPaths = [], briefMeta = {}) {
+    const paths = diffPaths.filter(Boolean);
+    const lockOnly = paths.some((p) => LOCKFILE.test(p)) && !paths.some((p) => MANIFEST.test(p));
+    let found = 'low';
+    if (!paths.length || lockOnly || paths.some((p) => highRiskReason(p))) found = 'high';
+    else if (paths.some((p) => !TEST_PATH.test(p) && !isDocPath(p))) found = 'medium';
+    return maxRisk(found, briefMeta?.risk);
+}
+
+/** Did `allow:` name this high-risk path itself? An exact entry, or a prefix that is itself a sensitive area. */
+export function namedByAllow(path, allow = []) {
+    return allow.some((a) => a === path || (path.startsWith(a) && highRiskReason(a)));
 }
 
 // The pre-push gate. Deterministic: numstat lines from
@@ -547,7 +623,7 @@ export function humanOnlyPaths(pushedLog, localPaths = [], impAuthor = '9router 
 
 // humanOnlyPaths (optional, see above) are skipped by the scope check only.
 // Deny paths still apply to the whole diff.
-export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, humanOnlyPaths: humanOnly = [] }) {
+export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines = DEFAULTS.maxLines, maxTestLines = null, allow = [], bugfix = false, humanOnlyPaths: humanOnly = [], briefRisk = null }) {
     const parse = (s) => s
         .split('\n')
         .filter(Boolean)
@@ -568,6 +644,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
     for (const f of files) {
         if (DENY.some((re) => re.test(f.path)) || (!allow.length && KIT.test(f.path))) reasons.push(`denied path ${f.path}`);
         if (allow.length && !humanOnly.includes(f.path) &&!allow.some((p) => f.path.startsWith(p))) reasons.push(`outside scope ${f.path}`);
+        if (!humanOnly.includes(f.path) && highRiskReason(f.path) && !namedByAllow(f.path, allow))
+            reasons.push(`high-risk path ${f.path} (${highRiskReason(f.path)}) is not named in allow:`);
     }
     if (bugfix && files.length && files.every((f) => NON_CODE.test(f.path))) reasons.push('no code change (docs/screenshot-only diff) for a bug fix');
     // Written so a non-numeric maxLines (NaN) fails instead of disabling the check.
@@ -583,7 +661,8 @@ export function gate({ numstat, commits, testExit, dirty = false, diff, maxLines
         const markerPaths = findConflictMarkers(diff);
         for (const path of markerPaths) reasons.push(`unresolved conflict marker in ${path}`);
     }
-    return { pass: reasons.length === 0, reasons, lines, ...(split ? { codeLines, testLines } : {}), files: files.map((f) => f.path) };
+    const paths = files.map((f) => f.path);
+    return { pass: reasons.length === 0, reasons, lines, ...(split ? { codeLines, testLines } : {}), files: paths, risk: riskClass(paths, { risk: briefRisk }) };
 }
 
 /**

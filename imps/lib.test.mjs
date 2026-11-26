@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
-    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
+    feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
 
@@ -2147,4 +2147,72 @@ test('configNumber accepts non-negative numbers from config.json and falls back 
     assert.equal(configNumber({ cooldownMs: 0 }, 'cooldownMs', 5), 0);
     for (const bad of [undefined, null, 'x', '', -1, NaN, Infinity, true, {}]) assert.equal(configNumber({ dailyCap: bad }, 'dailyCap', 100), 100);
     assert.equal(configNumber(undefined, 'dailyCap', 100), 100);
+});
+
+const risk = (...paths) => riskClass(paths);
+
+test('riskClass high: every sensitive path rule', () => {
+    for (const path of [
+        'src/auth.ts', 'src/mcp-auth.ts', 'app/api/OAuthClient.ts', 'lib/oidc.py', 'lib/useSession.ts', 'src/tokens/refresh.js',
+        'src/crypto/hash.go', 'app/secrets.py', 'app/api/payments/route.ts', 'lib/plaidLink.ts', 'server/stripe-webhook.js', 'lib/billing.ts',
+        'db/migrations/001_init.py', 'queries/report.sql', 'prisma/schema.prisma',
+        '.github/workflows/ci.yml', 'templates/.github/workflows/x.yml', '.github/actions/setup/index.js', 'tools/action.yml',
+        'Dockerfile', 'config/Dockerfile.playwright', 'app.dockerfile', 'docker-compose.yml', 'compose.override.yaml',
+        'wrangler.toml', 'wrangler.jsonc', 'netlify.toml', 'vercel.json', 'public/_headers', 'public/_redirects', 'infra/cloudflare-tunnel.yml',
+        'next.config.mjs', 'src/middleware.ts', 'server/security-headers.js', 'lib/csp.ts',
+        '.env', 'api/.env.production', 'security/policy.md', 'tests/security/fixture.test.js', 'CODEOWNERS',
+    ]) assert.equal(risk(path), 'high', path);
+});
+
+test('riskClass medium: other source, and files that only look sensitive', () => {
+    for (const path of [
+        'src/app.ts', 'lib/author.ts', 'src/tokenizer.py', 'components/Authorship.tsx', 'src/compose.ts', 'package.json',
+        'requirements.txt', 'requirements/base.txt', 'docs/build.js', 'docs/config.yaml', 'assets/logo.svg', 'site/page.mdx',
+        'CLAUDE.md', 'imps/PREAMBLE.md', 'skills/imp/SKILL.md', 'tsconfig.json',
+    ]) assert.equal(risk(path), 'medium', path);
+    assert.equal(risk('docs/README.md', 'src/app.ts'), 'medium', 'the riskiest file decides');
+});
+
+test('riskClass low: tests, docs, CHANGELOG and TASKS only, even about sensitive code', () => {
+    assert.equal(risk('tests/auth.test.ts', 'src/session.spec.js', 'tests_playwright/oauth.py'), 'low');
+    assert.equal(risk('README.md', 'docs/CHANGELOG.md', 'TASKS.md', 'docs/auth-tokens.md', 'docs/shot.png', 'LICENSE', 'notes.txt'), 'low');
+});
+
+test('riskClass: lockfile-only dependency changes are high, with a manifest they are medium', () => {
+    assert.equal(risk('package-lock.json'), 'high');
+    assert.equal(risk('uv.lock', 'docs/CHANGELOG.md'), 'high');
+    assert.equal(risk('package.json', 'package-lock.json'), 'medium');
+});
+
+test('riskClass: a brief can raise the class, never lower it', () => {
+    assert.equal(riskClass(['README.md'], { risk: 'high' }), 'high');
+    assert.equal(riskClass(['README.md'], { risk: 'Medium' }), 'medium');
+    assert.equal(riskClass(['src/auth.ts'], { risk: 'low' }), 'high');
+    assert.equal(riskClass(['src/app.ts'], { risk: 'low' }), 'medium');
+    assert.equal(riskClass(['README.md'], { risk: 'hgih' }), 'high', 'an unknown word fails closed');
+    assert.equal(riskClass(['README.md'], { risk: '' }), 'low');
+    assert.equal(riskClass([]), 'high', 'no paths means the diff is unknown');
+    assert.equal(maxRisk(null, undefined), 'low');
+});
+
+const gateFor = (paths, allow, extra = {}) => gate({
+    numstat: paths.map((p) => `1\t0\t${p}`).join('\n'), commits: ['x\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>'], testExit: 0, allow, ...extra,
+});
+const unnamed = (g) => g.reasons.filter((r) => r.startsWith('high-risk path'));
+
+test('gate fails a high-risk path that allow: did not name, and reports the class', () => {
+    assert.equal(unnamed(gateFor(['src/auth.ts'], ['src/'])).length, 1);
+    assert.equal(gateFor(['src/auth.ts'], ['src/']).pass, false);
+    assert.equal(unnamed(gateFor(['src/auth.ts'], [])).length, 1, 'no allow list names nothing');
+    assert.equal(unnamed(gateFor(['Dockerfile.dev'], ['Dockerfile'])).length, 0, 'the prefix is itself a sensitive area');
+    for (const allow of ['src/auth.ts', 'src/auth/', 'src/auth']) {
+        const path = allow.endsWith('/') ? 'src/auth/login.ts' : 'src/auth.ts';
+        assert.deepEqual(unnamed(gateFor([path], [allow])), [], allow);
+    }
+    const named = gateFor(['src/auth.ts'], ['src/auth.ts']);
+    assert.equal(named.pass, true);
+    assert.equal(named.risk, 'high');
+    assert.equal(gateFor(['tests/auth.test.ts'], ['tests/']).risk, 'low');
+    assert.equal(gateFor(['src/a.ts'], ['src/'], { briefRisk: 'high' }).risk, 'high');
+    assert.deepEqual(unnamed(gateFor(['src/auth.ts'], ['src/'], { humanOnlyPaths: ['src/auth.ts'] })), [], 'a human push is not the imp\u2019s doing');
 });
