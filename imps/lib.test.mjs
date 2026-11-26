@@ -799,8 +799,8 @@ test('formatMergedByAgentTrailer produces correct trailer for normal machine nam
 
 test('mergedByAgentCommitBody preserves commit headlines and unique coauthor trailers', () => {
     const body = mergedByAgentCommitBody([
-        { commit: { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' } },
-        { commit: { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' } },
+        { messageHeadline: 'first change', messageBody: 'Details\nCo-Authored-By: Agent <agent@example.com>' },
+        { messageHeadline: 'second change', messageBody: 'Co-Authored-By: Agent <agent@example.com>\nCo-Authored-By: Human <human@example.com>' },
     ], 'build-box');
     assert.match(body, /\* first change/);
     assert.match(body, /\* second change/);
@@ -811,10 +811,10 @@ test('mergedByAgentCommitBody preserves commit headlines and unique coauthor tra
 test('formatMergedByAgentTrailer handles whitespace and empty input safely', () => {
     assert.equal(formatMergedByAgentTrailer('  build-box  '), 'Merged-by-agent: imp-build-box');
     assert.equal(formatMergedByAgentTrailer('\tci-runner\n'), 'Merged-by-agent: imp-ci-runner');
-    assert.equal(formatMergedByAgentTrailer(''), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer('   '), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer(null), 'Merged-by-agent: imp-');
-    assert.equal(formatMergedByAgentTrailer(undefined), 'Merged-by-agent: imp-');
+    assert.equal(formatMergedByAgentTrailer(''), null);
+    assert.equal(formatMergedByAgentTrailer('   '), null);
+    assert.equal(formatMergedByAgentTrailer(null), null);
+    assert.equal(formatMergedByAgentTrailer(undefined), null);
 });
 
 test('commit-recovery failure blocks stale requeue until a newer claim exists', () => {

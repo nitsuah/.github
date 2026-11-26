@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULTS } from './defaults.mjs';
-import { mergedByAgentCommitBody } from './lib.mjs';
+import { mergedByAgentCommitBody } from './merge-attribution.mjs';
 import { evaluateChecks, cleanMergesForRepo, fetchGithubSeedTrust, mayAutoMerge, prRisk, fetchPrPaths, riskMergeGate } from './checks.mjs';
 import { bugbotVerdictFor, isCodeRabbit } from './bugbot-lib.mjs';
 import { HOME, rows, update, sh, kitSha, machineName, applyRiskLabel } from './runner.mjs';
@@ -149,9 +149,12 @@ async function main() {
             sh(process.execPath, [fileURLToPath(new URL('./review.mjs', import.meta.url)), r.id]);
         } else if (a.action === 'merge') {
             const mergeBody = mergedByAgentCommitBody(pr.commits, machineName());
-            const merge = gh(['pr', 'merge', r.pr, '--squash', '--delete-branch', '--match-head-commit', pr.headRefOid, '--body', mergeBody]);
-            if (!merge.code) update(r.id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true, mergedBy: 'demonguard' });
-            else out.push(`${tag} merge refused: ${String(merge.err).slice(0, 120)}`);
+            if (!mergeBody) out.push(`${tag} merge refused: machine identity unavailable`);
+            else {
+                const merge = gh(['pr', 'merge', r.pr, '--squash', '--delete-branch', '--match-head-commit', pr.headRefOid, '--body', mergeBody]);
+                if (!merge.code) update(r.id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true, mergedBy: 'demonguard' });
+                else out.push(`${tag} merge refused: ${String(merge.err).slice(0, 120)}`);
+            }
         } else if (a.action === 'needs-human') {
             gh(['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
             gh(['pr', 'edit', r.pr, '--add-label', 'imp:needs-human']);
