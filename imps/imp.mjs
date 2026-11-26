@@ -744,7 +744,7 @@ function openPr(id) {
     const trailer = formatMergedByAgentTrailer(machineName());
     const mergeBody = [
         commitHeadlines.map((headline) => `* ${headline}`).join('\n'),
-        coAuthors.join('\\n'),
+        coAuthors.join('\n'),
         trailer,
     ].filter(Boolean).join('\n\n');
     const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
