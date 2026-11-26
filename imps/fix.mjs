@@ -125,7 +125,7 @@ if (noThreadProgress || unanswered) {
     if (!dry) {
         sh('gh', ['label', 'create', 'imp:failed', '-R', slug, '-c', 'b60205', '-d', 'The imp did not pass the gate; needs a new brief or a human', '--force']);
         const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:failed']);
-        const labelNote = labelResult.code === 0 ? 'Labelled `imp:failed`.' : `Failed to apply `imp:failed` label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+        const labelNote = labelResult.code === 0 ? 'Labelled imp:failed.' : `Failed to apply imp:failed label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
         sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} failed: ${reason}.${rollbackFailure ? ` Rollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
     }
     update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, failure: reason, rollbackFailure, pushed: false }] }));
@@ -149,7 +149,7 @@ if (committed && !gatePass) {
     record.at = feedbackCutoff({ previousSince: since, failed: true, completedAt: record.at });
     sh('gh', ['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
     const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:needs-human']);
-    const labelNote = labelResult.code === 0 ? 'Labelled `imp:needs-human`.' : `Failed to apply `imp:needs-human` label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+    const labelNote = labelResult.code === 0 ? 'Labelled imp:needs-human.' : `Failed to apply imp:needs-human label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
     sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} didn't pass the gate, so nothing was pushed:\n\n${reasons.map((x) => `- ${x}`).join('\n')}${rollbackFailure ? `\nRollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
     update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, rollbackFailure, pushed: false }] }));
     say('gate-fail', { reasons });
