@@ -421,3 +421,45 @@ test('decodeContents: keeps leading blank lines so line numbers stay exact', () 
         assert.equal(withoutSettled(rv, []).rv, rv);
     });
 }
+
+// ── evidence rule ──
+{
+    const { requireEvidence, diffLineSet } = await import('./bugbot-lib.mjs');
+    const diff = ['diff --git a/w.yml b/w.yml', '--- a/w.yml', '+++ b/w.yml', '@@ -1,2 +1,3 @@', ' concurrency:', '+  queue: max', '+  run: rm -rf "$DIR"'].join('\n');
+    const f = (severity, title, quote, detail = '') => ({ severity, file: 'w.yml', line: 2, title, quote, detail });
+
+    test('diffLineSet keeps added and context lines, not headers', () => {
+        const s = diffLineSet(diff);
+        assert.ok(s.has('queue: max'));
+        assert.ok(s.has('concurrency:'));
+        assert.ok(![...s].some((l) => l.includes('w.yml')));
+    });
+
+    test('requireEvidence keeps a quoted, concrete blocker', () => {
+        const rv = { verdict: 'request_changes', findings: [f('blocker', 'Deletes the wrong directory when DIR is empty', 'run: rm -rf "$DIR"')] };
+        const out = requireEvidence(rv, diff);
+        assert.equal(out.downgraded.length, 0);
+        assert.equal(out.rv.verdict, 'request_changes');
+    });
+
+    test('requireEvidence downgrades a blocker with no or a made-up quote', () => {
+        for (const q of ['', 'queue: forever']) {
+            const out = requireEvidence({ verdict: 'request_changes', findings: [f('major', 'Something breaks', q)] }, diff);
+            assert.equal(out.rv.findings[0].severity, 'minor');
+            assert.equal(out.rv.verdict, 'comment');
+            assert.match(out.downgraded[0].why, /no quoted/);
+        }
+    });
+
+    test('requireEvidence downgrades an existence claim even when quoted', () => {
+        const out = requireEvidence({ verdict: 'request_changes', findings: [f('blocker', "Invalid concurrency option 'queue: max'", '+  queue: max')] }, diff);
+        assert.equal(out.rv.findings[0].severity, 'minor');
+        assert.match(out.downgraded[0].why, /existence claim/);
+        assert.match(out.rv.findings[0].detail, /Downgraded from blocker/);
+    });
+
+    test('requireEvidence leaves minors and nits alone', () => {
+        const rv = { verdict: 'comment', findings: [f('minor', 'x', ''), f('nit', 'y', '')] };
+        assert.equal(requireEvidence(rv, diff).rv, rv);
+    });
+}

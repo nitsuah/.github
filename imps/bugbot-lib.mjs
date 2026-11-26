@@ -518,8 +518,50 @@ export function withoutSettled(rv, settled = []) {
     const dropped = [];
     const findings = rv.findings.filter((f) => (matchesSettled(f, settled) ? (dropped.push(f), false) : true));
     if (!dropped.length) return { rv, dropped };
+    return { rv: recount(rv, findings), dropped };
+}
+
+function recount(rv, findings) {
     const sev = ['blocker', 'major', 'minor', 'nit'];
     const counts = Object.fromEntries(sev.map((s) => [s, findings.filter((f) => f.severity === s).length]));
     const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
-    return { rv: { ...rv, findings, counts, verdict }, dropped };
+    return { ...rv, findings, counts, verdict };
+}
+
+// ── evidence rule ─────────────────────────────────────────────────────────
+// A blocker or major blocks the merge, so it must quote a line that is really
+// in the diff. "X is not a valid key / does not exist" claims come from the
+// model's possibly stale knowledge (vhs#208: a documented key called invalid
+// twice) and never block on their own.
+const EXISTENCE_CLAIM = /\b(invalid|not (a )?valid|unsupported|not supported|does not exist|doesn't exist|unknown (key|option|flag|property|field)|no such (key|option|flag|api|method)|not a recognized)\b/i;
+const squash = (s = '') => String(s).replace(/\s+/g, ' ').trim();
+
+/** Added and context lines of a unified diff, whitespace-squashed. Pure. */
+export function diffLineSet(diff = '') {
+    const out = new Set();
+    for (const l of String(diff).split('\n')) {
+        if (l.startsWith('+++') || l.startsWith('---')) continue;
+        if (l.startsWith('+') || l.startsWith(' ')) {
+            const t = squash(l.slice(1));
+            if (t) out.add(t);
+        }
+    }
+    return out;
+}
+
+/** Downgrade unproven blockers/majors to minor and recompute the verdict. Pure. */
+export function requireEvidence(rv, diff = '') {
+    if (!rv?.findings) return { rv, downgraded: [] };
+    const lines = diffLineSet(diff);
+    const downgraded = [];
+    const findings = rv.findings.map((f) => {
+        if (f.severity !== 'blocker' && f.severity !== 'major') return f;
+        const q = squash(f.quote).replace(/^[+ ]/, '').trim();
+        const quoted = q.length >= 6 && [...lines].some((l) => l.includes(q));
+        const why = !quoted ? 'no quoted diff line' : EXISTENCE_CLAIM.test(`${f.title} ${f.detail}`) ? 'existence claim without a reproduction' : null;
+        if (!why) return f;
+        downgraded.push({ ...f, why });
+        return { ...f, severity: 'minor', detail: `${f.detail}\n\n_Downgraded from ${f.severity}: ${why}._` };
+    });
+    return { rv: downgraded.length ? recount(rv, findings) : rv, downgraded };
 }

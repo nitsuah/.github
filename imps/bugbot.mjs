@@ -25,7 +25,7 @@ import { HOME, sh, chat, rows } from './runner.mjs';
 import {
     BUGBOT_DEFAULTS, STATUS_CONTEXT, codeRabbitStatus, bugbotVerdictFor, buildBugbotReview, shouldDismissCodeRabbit,
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
-    ACCEPTED_MARK, acceptedButOpen, settledFindings, withoutSettled, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
+    ACCEPTED_MARK, acceptedButOpen, settledFindings, withoutSettled, requireEvidence, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
     latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
 } from './bugbot-lib.mjs';
 
@@ -217,6 +217,9 @@ async function runReview(pr, reason) {
     const kept = withoutSettled(rv, settled);
     if (kept.dropped.length) log({ event: 'bugbot-settled-dropped', pr: pr.url, sha: pr.headSha, dropped: kept.dropped.map((f) => `${f.file}: ${f.title}`) });
     rv = kept.rv;
+    const proven = requireEvidence(rv, fullDiff);
+    if (proven.downgraded.length) log({ event: 'bugbot-downgraded', pr: pr.url, sha: pr.headSha, downgraded: proven.downgraded.map((f) => `${f.file}: ${f.title} (${f.why})`) });
+    rv = proven.rv;
     const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served, partial });
     let url = null;
     if (!o['dry-run']) {
