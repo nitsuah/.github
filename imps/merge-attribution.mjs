@@ -9,8 +9,8 @@ export function mergedByAgentCommitBody(commits, machine) {
     const trailer = formatMergedByAgentTrailer(machine);
     if (!trailer) return null;
     const rows = Array.isArray(commits) ? commits : [];
-    const headlines = rows.map((c) => String(c?.commit?.messageHeadline || '').trim()).filter(Boolean);
-    const coAuthors = [...new Set(rows.flatMap((c) => String(c?.commit?.messageBody || '')
+    const headlines = rows.map((c) => String(c?.messageHeadline || '').trim()).filter(Boolean);
+    const coAuthors = [...new Set(rows.flatMap((c) => String(c?.messageBody || '')
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter((line) => /^Co-Authored-By:/i.test(line))))];
