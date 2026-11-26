@@ -2233,5 +2233,5 @@ test('gate fails a high-risk path that allow: did not name, and reports the clas
 
 test('feedbackItems never hands the risk guard to an imp', () => {
     const items = feedbackItems({ threads: [], comments: [], checks: [{ name: 'guard / Risk guard', state: 'FAILURE' }, { name: 'test', state: 'FAILURE', log: 'boom' }] });
-    assert.deepEqual(items.filter((i) => i.kind === 'check').map((i) => i.author), ['test']);
+    assert.deepEqual(items.map((i) => i.id), ['ci:test']);
 });
