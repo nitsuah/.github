@@ -5,7 +5,32 @@ import { join } from 'node:path';
 import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
-    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary } from './lib.mjs';
+    closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress } from './lib.mjs';
+
+test('fixRoundProgress requires thread progress independently of CI feedback', () => {
+    const items = [
+        { id: 'thread-1', kind: 'thread' },
+        { id: 'ci:test', kind: 'ci' },
+    ];
+    const ciOnly = fixRoundProgress(items, [
+        { id: 'thread-1', kind: 'thread', action: 'pushback', reply: 'not valid' },
+        { id: 'ci:test', kind: 'ci', action: 'fix', reply: '' },
+    ]);
+    assert.equal(ciOnly.hasThreads, true);
+    assert.equal(ciOnly.addressedThreads, 0);
+    assert.deepEqual(ciOnly.unanswered, []);
+
+    const progressed = fixRoundProgress(items, [
+        { id: 'thread-1', kind: 'thread', action: 'skip', reply: 'This is cosmetic and not applicable.' },
+        { id: 'ci:test', kind: 'ci', action: 'fix', reply: '' },
+    ]);
+    assert.equal(progressed.addressedThreads, 1);
+
+    const unanswered = fixRoundProgress(items, [
+        { id: 'thread-1', kind: 'thread', action: null, reply: 'Not addressed' },
+    ]);
+    assert.deepEqual(unanswered.unanswered, ['thread-1', 'ci:test']);
+});
 
 test('parseBriefAuthors defaults safely and rejects an empty configured allowlist', () => {
     assert.deepEqual(parseBriefAuthors(undefined), ['nitsuah']);
