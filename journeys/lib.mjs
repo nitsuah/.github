@@ -276,3 +276,13 @@ export function coverage(records, features) {
         unknownTags: [...tagged].filter((t) => !known.has(t)),
     };
 }
+
+// The bot branch only holds BUGS.md and metrics, so a host that builds every
+// branch (Vercel) fails on each push. Vercel reads git.deploymentEnabled from
+// the commit being deployed, at the project's Root Directory, so the file has
+// to live on the bot branch itself, once per root that has a vercel.json.
+export function vercelSkipFiles(branch, roots = ['.']) {
+    const content = JSON.stringify({ git: { deploymentEnabled: { [branch]: false } } }, null, 2) + '\n';
+    const dirs = [...new Set(['.', ...roots].map((r) => r.replace(/^\.\/?|\/+$/g, '')))];
+    return dirs.map((d) => ({ path: d ? `${d}/vercel.json` : 'vercel.json', content }));
+}
