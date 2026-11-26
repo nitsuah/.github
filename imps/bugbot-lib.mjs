@@ -495,7 +495,7 @@ export function settledFindings(threads = []) {
         if (!answer || FIX_REPLY.test(String(answer.body || ''))) continue;
         const m = first.match(/\*\*(?:blocker|major|minor|nit)\*\*\s*·\s*(.+)/);
         if (!m) continue;
-        out.push({ path: t.path || '', title: m[1].trim(), reply: String(answer.body || '').replace(/<!--[^>]*-->/g, '').trim().slice(0, 500) });
+        out.push({ path: t.path || '', title: m[1].trim(), reply: String(answer.body || '').replace(/<!--[^>]*-->/g, '').replace(/[<>]/g, '').trim().slice(0, 500) });
     }
     return out;
 }
