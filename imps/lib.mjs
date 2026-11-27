@@ -198,17 +198,17 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     const targetRepo = String(expectedRepo).trim();
     const targetRepoName = targetRepo.split('/').at(-1);
     if (!meta.repo || String(meta.repo).trim() === '') {
-        return `Brief front matter is missing required \`repo\` field (e.g., \`repo: ${targetRepo}\`)`;
+        return 'Brief front matter is missing required `repo` field (e.g., `repo: ' + targetRepo + '`)';
     }
     if (!meta.issue || String(meta.issue).trim() === '') {
         return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
     }
     if (!briefRepoMatchesTarget(meta.repo, targetRepo)) {
         const example = targetRepo.includes('/') ? `${targetRepo} (or bare ${targetRepoName})` : targetRepo;
-        return `Brief `repo` (${meta.repo}) does not match the target repository (${targetRepo}); use `repo: ${example}``;
+        return 'Brief `repo` (' + meta.repo + ') does not match the target repository (' + targetRepo + '); use `repo: ' + example + '`. ';
     }
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
-        return `Brief `issue` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
+        return 'Brief `issue` (' + meta.issue + ') does not match the target issue number (' + expectedIssue + ')';
     }
     return dockerGitProblem(meta) || briefProblem(brief);
 }
