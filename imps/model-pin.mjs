@@ -32,9 +32,18 @@ export function allowedRequestModels({ pinned = [], expected = [] } = {}) {
  */
 export function orderRequestModels(models = [], rows = [], now = Date.now()) {
     resetModelState();
+    const gateAt = (r) => {
+        const completed = Date.parse(r.gate?.at || '');
+        return Number.isFinite(completed) ? completed : Date.parse(r.startedAt);
+    };
     const recent = rows
-        .filter((r) => models.includes(r.model) && typeof r.gate?.pass === 'boolean' && now - Date.parse(r.startedAt) < BENCH_WINDOW_MS)
-        .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+        .filter((r) => {
+            const at = gateAt(r);
+            const age = now - at;
+            return models.includes(r.model) && typeof r.gate?.pass === 'boolean'
+                && Number.isFinite(at) && age >= 0 && age < BENCH_WINDOW_MS;
+        })
+        .sort((a, b) => gateAt(a) - gateAt(b));
     for (const r of recent) recordModelGateResult(r.model, r.gate.pass);
     const pick = selectModel(models, models[0]) ?? models.find((m) => selectModel([m], m) === m) ?? models[0];
     resetModelState();
