@@ -1,35 +1,22 @@
+# Copy to .github/workflows/risk-guard.yml and replace REPLACE_WITH_KIT_SHA
+# with the full commit SHA of the merged nitsuah/.github kit. The reusable workflow
+# runs only trusted shared code and emits the required check using the dedicated
+# Nitsuah Risk Guard GitHub App identity.
 name: Risk guard
 
-# Copy to .github/workflows/risk-guard.yml and replace REPLACE_WITH_KIT_SHA with the current
-# nitsuah/.github main commit. No model. See nitsuah/.github imps/STANDARD.md, Risk controls.
-#
-# The pull_request job is only a bootstrap check: it is loaded from the PR branch and is not
-# trusted against workflow edits. After this file reaches the default branch, the pull_request_target
-# event loads the trusted base-branch version. Require "Trusted guard / Risk guard" in branch
-# protection; do not require the bootstrap check.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 permissions:
   contents: read
+  issues: read
   pull-requests: read
 
 jobs:
-  bootstrap:
-    name: Bootstrap (untrusted)
-    if: github.event_name == 'pull_request'
-    uses: nitsuah/.github/.github/workflows/risk-guard.yml@REPLACE_WITH_KIT_SHA # main
-    permissions:
-      contents: read
-      pull-requests: read
-
-  guard:
-    name: Trusted guard
-    if: github.event_name == 'pull_request_target'
-    uses: nitsuah/.github/.github/workflows/risk-guard.yml@REPLACE_WITH_KIT_SHA # main
-    permissions:
-      contents: read
-      pull-requests: read
+  trusted:
+    uses: nitsuah/.github/.github/workflows/risk-guard-app.yml@REPLACE_WITH_KIT_SHA
+    with:
+      app_client_id: ${{ vars.RISK_GUARD_APP_CLIENT_ID }}
+    secrets:
+      RISK_GUARD_APP_PRIVATE_KEY: ${{ secrets.RISK_GUARD_APP_PRIVATE_KEY }}
