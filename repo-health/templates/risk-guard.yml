@@ -1,7 +1,9 @@
 name: Risk guard
 
-# Copy to .github/workflows/risk-guard.yml and replace REPLACE_WITH_KIT_SHA with the current
-# nitsuah/.github main commit. No model. See nitsuah/.github imps/STANDARD.md, Risk controls.
+# LEGACY ONLY — do not copy or rely on this caller-owned check for enforcement.
+# A PR can add a same-named GitHub Actions job and spoof its required status.
+# Use the ruleset-bound .github/workflows/required-risk-guard.yml from nitsuah/.github instead.
+# Rollout and plan requirements: imps/RISK-GUARD.md. This file remains for migration history.
 #
 # The pull_request job is only a bootstrap check: it is loaded from the PR branch and is not
 # trusted against workflow edits. After this file reaches the default branch, the pull_request_target
