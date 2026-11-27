@@ -39,8 +39,8 @@ describe('App-backed risk-guard caller template', () => {
         assert.match(reusable, /GUARD_OWNERS: nitsuah/);
         assert.match(reusable, /CHECK_MODE: start/);
         assert.match(reusable, /CHECK_MODE: finish/);
-        assert.match(reusable, /Complete the dedicated App check run \\(success\\)[\s\S]*?CHECK_CONCLUSION: success/);
-        assert.match(reusable, /Complete the dedicated App check run \\(failure\\)[\s\S]*?CHECK_CONCLUSION: failure/);
+        assert.match(reusable, /Complete the dedicated App check run \(success\)[\s\S]*?CHECK_CONCLUSION: success/);
+        assert.match(reusable, /Complete the dedicated App check run \(failure\)[\s\S]*?CHECK_CONCLUSION: failure/);
         assert.doesNotMatch(reusable, /CHECK_CONCLUSION: \$\{\{/);
         assert.ok(reusable.includes('node .risk-guard-kit/imps/ci-guard.mjs'));
     });
