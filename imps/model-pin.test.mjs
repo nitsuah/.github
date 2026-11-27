@@ -9,7 +9,11 @@ const expected = ['nemotron', 'north', 'laguna', 'minimax', 'gpt', 'deepseek'];
 const A = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';
 const B = 'groq/openai/gpt-oss-120b';
 const now = Date.parse('2026-11-26T12:00:00Z');
-const row = (model, pass, minutesAgo) => ({ model, gate: { pass }, startedAt: new Date(now - minutesAgo * 60_000).toISOString() });
+const row = (model, pass, startedMinutesAgo, completedMinutesAgo = startedMinutesAgo) => ({
+    model,
+    gate: { pass, at: new Date(now - completedMinutesAgo * 60_000).toISOString() },
+    startedAt: new Date(now - startedMinutesAgo * 60_000).toISOString(),
+});
 
 test('an off-list model id, a combo and the free auto-router are never requestable', () => {
     const pinned = [A, 'openrouter/openrouter/free', 'openrouter/recursive/flint-v1.0:free', 'openrouter/particle-ai/particle-1:free', 'MAX', 'or-free', '', B, A];
@@ -23,11 +27,27 @@ test('every default pinned model passes the same audit the gate runs', () => {
     assert.equal(auditServed({ served: DEFAULTS.pinnedModels, expected }).ok, true);
 });
 
-test('three straight recent gate failures bench a model; older or broken streaks do not', () => {
+test('three straight recent gate failures bench a model; completion time orders overlapping runs', () => {
     assert.deepEqual(orderRequestModels([A, B], [], now), [A, B]);
     assert.deepEqual(orderRequestModels([A, B], [row(A, false, 30), row(A, false, 20), row(A, false, 10)], now), [B, A]);
     assert.deepEqual(orderRequestModels([A, B], [row(A, false, 30), row(A, true, 20), row(A, false, 10)], now), [A, B]);
     assert.deepEqual(orderRequestModels([A, B], [row(A, false, 500), row(A, false, 450), row(A, false, 400)], now), [A, B]);
+
+    // A later-started run passes first; three older-started runs then fail in completion order.
+    const overlapping = [row(A, true, 60, 30), row(A, false, 90, 20), row(A, false, 80, 10), row(A, false, 70, 5)];
+    assert.deepEqual(orderRequestModels([A, B], overlapping, now), [B, A]);
+
+    // The six-hour window is measured from gate completion, not run start.
+    const completedRecently = [row(A, false, 500, 30), row(A, false, 450, 20), row(A, false, 400, 10)];
+    assert.deepEqual(orderRequestModels([A, B], completedRecently, now), [B, A]);
+    const completedLongAgo = [row(A, false, 30, 500), row(A, false, 20, 450), row(A, false, 10, 400)];
+    assert.deepEqual(orderRequestModels([A, B], completedLongAgo, now), [A, B]);
+
+    // Legacy ledger rows without gate.at retain startedAt ordering/window behavior.
+    const legacy = [30, 20, 10].map((minutesAgo) => ({
+        model: A, gate: { pass: false }, startedAt: new Date(now - minutesAgo * 60_000).toISOString(),
+    }));
+    assert.deepEqual(orderRequestModels([A, B], legacy, now), [B, A]);
 });
 
 test('with every model benched the list is kept, never emptied', () => {
