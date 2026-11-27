@@ -23,6 +23,13 @@ test('repo metadata accepts bare and matching explicit Nitsuah-Labs names', () =
     assert.equal(validateBriefMeta(targetBrief('Nitsuah-Labs/nitsuah-io', 632), 'Nitsuah-Labs/nitsuah-io', 632), null);
 });
 
+test('repo metadata rejects an empty owner in a two-part slug', () => {
+    assert.match(
+        validateBriefMeta(targetBrief('/nitsuah-io', 632), 'Nitsuah-Labs/nitsuah-io', 632),
+        /does not match the target repository/,
+    );
+});
+
 test('repo metadata rejects a wrong explicit owner and shows the target slug', () => {
     const error = validateBriefMeta(
         targetBrief('nitsuah/nitsuah-io', 632),
