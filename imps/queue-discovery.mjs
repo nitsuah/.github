@@ -1,3 +1,5 @@
+import { repoRef } from './lib.mjs';
+
 /** CLI argument detection must preserve both parseArgs-supported --owner forms. */
 export function hasExplicitOwnerArg(args = []) {
     return args.some((arg) => arg === '--owner' || String(arg).startsWith('--owner='));
@@ -15,10 +17,11 @@ export function discoverQueueCandidates(queueRows = [], excludedRepos = [], only
         if (!owner || !repo || !Number.isInteger(number)) continue;
         const labels = (row.labels || []).map((label) => typeof label === 'string' ? label : label.name);
         const key = `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+        const ref = repoRef(repo, owner);
         if (excluded.has(`${owner}/${repo}`.toLowerCase())) continue;
         if (labels.some((label) => ['imp:working', 'imp:pr'].includes(label))) continue;
-        if (selected && !selected.has(`${repo}#${number}`)) continue;
-        if (!unique.has(key)) unique.set(key, { owner, repo, number, title: row.title, createdAt: row.createdAt, labels });
+        if (selected && !selected.has(`${ref}#${number}`)) continue;
+        if (!unique.has(key)) unique.set(key, { owner, repo: ref, number, title: row.title, createdAt: row.createdAt, labels });
     }
     return [...unique.values()];
 }

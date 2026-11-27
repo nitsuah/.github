@@ -12,13 +12,46 @@ export function resolveImpsCodeRoot({ env = process.env, home = homedir() } = {}
     return explicit || join(home, 'code');
 }
 
-export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists = () => false } = {}) {
-    if (typeof repo !== 'string' || !/^[A-Za-z0-9._-]+$/.test(repo) || repo === '.' || repo === '..') {
+// A repo "ref" is the identity used by the queue, locks, ledger and run ids: the bare name for
+// the default owner (so legacy ledger rows still match) and `Owner/name` for every other owner,
+// so same-named repos under two owners never share a lock, a ledger row or a checkout.
+export function repoRef(repo, owner, defaultOwner = DEFAULTS.owner) {
+    const o = String(owner || '').trim();
+    return !o || o.toLowerCase() === String(defaultOwner).toLowerCase() ? repo : `${o}/${repo}`;
+}
+
+/** The `owner/name` slug GitHub wants for a ref. */
+export function repoSlug(ref, defaultOwner = DEFAULTS.owner) {
+    return String(ref).includes('/') ? String(ref) : `${defaultOwner}/${ref}`;
+}
+
+/** A ref as one path or file name segment. */
+export const refDirName = (ref) => String(ref).replace('/', '__');
+
+const originOwnerName = (url) => (String(url || '').trim().match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/i)?.[1] || '').toLowerCase();
+
+/**
+ * Where a ref is checked out. `Owner/name` uses IMPS_CODE/Owner__name, or IMPS_CODE/name when
+ * that clone's origin is the same slug. A bare ref never uses a clone of another owner's repo.
+ */
+export function targetCheckout(repo, { codeRoot = resolveImpsCodeRoot(), exists = () => false, originOf = () => '' } = {}) {
+    const parts = typeof repo === 'string' ? repo.split('/') : [];
+    if (!parts.length || parts.length > 2 || parts.some((p) => !/^[A-Za-z0-9._-]+$/.test(p) || p === '.' || p === '..')) {
         throw new Error('Invalid repository name for checkout preflight');
     }
-    const path = join(codeRoot, repo);
+    const marker = (dir) => join(codeRoot, dir, '.git');
+    let dir = parts.at(-1);
+    let usable = true;
+    if (parts.length === 2) {
+        const flatIsSame = Boolean(exists(marker(dir))) && originOwnerName(originOf(join(codeRoot, dir))) === repo.toLowerCase();
+        if (exists(marker(refDirName(repo))) || !flatIsSame) dir = refDirName(repo);
+    } else if (exists(marker(dir))) {
+        const origin = originOwnerName(originOf(join(codeRoot, dir)));
+        usable = !origin || origin === repoSlug(repo).toLowerCase();
+    }
+    const path = join(codeRoot, dir);
     const gitMarker = join(path, '.git');
-    return { repo, path, gitMarker, checkedOut: Boolean(exists(gitMarker)) };
+    return { repo, path, gitMarker, checkedOut: usable && Boolean(exists(gitMarker)) };
 }
 
 /**
@@ -863,7 +896,9 @@ export function closesIssue(body = '', issue, slug = '') {
 // Returns [{ pr, mergedPr, key }].
 export function duplicateImpPrs(open = [], merged = []) {
     const refs = (x) => fixesRefs(x.body)
-        .filter((r) => !r.slug || (x.owner ? r.slug.toLowerCase() === `${x.owner}/${x.repo}`.toLowerCase() : r.slug.split('/')[1].toLowerCase() === String(x.repo).toLowerCase()))
+        .filter((r) => !r.slug || (x.owner || String(x.repo).includes('/')
+            ? r.slug.toLowerCase() === (String(x.repo).includes('/') ? String(x.repo) : `${x.owner}/${x.repo}`).toLowerCase()
+            : r.slug.split('/')[1].toLowerCase() === String(x.repo).toLowerCase()))
         .map((r) => r.n);
     const fixed = new Map();
     for (const m of merged) for (const n of refs(m)) fixed.set(`${m.repo}#${n}`, m);

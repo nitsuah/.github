@@ -15,9 +15,9 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim, repoRef, repoSlug, refDirName } from './lib.mjs';
 import { MODEL_MISMATCH_MARK } from './served-model.mjs';
-import { kitSha, machineName, lookupIssueGuard, update as updateRun } from './runner.mjs';
+import { kitSha, machineName, lookupIssueGuard, originUrl, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { hasExplicitOwnerArg, discoverQueueCandidates } from './queue-discovery.mjs';
 import { rsiDue } from './rsi-lib.mjs';
@@ -206,6 +206,11 @@ async function waitForRouter() {
     return { up: false, attempts: delays.length + 1, waitedMs: waited };
 }
 
+/** `gh search issues|prs` across every queue owner, each hit tagged with its ref; excluded repos are never swept. */
+const searchOwners = (kind, args) => queueOwners.flatMap((owner) => (ghJson(['search', kind, '--owner', owner, ...args]) || [])
+    .filter((hit) => !excludedRepos.has(`${owner}/${hit.repository.name}`.toLowerCase()))
+    .map((hit) => ({ ...hit, repo: repoRef(hit.repository.name, owner) })));
+
 // ── labels ────────────────────────────────────────────────────────────────
 const LABELS = {
     'imp:ready': ['0e8a16', 'Has an imp brief; the hourly dispatcher may take it'],
@@ -217,7 +222,7 @@ const LABELS = {
 const ensured = new Set();
 function relabel(repo, number, add, remove = []) {
     if (dry) return;
-    const slug = `${o.owner}/${repo}`;
+    const slug = repoSlug(repo);
     for (const l of [add, ...remove]) {
         if (ensured.has(`${slug}:${l}`)) continue;
         spawnSync('gh', ['label', 'create', l, '-R', slug, '-c', LABELS[l][0], '-d', LABELS[l][1], '--force'], { encoding: 'utf8', windowsHide: true });
@@ -225,7 +230,7 @@ function relabel(repo, number, add, remove = []) {
     }
     gh(['issue', 'edit', String(number), '-R', slug, '--add-label', add, ...remove.flatMap((l) => ['--remove-label', l])]);
 }
-const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
+const comment = (repo, number, body) => !dry && gh(['issue', 'comment', String(number), '-R', repoSlug(repo), '-b', body]);
 // Outcome comments are advisory: a GitHub blip while posting one must not throw out of work() after the
 // label already changed (fire#335 went imp:failed with no gate-fail event).
 const note = (repo, number, body) => {
@@ -251,9 +256,9 @@ function startClaimBeat(repo, number, id) {
         if (dry) return;
         const body = claimBody({ machine: MACHINE, id, startedAt, heartbeatAt: at, pr });
         try {
-            if (commentId) gh(['api', '-X', 'PATCH', `repos/${o.owner}/${repo}/issues/comments/${commentId}`, '-f', `body=${body}`]);
+            if (commentId) gh(['api', '-X', 'PATCH', `repos/${repoSlug(repo)}/issues/comments/${commentId}`, '-f', `body=${body}`]);
             else {
-                const out = gh(['issue', 'comment', String(number), '-R', `${o.owner}/${repo}`, '-b', body]);
+                const out = gh(['issue', 'comment', String(number), '-R', repoSlug(repo), '-b', body]);
                 commentId = (String(out).match(/issuecomment-(\d+)/) || [])[1] || null;
             }
         } catch (e) {
@@ -282,18 +287,18 @@ async function releaseStrandedClaims(ledgerRows) {
     const liveHere = new Set(ledgerRows.filter((r) => !r.endedAt).map((r) => `${r.repo}#${r.issue}`));
     let issues = [];
     try {
-        issues = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels']) || [];
+        issues = searchOwners('issues', ['--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number,labels']);
     } catch (e) {
         log({ event: 'label-cleanup-error', error: e.message });
     }
     for (const issue of issues) {
-        const repo = issue.repository.name;
+        const repo = issue.repo;
         const number = issue.number;
         const key = `${repo}#${number}`;
         const labels = issue.labels.map((l) => l.name);
         let comments = [];
         try {
-            comments = ghJson(['issue', 'view', String(number), '-R', `${o.owner}/${repo}`, '--json', 'comments']).comments || [];
+            comments = ghJson(['issue', 'view', String(number), '-R', repoSlug(repo), '--json', 'comments']).comments || [];
         } catch (e) {
             log({ event: 'label-cleanup-error', repo, number, error: e.message });
             continue;
@@ -338,21 +343,21 @@ async function clearStaleLabels() {
     for (const label of ['imp:ready', 'imp:working', 'imp:failed', 'imp:needs-human']) {
         let hits = [];
         try {
-            hits = ghJson(['search', 'issues', '--owner', o.owner, '--state', 'closed', '--label', label, '--limit', '100', '--json', 'repository,number,labels']) || [];
+            hits = searchOwners('issues', ['--state', 'closed', '--label', label, '--limit', '100', '--json', 'repository,number,labels']);
         } catch (e) {
             log({ event: 'label-cleanup-error', error: e.message });
             continue;
         }
-        for (const i of hits) seen.set(`${i.repository.name}#${i.number}`, i);
+        for (const i of hits) seen.set(`${i.repo}#${i.number}`, i);
     }
     for (const issue of seen.values()) {
-        const repo = issue.repository.name;
+        const repo = issue.repo;
         const stale = staleImpLabels(issue.labels);
         if (!stale.length) continue;
         // Log only what happened: a dry run names what it would remove, and a failed edit is not logged as a removal (friction #8).
         if (dry) { log({ event: 'label-cleanup', dry: true, repo, number: issue.number, removed: stale }); continue; }
         try {
-            gh(['issue', 'edit', String(issue.number), '-R', `${o.owner}/${repo}`, ...stale.flatMap((l) => ['--remove-label', l])]);
+            gh(['issue', 'edit', String(issue.number), '-R', repoSlug(repo), ...stale.flatMap((l) => ['--remove-label', l])]);
             log({ event: 'label-cleanup', dry: false, repo, number: issue.number, removed: stale });
             cleared.push(`${repo}#${issue.number}`);
         } catch (e) {
@@ -387,7 +392,7 @@ const CLAIM_BEAT_MS = 10 * 60_000;
 
 async function work(issue) {
     const { repo, number } = issue;
-    const slug = `${o.owner}/${repo}`;
+    const slug = repoSlug(repo);
     // One PR per issue: look again right before claiming. The issue may have been
     // fixed, or a PR opened, since the cycle picked it.
     let guard;
@@ -639,18 +644,16 @@ if (!overflow) {
     // feedback and red CI with a 9router fix round. fix.mjs pushes only to the
     // imp's own PR branch, stops after 2 rounds or on a conflict, and labels
     // imp:needs-human. A PR with nothing to act on costs only gh calls.
-    const openImpAll = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository'])
-        .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
+    const openImpAll = searchOwners('prs', ['--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'url,labels,body,number,repository']);
 
     // One PR per issue: close open imp PRs whose issue a merged imp PR already fixed.
     try {
-        const mergedImp = ghJson(['search', 'prs', '--owner', o.owner, '--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository'])
-            .map((p) => ({ ...p, repo: p.repository.name, owner: o.owner }));
+        const mergedImp = searchOwners('prs', ['--merged', '--label', 'imp', '--limit', '100', '--sort', 'updated', '--json', 'url,body,number,repository']);
         ledger = readLedger();
         for (const d of duplicateImpPrs(openImpAll, mergedImp)) {
             log({ event: 'duplicate-closed', pr: d.pr.url, mergedPr: d.mergedPr.url, issue: d.key });
             if (dry) continue;
-            const slug = `${o.owner}/${d.pr.repo}`;
+            const slug = repoSlug(d.pr.repo);
             gh(['pr', 'close', String(d.pr.number), '-R', slug, '--comment', `<!-- imp-duplicate -->
     Closing: ${d.key} was already fixed by merged PR ${d.mergedPr.url}. One PR per issue.`]);
             const row = ledger.find((r) => r.pr === d.pr.url);
@@ -733,14 +736,14 @@ if (!overflow) {
     }
 
     // Release stale imp:working claims whose heartbeat is older than 90 min (#69).
-    for (const w of ghJson(['search', 'issues', '--owner', o.owner, '--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
-        const slug = `${o.owner}/${w.repository.name}`;
+    for (const w of searchOwners('issues', ['--state', 'open', '--label', 'imp:working', '--limit', '100', '--json', 'repository,number'])) {
+        const slug = repoSlug(w.repo);
         const comments = ghJson(['issue', 'view', String(w.number), '-R', slug, '--json', 'comments']).comments;
         const c = comments.map((x) => parseClaim(x.body)).filter(Boolean).pop();
         if (!claimExpired(c, Date.now())) continue;
-        relabel(w.repository.name, w.number, 'imp:ready', ['imp:working']);
-        comment(w.repository.name, w.number, `Released: ${c.machine}'s claim had no heartbeat since ${c.heartbeatAt} (TTL 90 min). Back to imp:ready.`);
-        log({ event: 'claim-released', repo: w.repository.name, number: w.number, machine: c.machine });
+        relabel(w.repo, w.number, 'imp:ready', ['imp:working']);
+        comment(w.repo, w.number, `Released: ${c.machine}'s claim had no heartbeat since ${c.heartbeatAt} (TTL 90 min). Back to imp:ready.`);
+        log({ event: 'claim-released', repo: w.repo, number: w.number, machine: c.machine });
     }
 }
 
@@ -756,7 +759,7 @@ const codeRoot = resolveImpsCodeRoot();
 const queued = [];
 const missingCheckoutRepos = new Set();
 for (const i of queuedRaw) {
-    const target = targetCheckout(i.repo, { codeRoot, exists: existsSync });
+    const target = targetCheckout(i.repo, { codeRoot, exists: existsSync, originOf: originUrl });
     if (target.checkedOut) {
         queued.push(i);
         continue;
@@ -766,14 +769,13 @@ for (const i of queuedRaw) {
         missingCheckoutRepos.add(i.repo);
     }
 }
-const impPRs = ghJson(['search', 'prs', '--owner', o.owner, '--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'repository'])
-    .map((p) => p.repository.name);
+const impPRs = searchOwners('prs', ['--state', 'open', '--label', 'imp', '--limit', '100', '--json', 'repository']).map((p) => p.repo);
 
 const repos = {};
 for (const name of new Set([...queued.map((i) => i.repo), ...impPRs])) {
-    const prs = ghJson(['pr', 'list', '-R', `${o.owner}/${name}`, '--state', 'open', '--json', 'labels,author']);
-    const branch = gh(['api', `repos/${o.owner}/${name}`, '--jq', '.default_branch']);
-    const last = gh(['api', `repos/${o.owner}/${name}/commits/${branch}`, '--jq', '.commit.committer.date']);
+    const prs = ghJson(['pr', 'list', '-R', repoSlug(name), '--state', 'open', '--json', 'labels,author']);
+    const branch = gh(['api', `repos/${repoSlug(name)}`, '--jq', '.default_branch']);
+    const last = gh(['api', `repos/${repoSlug(name)}/commits/${branch}`, '--jq', '.commit.committer.date']);
     repos[name] = {
         impPRs: prs.filter((p) => p.labels.some((l) => l.name === 'imp')).length,
         humanPRs: prs.filter((p) => !p.labels.some((l) => l.name === 'imp') && !p.author.is_bot && !/\[bot\]|^app\//.test(p.author.login)).length,
@@ -792,7 +794,7 @@ const cooldownEvidence = (repo, issue) => {
     if (!evidenceCache.has(key)) {
         let found = null;
         try {
-            const slug = `${o.owner}/${repo}`;
+            const slug = repoSlug(repo);
             const data = ghJson(['issue', 'view', String(issue), '-R', slug, '--json', 'state,comments']);
             const current = briefFromComments(data.comments || [], { allowedAuthors: briefAuthors });
             found = { closed: data.state === 'CLOSED', mergedAt: null, briefHash: current ? briefSourceHash(current) : null };
@@ -830,7 +832,7 @@ function* pickable() {
     }
 }
 for (const i of pickable()) {
-    const issueData = ghJson(['issue', 'view', String(i.number), '-R', `${o.owner}/${i.repo}`, '--json', 'body,comments']);
+    const issueData = ghJson(['issue', 'view', String(i.number), '-R', repoSlug(i.repo), '--json', 'body,comments']);
     const comments = issueData.comments || [];
     if (isEpicIssueBody(issueData.body)) {
         log({ event: 'skip-epic', repo: i.repo, number: i.number });
@@ -841,7 +843,7 @@ for (const i of pickable()) {
         log({ event: 'no-brief', repo: i.repo, number: i.number });
         if (!dry && missingBriefRequiresUnready(i.labels, brief)) {
             try {
-                gh(['issue', 'edit', String(i.number), '-R', `${o.owner}/${i.repo}`, '--remove-label', 'imp:ready']);
+                gh(['issue', 'edit', String(i.number), '-R', repoSlug(i.repo), '--remove-label', 'imp:ready']);
                 log({ event: 'unready-no-brief', repo: i.repo, number: i.number });
             } catch (e) {
                 log({ event: 'label-cleanup-error', repo: i.repo, number: i.number, out: String(e.message).slice(-300) });
@@ -895,7 +897,7 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
         rows: readLedger(),
         isOpen: (dep) => {
             try {
-                return ghJson(['issue', 'view', String(dep.number), '-R', `${dep.owner || o.owner}/${dep.repo}`, '--json', 'state']).state === 'OPEN';
+                return ghJson(['issue', 'view', String(dep.number), '-R', dep.owner ? `${dep.owner}/${dep.repo}` : repoSlug(dep.repo), '--json', 'state']).state === 'OPEN';
             } catch {
                 return true;
             }
@@ -910,7 +912,7 @@ ${fails} imp attempts on this issue failed or were killed without a PR, so the d
         log({ event: 'skip-foreign-claim', repo: i.repo, number: i.number });
         continue;
     }
-    i.briefPath = join(HOME, 'briefs', `${i.repo}-${i.number}.md`);
+    i.briefPath = join(HOME, 'briefs', `${refDirName(i.repo)}-${i.number}.md`);
     i.sourceBriefHash = briefSourceHash(brief);
     // A second attempt gets the first one's recorded failing output (see retry-feedback above).
     let briefText = withKind(brief, i.labels);

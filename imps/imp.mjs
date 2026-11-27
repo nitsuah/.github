@@ -24,14 +24,14 @@ import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, targetCheckout, refDirName } from './lib.mjs';
 import { mergedByAgentCommitBody } from './merge-attribution.mjs';
 import { expectedFamilies, mismatchLine, auditServed, auditLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
 import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, quotaPool } from './model-pin.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped, ensureRiskLabel } from './runner.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped, ensureRiskLabel, originUrl } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -146,8 +146,9 @@ async function run() {
     const taken = new Set(rows().map((x) => x.id));
     let id = idBase;
     for (let n = 2; taken.has(id); n++) id = `${idBase}_${n}`;
-    const repoDir = join(CODE, meta.repo);
-    if (!existsSync(repoDir)) {
+    const target = targetCheckout(meta.repo, { codeRoot: CODE, exists: existsSync, originOf: originUrl });
+    const repoDir = target.path;
+    if (!target.checkedOut) {
         throw new Error(
             `missing checkout ${repoDir}. Setup clones ${DEFAULTS.kitRepo} into IMPS_CODE/${DEFAULTS.kitFolder}; ` +
             `other repos must live under IMPS_CODE alongside it.`,
@@ -158,7 +159,7 @@ async function run() {
     const fetch = sh('git', ['-C', repoDir, 'fetch', '-q', 'origin']);
     if (fetch.code) throw new Error(`git fetch failed: ${fetch.err}`);
     const base = meta.base || git(repoDir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').out.replace(/^origin\//, '') || 'main';
-    const wt = resolve(CODE, `${meta.repo}-${id}`);
+    const wt = resolve(CODE, `${refDirName(meta.repo)}-${id}`);
     const runSuffix = id.slice(4, 14);
     const branchExists = (candidate) => {
         const check = git(repoDir, 'show-ref', '--verify', '--quiet', `refs/heads/${candidate}`);

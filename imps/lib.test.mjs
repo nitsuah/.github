@@ -1778,7 +1778,7 @@ test('targetCheckout accepts a .git directory or worktree file marker and skips 
 });
 
 test('targetCheckout rejects path traversal and non-slug repository names', () => {
-    for (const repo of ['../outside', 'a/b', '.', '..', '']) {
+    for (const repo of ['../outside', 'a/b/c', 'a/..', '.', '..', '']) {
         assert.throws(() => targetCheckout(repo, { codeRoot: '/repos', exists: () => true }), /Invalid repository name/);
     }
 });

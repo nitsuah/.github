@@ -43,6 +43,8 @@ export function resolveVaultPrompt(config = {}, env = process.env) {
     return null;
 }
 
+export const originUrl = (dir) => git(dir, 'remote', 'get-url', 'origin').out;
+
 // ── ledger ────────────────────────────────────────────────────────────────
 export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
 
