@@ -1,3 +1,6 @@
+# LEGACY/ADVISORY ONLY: this workflow emits a GitHub Actions check, which a PR can spoof
+# with a same-named job. Do not require this check for enforcement. New adopters must use
+# risk-guard-app.yml and require the Nitsuah Risk Guard GitHub App check.
 name: Risk guard (reusable)
 
 # Fails a pull request that changes non-docs files without a CHANGELOG line (unless labelled
