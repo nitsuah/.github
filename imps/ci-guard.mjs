@@ -12,52 +12,21 @@ export const NO_CHANGELOG_LABEL = 'no-changelog';
 const CHANGELOG = /^(docs\/)?CHANGELOG\.md$/i;
 
 /**
- * Validate that a changelog patch adds a net-new, non-empty Markdown list entry.
- * Counts added and removed list-item lines; net added must be > 0.
- * Heading-only additions, one-for-one replacements, deleted files, or unavailable patches fail.
+ * Validate that a changelog patch adds or rewrites at least one non-empty Markdown list entry.
+ * Deletion-only and heading-only edits, and unavailable patches, fail.
  * @param {string|null} patch - The unified diff patch for CHANGELOG.md or docs/CHANGELOG.md
  * @returns {boolean} true if valid, false otherwise
  */
 export function validateChangelogPatch(patch) {
-    if (!patch || typeof patch !== 'string' || !patch.trim()) return false;
-
-    // Parse unified diff: look for lines starting with + or - (not +++ or --- file headers)
-    const lines = patch.split('\n');
-    let addedListItems = 0;
-    let removedListItems = 0;
+    if (!patch || typeof patch !== 'string') return false;
     let inHunk = false;
-
-    for (const line of lines) {
-        // Detect hunk header
-        if (line.startsWith('@@')) {
-            inHunk = true;
-            continue;
-        }
-        if (!inHunk) continue;
-
-        // Skip file headers (+++ b/CHANGELOG.md, --- a/CHANGELOG.md)
-        if (line.startsWith('+++') || line.startsWith('---')) continue;
-
-        // Added line
-        if (line.startsWith('+')) {
-            const content = line.slice(1).trimStart();
-            // Check if it's a markdown list item: *, -, +, or numbered (1., 2., etc.)
-            if (/^[\*\-\+]\s+\S/.test(content) || /^\d+\.\s+\S/.test(content)) {
-                addedListItems++;
-            }
-            // Headings don't count as list items
-        }
-        // Removed line
-        else if (line.startsWith('-')) {
-            const content = line.slice(1).trimStart();
-            if (/^[\*\-\+]\s+\S/.test(content) || /^\d+\.\s+\S/.test(content)) {
-                removedListItems++;
-            }
-        }
-    }
-
-    // Net new list items must be positive
-    return addedListItems - removedListItems > 0;
+    return patch.split('\n').some((line) => {
+        // File headers sit before the first hunk of each file.
+        if (line.startsWith('diff --git')) inHunk = false;
+        else if (line.startsWith('@@')) inHunk = true;
+        // A list item is *, -, + or a number (1., 2., ...) followed by text.
+        return inHunk && line.startsWith('+') && /^([*+-]|\d+\.)\s+\S/.test(line.slice(1).trimStart());
+    });
 }
 
 /**

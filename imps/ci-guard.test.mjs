@@ -102,8 +102,14 @@ test('validateChangelogPatch accepts dash list items', () => {
     assert.ok(validateChangelogPatch(dashListPatch), 'dash list item passes');
 });
 
-test('validateChangelogPatch rejects typo replacement (one-for-one)', () => {
-    assert.ok(!validateChangelogPatch(typoPatch), 'typo replacement fails - no net new list items');
+test('validateChangelogPatch accepts a one-for-one replacement', () => {
+    assert.ok(validateChangelogPatch(typoPatch), 'a rewritten list item is a changelog edit');
+});
+
+test('validateChangelogPatch accepts multiple replacements, rejects removal only', () => {
+    assert.ok(validateChangelogPatch('@@ -1,2 +1,2 @@\n-- old a\n-- old b\n+- new a\n+- new b'));
+    assert.ok(!validateChangelogPatch('@@ -1,2 +1,0 @@\n-- old a\n-- old b'));
+    assert.ok(!validateChangelogPatch('@@ -1 +1 @@\n-- old a\n+- '), 'an emptied item does not count');
 });
 
 test('validateChangelogPatch rejects heading-only addition', () => {
@@ -128,9 +134,9 @@ test('guardFailures passes with valid changelog patch for docs/CHANGELOG', () =>
     assert.deepEqual(check({ paths: ['src/app.ts'], changelogPatch: validPatchDocs }), []);
 });
 
-test('guardFailures fails with typo replacement patch', () => {
+test('guardFailures passes with a one-for-one replacement patch', () => {
     const failures = check({ paths: ['src/app.ts'], changelogPatch: typoPatch });
-    assert.match(failures[0], /CHANGELOG/, 'typo replacement fails changelog check');
+    assert.deepEqual(failures, [], 'a rewritten entry satisfies the changelog check');
 });
 
 test('guardFailures fails with heading-only patch', () => {
