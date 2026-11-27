@@ -920,7 +920,8 @@ export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
         && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && !r.infra
         // A run that was retried and its retry are one attempt: only the retry counts.
-        && r.metrics?.end !== 'spawn-failed' && !r.retriedBy && Date.parse(r.startedAt) >= sinceMs);
+        && r.metrics?.end !== 'spawn-failed' && !r.retriedBy
+        && (!r.retryOf || typeof r.gate?.pass === 'boolean') && Date.parse(r.startedAt) >= sinceMs);
     // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
     return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
 }
