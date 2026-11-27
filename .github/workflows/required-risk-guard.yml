@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out this trusted workflow revision
-        uses: actions/checkout@3d3c42a5a5f8b4b9c4f2c1f1e9b9b4d9f3f0f3f1 # pinned below by CI validation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nitsuah/.github
           ref: ${{ github.workflow_sha }}
