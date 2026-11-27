@@ -12,6 +12,7 @@ test('required risk guard is a ruleset-owned pull_request workflow', () => {
 });
 
 test('workflow is read-only and evaluates PR metadata without checking out PR code', () => {
+    assert.match(workflow, /if: github\\.repository != 'nitsuah\\/\\.github'/);
     assert.match(workflow, /permissions:\n  contents: read\n  pull-requests: read/);
     assert.match(workflow, /repository: nitsuah\/\.github/);
     assert.match(workflow, /ref: \$\{\{ github\.workflow_sha \}\}/);
