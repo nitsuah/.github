@@ -5,7 +5,12 @@ import fs from 'node:fs';
 const templatePath = 'repo-health/templates/risk-guard.yml';
 const content = fs.readFileSync(templatePath, 'utf8').replace(/\r/g, '');
 
-describe('risk-guard.yml template', () => {
+describe('legacy risk-guard caller template', () => {
+  test('warns that this caller-owned check is not an enforcement boundary', () => {
+    assert.match(content, /LEGACY ONLY/);
+    assert.match(content, /same-named GitHub Actions job/);
+    assert.match(content, /required-risk-guard\\.yml/);
+  });
   test('uses pull_request_target trigger', () => {
     assert.match(content, /on:[\s\S]*?pull_request_target:/, 'missing pull_request_target trigger');
   });
