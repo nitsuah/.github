@@ -13,6 +13,11 @@ export function isComboModel(id) {
     return !String(id || '').includes('/');
 }
 
+/** A pinned id is its own quota pool, so the id reserved is the id the run launches; a combo uses `pool`. */
+export function quotaPool(model, pool) {
+    return isComboModel(model) ? pool : { prefer: [], fallback: [model] };
+}
+
 /** The only ids a pinned run may request. No expected families means nothing can be vouched for. */
 export function allowedRequestModels({ pinned = [], expected = [] } = {}) {
     const families = expected.map(modelFamily).filter(Boolean);

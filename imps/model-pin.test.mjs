@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv } from './model-pin.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv, quotaPool } from './model-pin.mjs';
+import { readFileSync } from 'node:fs';
 import { auditServed } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
@@ -43,6 +44,13 @@ test('probeCandidates takes the first reachable match, else unreachable, else th
     assert.equal((await probeCandidates([A, B], {}, probe({ [A]: down, [B]: match }))).model, B);
     assert.equal((await probeCandidates([A, B], {}, probe({ [A]: bad, [B]: down }))).model, B);
     assert.equal((await probeCandidates([A, B], {}, probe({ [A]: bad, [B]: bad }))).ok, false);
+});
+
+test('the pinned id is what gets reserved and launched, in the run and in commit recovery', () => {
+    const combo = { prefer: [], fallback: ['MAX'] };
+    assert.deepEqual(quotaPool(A, combo).fallback, [A]);
+    assert.equal(quotaPool('MAX', combo), combo);
+    assert.doesNotMatch(readFileSync(new URL('./imp.mjs', import.meta.url), 'utf8'), /reserveQuota\(MODEL_POOL/);
 });
 
 test('background model names are pinned for a concrete id and untouched for a combo', () => {

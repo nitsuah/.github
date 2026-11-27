@@ -26,8 +26,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
 import { mergedByAgentCommitBody } from './merge-attribution.mjs';
-import { expectedFamilies, mismatchLine, auditServed, auditLine } from './served-model.mjs';
-import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates } from './model-pin.mjs';
+import { expectedFamilies, mismatchLine, auditServed, auditLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, quotaPool } from './model-pin.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
@@ -117,9 +117,15 @@ async function run() {
     const expected = expectedFamilies(cfg, process.env);
     if (!scripted && expected.length) {
         const router = resolveRouter();
-        const pinned = isComboModel(o.model) && cfg.pinModels !== false
+        const pinning = isComboModel(o.model) && cfg.pinModels !== false;
+        const pinned = pinning
             ? orderRequestModels(allowedRequestModels({ pinned: cfg.pinnedModels ?? DEFAULTS.pinnedModels, expected }), rows())
             : [];
+        // Never fall back to the combo while pinning: nothing eligible stops the run.
+        if (pinning && !pinned.length) {
+            console.error(`${MODEL_MISMATCH_MARK}: no pinned model is in expected ${expected.join('/')}; add one to pinnedModels or set "pinModels": false`);
+            process.exit(1);
+        }
         const probe = await probeCandidates(pinned.length ? pinned : [o.model], { baseUrl: router.baseUrl, key: router.key, expected });
         if (!probe.ok) {
             console.error(mismatchLine(probe));
@@ -129,7 +135,7 @@ async function run() {
         console.log(`served-model probe: ${probe.verdict} for ${o.model}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
     }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
-    const chosenModel = scripted ? 'none (script)' : reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
+    const chosenModel = scripted ? 'none (script)' : reserveQuota(quotaPool(o.model, MODEL_POOL), o.modelStrategy || 'fallback');
     if (!chosenModel) {
         console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
@@ -410,7 +416,7 @@ async function runGate(id) {
         commitRecovery = claim.row.commitRecovery;
         const claimedAt = claim.claimedAt;
         const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
-        const recoveryModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
+        const recoveryModel = reserveQuota(quotaPool(r.model, MODEL_POOL), o.modelStrategy || 'fallback');
         const recoveryTranscript = join(HOME, 'runs', id + '-commit-recovery.jsonl');
         const allow = (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
         let recoveryMetrics = null;
