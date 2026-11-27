@@ -10,6 +10,7 @@ import {
     isPrShaped,
     isQuietRepo,
     lintBrief,
+    fenceFrontMatter,
     alreadyGroomed,
     DRAFT_MARK,
     NEEDS_BRIEF_LABEL,
@@ -245,4 +246,21 @@ test('clipLines keeps whole lines and marks what it dropped', async () => {
         for (const l of body) assert.match(l, /^src\/dir\d+\/file\d+\.js$/);
         assert.match(c, /more lines\)$/);
     }
+});
+
+test('fenceFrontMatter wraps an unfenced leading key run so lintBrief sees the fields', () => {
+    const raw = 'repo: vhs\nissue: 244\ntest: docker run --rm img sh -c "npm test"\nmaxLines: 80\nallow: src/,tests/\n\n## Issue nitsuah/vhs#244\n## The fix\nx';
+    const fenced = fenceFrontMatter(raw);
+    assert.ok(fenced.startsWith('---\nrepo: vhs\n'));
+    assert.match(fenced, /allow: src\/,tests\/\n---\n\n## Issue/);
+    assert.equal(lintBrief(fenced, 180).ok, true);
+    assert.equal(lintBrief(raw, 180).ok, false); // the failure groom.log showed
+});
+
+test('fenceFrontMatter drops a lone closing fence and leaves good or non-brief text alone', () => {
+    assert.equal(fenceFrontMatter('repo: a\nissue: 1\n---\nbody'), '---\nrepo: a\nissue: 1\n---\nbody');
+    const good = '---\nrepo: a\nissue: 1\n---\nbody';
+    assert.equal(fenceFrontMatter(good), good);
+    assert.equal(fenceFrontMatter('Here is the brief:\nrepo: a'), 'Here is the brief:\nrepo: a');
+    assert.equal(fenceFrontMatter('repo: a\n\nbody'), 'repo: a\n\nbody'); // a single key is not a header
 });

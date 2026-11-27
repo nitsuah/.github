@@ -189,13 +189,31 @@ Output ONLY the brief as a fenced markdown block. No explanation.`;
             const text = (data.content || []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
             // Greedy to the last fence, so an inner ``` block cannot truncate the brief; brieflint then rejects it.
             const m = text.match(/```(?:markdown|md)?\n([\s\S]*)\n```/);
-            return (m ? m[1] : text).trim();
+            return fenceFrontMatter((m ? m[1] : text).trim());
         } catch (e) {
             lastErr = e;
             if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
         }
     }
     throw lastErr;
+}
+
+/**
+ * Fallback-router models often drop the `---` lines and start straight with `repo: x`
+ * (groom.log 2026-11-27: vhs#244, kryptos#353, .github#414 all linted "missing test, allow,
+ * maxLines" with every field present). Wrap the leading `key: value` run in front-matter fences.
+ * Text that already starts with `---`, or doesn't start with a `repo:` line, is returned unchanged.
+ */
+export function fenceFrontMatter(text = '') {
+    const s = String(text).replace(/^﻿/, '');
+    if (/^---\r?\n/.test(s) || !/^repo:\s*\S/.test(s)) return s;
+    const lines = s.split(/\r?\n/);
+    let i = 0;
+    while (i < lines.length && /^\w+:\s*\S/.test(lines[i])) i++;
+    if (i < 2) return s;
+    const rest = lines.slice(i);
+    if (rest[0] === '---') rest.shift(); // a closing fence with no opening one
+    return ['---', ...lines.slice(0, i), '---', ...rest].join('\n');
 }
 
 /** Lint a brief: validate required fields, scope, size. Returns { ok, errors, briefMeta }. */
