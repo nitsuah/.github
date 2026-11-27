@@ -2,6 +2,7 @@
 // helpers, the clean environment and the headless `claude -p` launcher.
 // Everything that talks to a model goes through runClaude, so both workers
 // get the same guardrails (clean env, 9router only, no shell splitting).
+import { pinnedModelEnv } from './model-pin.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
@@ -351,7 +352,7 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
     const stdio = guardEnabled ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'];
     let child;
     try {
-        child = spawn(bin, args, { cwd, env: env || cleanEnv(), stdio, windowsHide: true });
+        child = spawn(bin, args, { cwd, env: pinnedModelEnv(env || cleanEnv(), model), stdio, windowsHide: true });
     } catch (e) { // e.g. an env value with a NUL byte throws synchronously: close the transcript, report like a failed spawn
         console.error(`spawn failed: ${e.message}`);
         await new Promise((done) => out.end(done));

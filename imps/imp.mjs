@@ -26,7 +26,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk } from './lib.mjs';
 import { mergedByAgentCommitBody } from './merge-attribution.mjs';
-import { expectedFamilies, probeServedModel, mismatchLine, auditServed, auditLine } from './served-model.mjs';
+import { expectedFamilies, mismatchLine, auditServed, auditLine } from './served-model.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates } from './model-pin.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
@@ -107,19 +108,25 @@ async function run() {
         console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
         process.exit(1);
     }
-    // Served-model identity guard (#258): when expected model families are configured
-    // (config.expectedModelFamilies or IMPS_EXPECT_MODEL_FAMILY), probe the router once and stop on a
-    // family mismatch. This runs before quota is reserved and before any worktree or ledger row, so
-    // no attempt is consumed; dispatch sees the marker line and puts the issue back on imp:ready.
-    const expected = expectedFamilies(loadHomeConfig(), process.env);
+    // Served-model identity guard (#258) and request pinning (#392): when expected model families are
+    // configured (config.expectedModelFamilies or IMPS_EXPECT_MODEL_FAMILY), a combo such as MAX is
+    // replaced by a pinned concrete id from those families, then probed. A family mismatch stops the
+    // run before any quota, worktree or ledger row, so no attempt is consumed; dispatch sees the
+    // marker line and puts the issue back on imp:ready.
+    const cfg = loadHomeConfig();
+    const expected = expectedFamilies(cfg, process.env);
     if (!scripted && expected.length) {
         const router = resolveRouter();
-        const probe = await probeServedModel({ baseUrl: router.baseUrl, key: router.key, model: o.model, expected });
+        const pinned = isComboModel(o.model) && cfg.pinModels !== false
+            ? orderRequestModels(allowedRequestModels({ pinned: cfg.pinnedModels ?? DEFAULTS.pinnedModels, expected }), rows())
+            : [];
+        const probe = await probeCandidates(pinned.length ? pinned : [o.model], { baseUrl: router.baseUrl, key: router.key, expected });
         if (!probe.ok) {
             console.error(mismatchLine(probe));
             process.exit(1);
         }
-        console.log(`served-model probe: ${probe.verdict}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
+        o.model = probe.model;
+        console.log(`served-model probe: ${probe.verdict} for ${o.model}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
     }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
     const chosenModel = scripted ? 'none (script)' : reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');

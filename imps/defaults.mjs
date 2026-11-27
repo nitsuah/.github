@@ -70,6 +70,15 @@ export const DEFAULTS = {
     checkPollMs: 30_000,
     checkTries: 40,
 
+    // Concrete router ids a run may request in place of a combo like MAX, in preference
+    // order, when expectedModelFamilies is set (.github#392). Override with
+    // ~/.imps/config.json `pinnedModels`; `"pinModels": false` goes back to the combo.
+    pinnedModels: [
+        'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free',
+        'nvidia/nemotron-3-ultra-550b-a55b',
+        'openrouter/nvidia/nemotron-3.5-lightning:free',
+    ],
+
     // RSI self-improvement: max new imp:ready issues filed per day
     rsiDailyIssueCap: 3,
     // Groomer: max issues drafted per day across its 3-hourly runs (held drafts count too)
