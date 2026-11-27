@@ -82,15 +82,22 @@ test('background model names are pinned for a concrete id and untouched for a co
     assert.equal(isComboModel(A), false);
 });
 
-test('a failed run is retried only above 10 tool errors, on another pinned model that has passed', () => {
+test('a failed run is retried only above 10 tool errors on a recent, non-benched last-known-good model', () => {
     const failed = (toolErrors, extra = {}) => ({ model: A, gate: { pass: false }, metrics: { toolErrors }, ...extra });
     const rows = [row(B, true, 60), row(A, true, 30), row('openrouter/recursive/flint', true, 10)];
-    assert.equal(retryModel({ row: failed(10), allowed: [A, B], rows }), null);
-    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows }), B);
-    assert.equal(retryModel({ row: failed(11, { retryOf: 'imp_1' }), allowed: [A, B], rows }), null);
-    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: [row(A, true, 5), row(B, false, 5)] }), null);
-    assert.equal(retryModel({ row: failed(11), allowed: [], rows }), null);
-    assert.equal(retryModel({ row: { ...failed(11), gate: { pass: true } }, allowed: [A, B], rows }), null);
+    const args = { allowed: [A, B], rows, now };
+    assert.equal(retryModel({ row: failed(10), ...args }), null);
+    assert.equal(retryModel({ row: failed(11), ...args }), B);
+    assert.equal(retryModel({ row: failed(11, { retryOf: 'imp_1' }), ...args }), null);
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: [row(A, true, 5), row(B, false, 5)], now }), null);
+    assert.equal(retryModel({ row: failed(11), allowed: [], rows, now }), null);
+    assert.equal(retryModel({ row: { ...failed(11), gate: { pass: true } }, ...args }), null);
+
+    const benched = [row(B, true, 50), row(B, false, 40), row(B, false, 30), row(B, false, 20)];
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: benched, now }), null);
+    const reset = [row(B, true, 50), row(B, false, 40), row(B, false, 30), row(B, true, 20)];
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: reset, now }), B);
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: [row(B, true, 500)], now }), null);
 });
 
 test('a retried run and its retry count as one attempt', () => {
