@@ -169,13 +169,11 @@ export function briefRepoName(repo, owner = DEFAULTS.owner) {
 }
 
 /**
- * Validates that a brief's front matter has required `repo` and `issue`
- * fields matching the expected repository and issue number.
- * Returns an error string or null if valid.
- * @param {string} brief - The brief text
- * @param {string} expectedRepo - Expected repository slug (e.g., "fire")
- * @param {number|string} expectedIssue - Expected issue number
- * @returns {string|null} Error message or null if valid
+ * Checks whether a brief's repo field matches the target repository.
+ * Accepts a bare name or an Owner/name slug whose owner matches the target.
+ * @param {string} providedRepo - The repo value from the brief front matter
+ * @param {string} expectedRepo - The target repository slug
+ * @returns {boolean} True if the provided repo matches the target.
  */
 function briefRepoMatchesTarget(providedRepo, expectedRepo) {
     const provided = String(providedRepo ?? '').trim().split('/');
@@ -193,6 +191,15 @@ function briefRepoMatchesTarget(providedRepo, expectedRepo) {
     return !providedOwner || providedOwner.toLowerCase() === targetOwner.toLowerCase();
 }
 
+/**
+ * Validates that a brief's front matter has required `repo` and `issue`
+ * fields matching the expected repository and issue number.
+ * Returns an error string or null if valid.
+ * @param {string} brief - The brief text
+ * @param {string} expectedRepo - Expected repository slug (e.g., "fire")
+ * @param {number|string} expectedIssue - Expected issue number
+ * @returns {string|null} Error message or null if valid
+ */
 export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     const { meta } = parseBrief(brief);
     const targetRepo = String(expectedRepo).trim();
