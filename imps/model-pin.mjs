@@ -25,6 +25,20 @@ export function allowedRequestModels({ pinned = [], expected = [] } = {}) {
     return [...new Set(ids.filter((m) => m && !isComboModel(m) && families.includes(modelFamily(m))))];
 }
 
+/** More tool errors than this in a failed run earns one retry on another model (.github#388). */
+export const RETRY_TOOL_ERRORS = 10;
+
+/**
+ * The model for the one retry of a failed run, or null. Only a pinned model other than the
+ * failed one that has passed a gate qualifies (the latest pass wins), and a retry is never retried.
+ */
+export function retryModel({ row, allowed = [], rows = [] } = {}) {
+    if (!row || row.retryOf || row.gate?.pass !== false || !((row.metrics?.toolErrors ?? 0) > RETRY_TOOL_ERRORS)) return null;
+    const passedAt = (r) => Date.parse(r.gate.at || r.startedAt) || 0;
+    return rows.filter((r) => r.gate?.pass === true && r.model !== row.model && allowed.includes(r.model))
+        .sort((a, b) => passedAt(a) - passedAt(b)).at(-1)?.model ?? null;
+}
+
 /**
  * Replays recent gate results from the ledger into the fallback policy: a model with three
  * straight failed gates is benched, and the last known good one is preferred instead.

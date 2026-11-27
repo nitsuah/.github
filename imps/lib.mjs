@@ -919,7 +919,8 @@ export function issueFailures(rows = [], repo, issue, sinceMs = 0) {
     // spawn-failed is this machine's fault (no claude binary), not the issue's.
     const mine = rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && !r.ingested && /^imp_\d/.test(r.id)
         && r.endedAt && !r.pr && r.outcome !== 'merged' && r.outcome !== COMMIT_RECOVERY_FAILED && !r.infra
-        && r.metrics?.end !== 'spawn-failed' && Date.parse(r.startedAt) >= sinceMs);
+        // A run that was retried and its retry are one attempt: only the retry counts.
+        && r.metrics?.end !== 'spawn-failed' && !r.retriedBy && Date.parse(r.startedAt) >= sinceMs);
     // The first NOOP_FREE do-nothing runs are the router's fault, not the issue's; after that they count.
     return mine.length - Math.min(mine.filter(isNoopRun).length, NOOP_FREE);
 }
@@ -1010,7 +1011,7 @@ export function loopBudget(rows, now = Date.now(), { kit, evidence, cooldownMs =
     const runsLast24h = runs.filter((r) => now - Date.parse(r.startedAt) < day).length;
     const cooldown = {};
     for (const repo of new Set(runs.map((r) => r.repo))) {
-        const gated = runs.filter((r) => r.repo === repo && r.gate && r.outcome !== COMMIT_RECOVERY_FAILED && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+        const gated = runs.filter((r) => r.repo === repo && r.gate && r.outcome !== COMMIT_RECOVERY_FAILED && !isSizeOnlyFailure(r.gate) && !isNoopRun(r) && !r.retriedBy && (!kit || r.kitSha === kit)).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
         if (gated.length < 2) continue;
         const streak = []; // newest first
         for (let n = gated.length - 1; n >= 0 && streak.length < 2; n--) {

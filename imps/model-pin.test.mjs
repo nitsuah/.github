@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv, quotaPool } from './model-pin.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv, quotaPool, retryModel } from './model-pin.mjs';
+import { issueFailures } from './lib.mjs';
 import { readFileSync } from 'node:fs';
 import { auditServed } from './served-model.mjs';
 import { DEFAULTS } from './defaults.mjs';
@@ -80,3 +81,20 @@ test('background model names are pinned for a concrete id and untouched for a co
     assert.equal(isComboModel('or-free'), true);
     assert.equal(isComboModel(A), false);
 });
+
+test('a failed run is retried only above 10 tool errors, on another pinned model that has passed', () => {
+    const failed = (toolErrors, extra = {}) => ({ model: A, gate: { pass: false }, metrics: { toolErrors }, ...extra });
+    const rows = [row(B, true, 60), row(A, true, 30), row('openrouter/recursive/flint', true, 10)];
+    assert.equal(retryModel({ row: failed(10), allowed: [A, B], rows }), null);
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows }), B);
+    assert.equal(retryModel({ row: failed(11, { retryOf: 'imp_1' }), allowed: [A, B], rows }), null);
+    assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: [row(A, true, 5), row(B, false, 5)] }), null);
+    assert.equal(retryModel({ row: failed(11), allowed: [], rows }), null);
+    assert.equal(retryModel({ row: { ...failed(11), gate: { pass: true } }, allowed: [A, B], rows }), null);
+});
+
+test('a retried run and its retry count as one attempt', () => {
+    const run = (id, extra) => ({ id, repo: 'vhs', issue: 1, startedAt: '2026-11-26T00:00:00Z', endedAt: '2026-11-26T00:10:00Z', metrics: { end: 'success', toolTurns: 30 }, ...extra });
+    assert.equal(issueFailures([run('imp_1', { retriedBy: 'imp_2' }), run('imp_2', { retryOf: 'imp_1' })], 'vhs', 1), 1);
+});
+
