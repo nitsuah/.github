@@ -2,10 +2,49 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { codeLines, extractBriefInput, lintBrief } from './brieflint.mjs';
-import { briefFromComments } from './lib.mjs';
+import { briefFromComments, validateBriefMeta } from './lib.mjs';
 
 const brief = (front, body = '## Issue o/r#1\nDo the thing.\n') => `---\nrepo: r\nissue: 1\ntest: docker run x --config config/v.mjs y\nmaxLines: 100\nallow: a.js, a.test.js\n${front}---\n${body}`;
 const code = (n) => `~~~js\n${'x();\n'.repeat(n)}~~~\n`;
+
+const targetBrief = (repo, issue) => `---\nrepo: ${repo}\nissue: ${issue}\ntest: node --test imps/brieflint.test.mjs\n---\n## Issue nitsuah/.github#410\nUpdate imps/lib.mjs.\n`;
+
+test('repo metadata accepts bare and explicit default-owner names', () => {
+    assert.equal(validateBriefMeta(targetBrief('fire', 166), 'fire', 166), null);
+    assert.equal(validateBriefMeta(targetBrief('nitsuah/fire', 166), 'fire', 166), null);
+    assert.match(
+        validateBriefMeta(targetBrief('other/fire', 166), 'fire', 166),
+        /does not match the target repository/,
+    );
+});
+
+test('repo metadata accepts bare and matching explicit Nitsuah-Labs names', () => {
+    assert.equal(validateBriefMeta(targetBrief('nitsuah-io', 632), 'Nitsuah-Labs/nitsuah-io', 632), null);
+    assert.equal(validateBriefMeta(targetBrief('Nitsuah-Labs/nitsuah-io', 632), 'Nitsuah-Labs/nitsuah-io', 632), null);
+});
+
+test('repo metadata rejects an empty owner in a two-part slug', () => {
+    assert.match(
+        validateBriefMeta(targetBrief('/nitsuah-io', 632), 'Nitsuah-Labs/nitsuah-io', 632),
+        /does not match the target repository/,
+    );
+});
+
+test('repo metadata rejects a wrong explicit owner and shows the target slug', () => {
+    const error = validateBriefMeta(
+        targetBrief('nitsuah/nitsuah-io', 632),
+        'Nitsuah-Labs/nitsuah-io',
+        632,
+    );
+    assert.match(error, /does not match the target repository/);
+    assert.match(error, /repo: Nitsuah-Labs\/nitsuah-io/);
+});
+
+test('missing repo diagnostic shows the target owner for org repositories', () => {
+    const brief = `---\nissue: 632\ntest: node --test imps/brieflint.test.mjs\n---\n## Issue nitsuah/.github#410\nUpdate imps/lib.mjs.\n`;
+    const error = validateBriefMeta(brief, 'Nitsuah-Labs/nitsuah-io', 632);
+    assert.match(error, /repo: Nitsuah-Labs\/nitsuah-io/);
+});
 
 test('a well-formed brief passes', () => {
     const r = lintBrief(brief(''), { exists: () => true });

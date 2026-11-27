@@ -169,6 +169,30 @@ export function briefRepoName(repo, owner = DEFAULTS.owner) {
 }
 
 /**
+ * Checks whether a brief's repo field matches the target repository.
+ * Accepts a bare name or an Owner/name slug whose owner matches the target.
+ * @param {string} providedRepo - The repo value from the brief front matter
+ * @param {string} expectedRepo - The target repository slug
+ * @returns {boolean} True if the provided repo matches the target.
+ */
+function briefRepoMatchesTarget(providedRepo, expectedRepo) {
+    const provided = String(providedRepo ?? '').trim().split('/');
+    const expected = String(expectedRepo ?? '').trim().split('/');
+    if (provided.length < 1 || provided.length > 2 || expected.length < 1 || expected.length > 2) return false;
+
+    const providedName = provided.at(-1);
+    const expectedName = expected.at(-1);
+    if (!providedName || !expectedName || providedName.toLowerCase() !== expectedName.toLowerCase()) return false;
+
+    // A bare name inherits the target owner. An explicit owner must match it;
+    // the default-owner shorthand remains compatible with legacy queue refs.
+    const targetOwner = expected.length === 2 ? expected[0] : DEFAULTS.owner;
+    if (provided.length === 2 && !provided[0]) return false;
+    const providedOwner = provided.length === 2 ? provided[0] : '';
+    return !providedOwner || providedOwner.toLowerCase() === targetOwner.toLowerCase();
+}
+
+/**
  * Validates that a brief's front matter has required `repo` and `issue`
  * fields matching the expected repository and issue number.
  * Returns an error string or null if valid.
@@ -179,17 +203,20 @@ export function briefRepoName(repo, owner = DEFAULTS.owner) {
  */
 export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     const { meta } = parseBrief(brief);
+    const targetRepo = String(expectedRepo).trim();
+    const targetRepoName = targetRepo.split('/').at(-1);
     if (!meta.repo || String(meta.repo).trim() === '') {
-        return 'Brief front matter is missing required `repo` field (e.g., `repo: fire`)';
+        return 'Brief front matter is missing required `repo` field (e.g., `repo: ' + targetRepo + '`)';
     }
     if (!meta.issue || String(meta.issue).trim() === '') {
         return 'Brief front matter is missing required `issue` field (e.g., `issue: 166`)';
     }
-    if (briefRepoName(meta.repo) !== String(expectedRepo).trim()) {
-        return `Brief \`repo\` (${meta.repo}) does not match the target repository (${expectedRepo})`;
+    if (!briefRepoMatchesTarget(meta.repo, targetRepo)) {
+        const example = targetRepo.includes('/') ? `${targetRepo} (or bare ${targetRepoName})` : targetRepo;
+        return 'Brief repo (' + meta.repo + ') does not match the target repository (' + targetRepo + '); use repo: ' + example + '.';
     }
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
-        return `Brief \`issue\` (${meta.issue}) does not match the target issue number (${expectedIssue})`;
+        return 'Brief `issue` (' + meta.issue + ') does not match the target issue number (' + expectedIssue + ')';
     }
     return dockerGitProblem(meta) || briefProblem(brief);
 }
