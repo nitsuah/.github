@@ -7,7 +7,7 @@ import { briefFromComments, validateBriefMeta } from './lib.mjs';
 const brief = (front, body = '## Issue o/r#1\nDo the thing.\n') => `---\nrepo: r\nissue: 1\ntest: docker run x --config config/v.mjs y\nmaxLines: 100\nallow: a.js, a.test.js\n${front}---\n${body}`;
 const code = (n) => `~~~js\n${'x();\n'.repeat(n)}~~~\n`;
 
-const targetBrief = (repo, issue) => `---\\nrepo: ${repo}\\nissue: ${issue}\\ntest: node --test imps/brieflint.test.mjs\\n---\\n## Issue nitsuah/.github#410\\nUpdate imps/lib.mjs.\\n`;
+const targetBrief = (repo, issue) => `---\nrepo: ${repo}\nissue: ${issue}\ntest: node --test imps/brieflint.test.mjs\n---\n## Issue nitsuah/.github#410\nUpdate imps/lib.mjs.\n`;
 
 test('repo metadata accepts bare and explicit default-owner names', () => {
     assert.equal(validateBriefMeta(targetBrief('fire', 166), 'fire', 166), null);
@@ -34,7 +34,7 @@ test('repo metadata rejects a wrong explicit owner and shows the target slug', (
 });
 
 test('missing repo diagnostic shows the target owner for org repositories', () => {
-    const brief = `---\\nissue: 632\\ntest: node --test imps/brieflint.test.mjs\\n---\\n## Issue nitsuah/.github#410\\nUpdate imps/lib.mjs.\\n`;
+    const brief = `---\nissue: 632\ntest: node --test imps/brieflint.test.mjs\n---\n## Issue nitsuah/.github#410\nUpdate imps/lib.mjs.\n`;
     const error = validateBriefMeta(brief, 'Nitsuah-Labs/nitsuah-io', 632);
     assert.match(error, /repo: Nitsuah-Labs\/nitsuah-io/);
 });
