@@ -1,0 +1,51 @@
+name: Merge audit
+
+# Flags merged pull requests that don't say which agent merged them, and merges of
+# owner-sensitive paths without `owner-approved`. Convention: imps/STANDARD.md, Merge attribution.
+# It never checks out or runs the PR's code. Other repos call it with:
+#   on: { pull_request: { types: [closed] } }
+#   jobs: { audit: { uses: nitsuah/.github/.github/workflows/merge-audit.yml@<kit sha> } }
+on:
+  pull_request:
+    types: [closed]
+  workflow_call:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  audit:
+    name: Merge audit
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check attribution and sensitive paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        # shellcheck disable=SC2016  # the backticks in the comments are Markdown
+        run: |
+          set -euo pipefail
+          has_label() { jq -e --arg l "$1" 'index($l) != null' <<<"$LABELS" >/dev/null; }
+          flag() { # label, comment
+            gh label create "$1" -R "$REPO" -c d93f0b -d 'Set by the merge audit' --force
+            gh pr edit "$PR" -R "$REPO" --add-label "$1"
+            gh pr comment "$PR" -R "$REPO" --body "$2"
+          }
+          message=$(gh api "repos/$REPO/commits/$SHA" --jq .commit.message | tr -d '\r')
+          if ! grep -Eq '^Merged-by-agent: (ChatGPT|Claude|Grok|imp-[A-Za-z0-9._-]+) *$' <<<"$message"; then
+            flag merge:unattributed '⚠️ unattributed merge: the merge commit has no `Merged-by-agent:` trailer.'
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[] | .filename, (.previous_filename // empty)')
+          sensitive='^\.github/workflows/|(^|/)(auth|security)/|(^|/)SECURITY\.md$|(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|uv\.lock|poetry\.lock|Pipfile\.lock|composer\.lock|Gemfile\.lock|go\.sum|flake\.lock|deno\.lock)$'
+          if grep -Eiq "$sensitive" <<<"$files" || has_label security || has_label auth; then
+            if ! has_label owner-approved; then
+              flag merge:needs-owner-review "@$OWNER this merge touched an owner-sensitive path without \`owner-approved\`."
+            fi
+          fi
