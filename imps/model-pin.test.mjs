@@ -100,8 +100,10 @@ test('a failed run is retried only above 10 tool errors on a recent, non-benched
     assert.equal(retryModel({ row: failed(11), allowed: [A, B], rows: [row(B, true, 500)], now }), null);
 });
 
-test('a retried run and its retry count as one attempt', () => {
+test('a retry without a gate verdict is not a second issue attempt', () => {
     const run = (id, extra) => ({ id, repo: 'vhs', issue: 1, startedAt: '2026-11-26T00:00:00Z', endedAt: '2026-11-26T00:10:00Z', metrics: { end: 'success', toolTurns: 30 }, ...extra });
-    assert.equal(issueFailures([run('imp_1', { retriedBy: 'imp_2' }), run('imp_2', { retryOf: 'imp_1' })], 'vhs', 1), 1);
+    assert.equal(issueFailures([run('imp_1', {}), run('imp_2', { retryOf: 'imp_1' })], 'vhs', 1), 1);
+    assert.equal(issueFailures([run('imp_1', { retriedBy: 'imp_2' }), run('imp_2', { retryOf: 'imp_1' })], 'vhs', 1), 0);
+    assert.equal(issueFailures([run('imp_1', { retriedBy: 'imp_2' }), run('imp_2', { retryOf: 'imp_1', gate: { pass: false } })], 'vhs', 1), 1);
 });
 
