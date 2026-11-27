@@ -687,7 +687,9 @@ function openPr(id) {
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
-    const labels = ['imp', ensureRiskLabel(repoSlug, risk)];
+    // Briefs forbid CHANGELOG.md edits, so the risk guard needs no-changelog on every imp PR (#415).
+    sh('gh', ['label', 'create', 'no-changelog', '-R', repoSlug, '-c', 'cfd3d7', '-d', 'No CHANGELOG entry needed'], {});
+    const labels = ['imp', 'no-changelog', ensureRiskLabel(repoSlug, risk)];
     // Nothing is approved yet, so a high-risk PR starts out as a human's.
     if (risk === 'high') {
         sh('gh', ['label', 'create', NEEDS_HUMAN_LABEL, '-R', repoSlug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
