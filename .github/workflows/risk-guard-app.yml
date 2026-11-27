@@ -1,0 +1,84 @@
+name: Risk guard (App-backed)
+
+# Called only by a target repository's pull_request_target caller. This workflow
+# and the guard script are loaded from a pinned nitsuah/.github commit. It never
+# checks out or executes code from the pull request.
+on:
+  workflow_call:
+    inputs:
+      app_client_id:
+        description: Client ID of the dedicated Nitsuah Risk Guard GitHub App.
+        type: string
+        required: true
+    secrets:
+      RISK_GUARD_APP_PRIVATE_KEY:
+        description: Private key for the dedicated check-run GitHub App.
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  trusted:
+    name: Create App-backed risk check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pinned shared guard kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nitsuah/.github
+          # In a reusable workflow this is the called workflow's commit, not the caller's.
+          ref: ${{ job.workflow_sha }}
+          path: .risk-guard-kit
+          persist-credentials: false
+
+      - name: Create a narrowly scoped GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app_client_id }}
+          private-key: ${{ secrets.RISK_GUARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-checks: write
+
+      - name: Start the dedicated App check run
+        id: start-check
+        env:
+          CHECK_MODE: start
+          CHECK_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node .risk-guard-kit/imps/ci-guard-check.mjs
+
+      - name: Evaluate the shared risk guard
+        id: guard
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GUARD_OWNERS: nitsuah
+        run: node .risk-guard-kit/imps/ci-guard.mjs
+
+      - name: Complete the dedicated App check run
+        if: always() && steps.start-check.outputs.check_run_id != ''
+        env:
+          CHECK_MODE: finish
+          CHECK_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GUARD_REPO: ${{ github.repository }}
+          CHECK_RUN_ID: ${{ steps.start-check.outputs.check_run_id }}
+          CHECK_CONCLUSION: ${{ steps.guard.outcome == 'success' && 'success' || 'failure' }}
+          CHECK_SUMMARY: ${{ steps.guard.outcome == 'success' && 'The shared risk guard passed.' || 'The shared risk guard failed. See the workflow annotations for the exact rule.' }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: node .risk-guard-kit/imps/ci-guard-check.mjs
+
+      - name: Fail the workflow when the guard fails
+        if: steps.guard.outcome != 'success'
+        run: exit 1
