@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const content = readFileSync('repo-health/templates/risk-guard.yml', 'utf8').replace(/\r/g, '');
+const reusable = readFileSync('.github/workflows/risk-guard-app.yml', 'utf8').replace(/\r/g, '');
 
 describe('App-backed risk-guard caller template', () => {
     test('runs from pull_request_target and reevaluates owner-label changes', () => {
@@ -24,4 +25,15 @@ describe('App-backed risk-guard caller template', () => {
         assert.doesNotMatch(content, /uses: actions\/checkout/);
         assert.doesNotMatch(content, /^\s*run:/m);
     });
+    test('reusable workflow creates the required check with the dedicated App identity', () => {
+        assert.match(reusable, /workflow_call:/);
+        assert.match(reusable, /RISK_GUARD_APP_PRIVATE_KEY/);
+        assert.match(reusable, /actions\\/create-github-app-token@[0-9a-f]{40}/);
+        assert.match(reusable, /permission-checks: write/);
+        assert.match(reusable, /GUARD_OWNERS: nitsuah/);
+        assert.match(reusable, /CHECK_MODE: start/);
+        assert.match(reusable, /CHECK_MODE: finish/);
+        assert.match(reusable, /node \.risk-guard-kit\\/imps\\/ci-guard\\.mjs/);
+    });
+
 });
