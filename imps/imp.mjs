@@ -19,6 +19,7 @@
 // (the ledger), runs/<id>.jsonl (transcripts). Kit code lives in the detached
 // imps-runner checkout (see setup.ps1 / STANDARD.md § Install).
 import { spawnSync } from 'node:child_process';
+import { buildImpPrLabels } from './pr-labels.mjs';
 import { readFileSync, appendFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
@@ -687,11 +688,13 @@ function openPr(id) {
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
-    const labels = ['imp', ensureRiskLabel(repoSlug, risk)];
+    // Briefs forbid CHANGELOG.md edits, so the risk guard needs no-changelog on every imp PR (#415).
+    sh('gh', ['label', 'create', 'no-changelog', '-R', repoSlug, '-c', 'cfd3d7', '-d', 'No CHANGELOG entry needed'], {});
+    const riskLabel = ensureRiskLabel(repoSlug, risk);
+    const labels = buildImpPrLabels(risk, riskLabel, NEEDS_HUMAN_LABEL);
     // Nothing is approved yet, so a high-risk PR starts out as a human's.
     if (risk === 'high') {
         sh('gh', ['label', 'create', NEEDS_HUMAN_LABEL, '-R', repoSlug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
-        labels.push(NEEDS_HUMAN_LABEL);
     }
     const pr = sh('gh', ['pr', 'create', '-R', repoSlug, ...labels.flatMap((l) => ['--label', l]), '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
