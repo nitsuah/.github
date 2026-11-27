@@ -187,6 +187,7 @@ function briefRepoMatchesTarget(providedRepo, expectedRepo) {
     // A bare name inherits the target owner. An explicit owner must match it;
     // the default-owner shorthand remains compatible with legacy queue refs.
     const targetOwner = expected.length === 2 ? expected[0] : DEFAULTS.owner;
+    if (provided.length === 2 && !provided[0]) return false;
     const providedOwner = provided.length === 2 ? provided[0] : '';
     return !providedOwner || providedOwner.toLowerCase() === targetOwner.toLowerCase();
 }
