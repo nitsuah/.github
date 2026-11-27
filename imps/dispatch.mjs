@@ -16,7 +16,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim, repoRef, repoSlug, refDirName } from './lib.mjs';
-import { MODEL_MISMATCH_MARK } from './served-model.mjs';
+import { MODEL_MISMATCH_MARK, expectedFamilies } from './served-model.mjs';
+import { retryModel, allowedRequestModels } from './model-pin.mjs';
 import { kitSha, machineName, lookupIssueGuard, originUrl, update as updateRun } from './runner.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { hasExplicitOwnerArg, discoverQueueCandidates } from './queue-discovery.mjs';
@@ -446,7 +447,7 @@ async function work(issue) {
         const cfg = loadHomeConfig();
         const modelStrategy = normalizeModelStrategy(cfg);
         const run = await node(['run', '--brief', issue.briefPath, '--model', 'MAX', '--modelStrategy', modelStrategy]);
-        const id = (run.out.match(/^(imp_\S+)/m) || [])[1];
+        let id = (run.out.match(/^(imp_\S+)/m) || [])[1];
         if (!id && /claude binary not found/.test(run.out)) {
             relabel(repo, number, 'imp:ready', ['imp:working']);
             return log({ event: 'infra-fail', repo, number, reason: 'claude binary not found (set IMPS_CLAUDE_BIN or install Claude Code)' });
@@ -519,7 +520,7 @@ async function work(issue) {
             return log({ event: 'script-failed', repo, number, id, reason: why });
         }
         const gateRun = await node(['gate', id]);
-        const row = ledgerRow(id);
+        let row = ledgerRow(id);
         if (row?.outcome === COMMIT_RECOVERY_FAILED || gateRun.code === 75) {
             const reason = row?.commitRecovery?.reason || 'new commit and clean status were not verified';
             if (!dry) {
@@ -547,6 +548,30 @@ async function work(issue) {
         }
         if (row?.commitRecovery?.inProgress || gateRun.code === 76) {
             return log({ event: 'commit-recovery-in-progress', repo, number, id });
+        }
+        // One retry, inside the same claim, for a run that drowned in tool errors (#388). The first row
+        // keeps its diagnostics and is marked `retriedBy`, so the pair counts as one attempt.
+        const next = retryModel({
+            row, rows: readLedger(),
+            allowed: cfg.pinModels === false ? [] : allowedRequestModels({ pinned: cfg.pinnedModels ?? DEFAULTS.pinnedModels, expected: expectedFamilies(cfg, process.env) }),
+        });
+        if (next) {
+            log({ event: 'tool-error-retry', repo, number, id, toolErrors: row.metrics.toolErrors, model: next });
+            const again = await node(['run', '--brief', issue.briefPath, '--model', next, '--modelStrategy', modelStrategy]);
+            const retryId = (again.out.match(/^(imp_\S+)/m) || [])[1];
+            if (retryId) {
+                updateRun(retryId, { retryOf: id, sourceBriefHash: issue.sourceBriefHash });
+                await node(['gate', retryId]);
+            }
+            const retried = retryId ? ledgerRow(retryId) : null;
+            // A retry that never reached a gate verdict changes nothing: the first failure stands.
+            if (retried?.gate) {
+                updateRun(id, { retriedBy: retryId });
+                id = retryId;
+                row = retried;
+            } else {
+                log({ event: 'tool-error-retry-void', repo, number, id, retryId: retryId || null });
+            }
         }
         const m = row.metrics || {};
         const stats = `${m.turns ?? '?'} turns, ${m.toolErrors ?? '?'} tool errors, served ${(m.served || []).join(', ') || '?'}`;

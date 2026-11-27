@@ -25,6 +25,48 @@ export function allowedRequestModels({ pinned = [], expected = [] } = {}) {
     return [...new Set(ids.filter((m) => m && !isComboModel(m) && families.includes(modelFamily(m))))];
 }
 
+/** More tool errors than this in a failed run earns one retry on another model (.github#388). */
+export const RETRY_TOOL_ERRORS = 10;
+
+/**
+ * The model for the one retry of a failed run, or null. Only a pinned model other than the
+ * failed one that has passed a gate qualifies (the latest pass wins), and a retry is never retried.
+ */
+export function retryModel({ row, allowed = [], rows = [], now = Date.now() } = {}) {
+    if (!row || row.retryOf || row.gate?.pass !== false || !((row.metrics?.toolErrors ?? 0) > RETRY_TOOL_ERRORS)) return null;
+
+    // Use the same six-hour completion window and three-failure bench rule as orderRequestModels.
+    const gateAt = (r) => {
+        const completed = Date.parse(r.gate?.at || '');
+        return Number.isFinite(completed) ? completed : Date.parse(r.startedAt);
+    };
+    const recent = rows
+        .filter((r) => {
+            const at = gateAt(r);
+            const age = now - at;
+            return allowed.includes(r.model) && typeof r.gate?.pass === 'boolean'
+                && Number.isFinite(at) && age >= 0 && age < BENCH_WINDOW_MS;
+        })
+        .sort((a, b) => gateAt(a) - gateAt(b));
+    const state = new Map();
+    for (const r of recent) {
+        const current = state.get(r.model) || { streak: 0, benched: false, lastPassedAt: null };
+        if (r.gate.pass) {
+            current.streak = 0;
+            current.benched = false;
+            current.lastPassedAt = gateAt(r);
+        } else {
+            current.streak++;
+            if (current.streak >= 3) current.benched = true;
+        }
+        state.set(r.model, current);
+    }
+    return [...state.entries()]
+        .filter(([model, status]) => model !== row.model && !status.benched && status.lastPassedAt !== null)
+        .sort((a, b) => a[1].lastPassedAt - b[1].lastPassedAt)
+        .at(-1)?.[0] ?? null;
+}
+
 /**
  * Replays recent gate results from the ledger into the fallback policy: a model with three
  * straight failed gates is benched, and the last known good one is preferred instead.
