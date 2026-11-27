@@ -28,12 +28,12 @@ describe('App-backed risk-guard caller template', () => {
     test('reusable workflow creates the required check with the dedicated App identity', () => {
         assert.match(reusable, /workflow_call:/);
         assert.match(reusable, /RISK_GUARD_APP_PRIVATE_KEY/);
-        assert.match(reusable, /actions\\/create-github-app-token@[0-9a-f]{40}/);
+        assert.ok(reusable.includes('actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1'));
         assert.match(reusable, /permission-checks: write/);
         assert.match(reusable, /GUARD_OWNERS: nitsuah/);
         assert.match(reusable, /CHECK_MODE: start/);
         assert.match(reusable, /CHECK_MODE: finish/);
-        assert.match(reusable, /node \.risk-guard-kit\\/imps\\/ci-guard\\.mjs/);
+        assert.ok(reusable.includes('node .risk-guard-kit/imps/ci-guard.mjs'));
     });
 
 });
