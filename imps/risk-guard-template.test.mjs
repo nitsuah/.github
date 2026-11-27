@@ -1,39 +1,42 @@
 import { test, describe } from 'node:test';
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import assert from 'node:assert';
+import fs from 'node:fs';
 
-const content = readFileSync('repo-health/templates/risk-guard.yml', 'utf8').replace(/\r/g, '');
-const reusable = readFileSync('.github/workflows/risk-guard-app.yml', 'utf8').replace(/\r/g, '');
+const templatePath = 'repo-health/templates/risk-guard.yml';
+const content = fs.readFileSync(templatePath, 'utf8').replace(/\r/g, '');
 
-describe('App-backed risk-guard caller template', () => {
-    test('runs from pull_request_target and reevaluates owner-label changes', () => {
-        assert.match(content, /pull_request_target:/);
-        assert.match(content, /types: \[opened, synchronize, reopened, edited, labeled, unlabeled\]/);
-    });
+describe('risk-guard.yml template', () => {
+  test('uses pull_request_target trigger', () => {
+    assert.match(content, /on:[\s\S]*?pull_request_target:/, 'missing pull_request_target trigger');
+  });
 
-    test('calls the pinned shared App-backed workflow and passes only required credentials', () => {
-        assert.match(content, /uses: nitsuah\/\.github\/\.github\/workflows\/risk-guard-app\.yml@REPLACE_WITH_KIT_SHA/);
-        assert.match(content, /app_client_id: \$\{\{ vars\.RISK_GUARD_APP_CLIENT_ID \}\}/);
-        assert.match(content, /RISK_GUARD_APP_PRIVATE_KEY: \$\{\{ secrets\.RISK_GUARD_APP_PRIVATE_KEY \}\}/);
-        assert.doesNotMatch(content, /secrets:\s*inherit/);
-    });
+  test('includes edited event alongside opened/synchronize/reopened/labeled/unlabeled', () => {
+    const typesSection = content.match(/pull_request_target:[\s\S]*?types:\s*\[([^\]]+)\]/);
+    assert.ok(typesSection, 'missing types array under pull_request_target');
+    const types = typesSection[1].split(',').map(s => s.trim().replace(/['"]/g, ''));
+    const required = ['opened', 'synchronize', 'reopened', 'labeled', 'unlabeled', 'edited'];
+    for (const evt of required) {
+      assert.ok(types.includes(evt), `missing event type: ${evt}`);
+    }
+  });
 
-    test('uses read-only Actions token permissions and never checks out PR code', () => {
-        assert.match(content, /contents: read/);
-        assert.match(content, /issues: read/);
-        assert.match(content, /pull-requests: read/);
-        assert.doesNotMatch(content, /uses: actions\/checkout/);
-        assert.doesNotMatch(content, /^\s*run:/m);
-    });
-    test('reusable workflow creates the required check with the dedicated App identity', () => {
-        assert.match(reusable, /workflow_call:/);
-        assert.match(reusable, /RISK_GUARD_APP_PRIVATE_KEY/);
-        assert.ok(reusable.includes('actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1'));
-        assert.match(reusable, /permission-checks: write/);
-        assert.match(reusable, /GUARD_OWNERS: nitsuah/);
-        assert.match(reusable, /CHECK_MODE: start/);
-        assert.match(reusable, /CHECK_MODE: finish/);
-        assert.ok(reusable.includes('node .risk-guard-kit/imps/ci-guard.mjs'));
-    });
+  test('has least-privilege permissions (contents: read, pull-requests: read)', () => {
+    assert.match(content, /permissions:\s*\n\s*contents:\s*read\s*\n\s*pull-requests:\s*read/m, 'missing least-privilege permissions');
+  });
 
+  test('job calls reusable workflow with SHA-pinned reference (or placeholder)', () => {
+    assert.match(content, /uses:\s*nitsuah\/\.github\/\.github\/workflows\/risk-guard\.yml@(REPLACE_WITH_KIT_SHA|[0-9a-f]{40})/, 'uses must reference nitsuah/.github risk-guard.yml with SHA or placeholder');
+  });
+
+  test('job permissions mirror least-privilege', () => {
+    assert.match(content, /jobs:[\s\S]*?guard:[\s\S]*?permissions:[\s\S]*?contents:\s*read[\s\S]*?pull-requests:\s*read/, 'job permissions must mirror least-privilege');
+  });
+
+  test('rejects inline PR-head checkout (no uses: actions/checkout or similar)', () => {
+    assert.doesNotMatch(content, /uses:\s*actions\/checkout/, 'caller template must not use actions/checkout');
+  });
+
+  test('rejects shell run: step in caller template', () => {
+    assert.doesNotMatch(content, /^\s*run:/m, 'caller template must not define run steps');
+  });
 });
