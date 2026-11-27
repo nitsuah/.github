@@ -205,7 +205,7 @@ export function validateBriefMeta(brief, expectedRepo, expectedIssue) {
     }
     if (!briefRepoMatchesTarget(meta.repo, targetRepo)) {
         const example = targetRepo.includes('/') ? `${targetRepo} (or bare ${targetRepoName})` : targetRepo;
-        return 'Brief `repo` (' + meta.repo + ') does not match the target repository (' + targetRepo + '); use `repo: ' + example + '`.');
+        return 'Brief repo (' + meta.repo + ') does not match the target repository (' + targetRepo + '); use repo: ' + example + '.';
     }
     if (String(meta.issue).trim() !== String(expectedIssue).trim()) {
         return 'Brief `issue` (' + meta.issue + ') does not match the target issue number (' + expectedIssue + ')';
