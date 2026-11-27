@@ -149,6 +149,12 @@ export function rightSideLines(diff = '') {
     return files;
 }
 
+// Findings that got no thread are listed in the summary under one of these headings.
+const OUTSIDE_HEADING = '**Findings outside the diff lines:**';
+export const REFUSED_ANCHORS_HEADING = '**Inline findings (GitHub refused the line anchors):**';
+// On the one forced re-review a head may get, so a second is refused from the PR itself, on any machine.
+export const REROLL_MARK = (sha) => `<!-- bugbot-reroll sha=${sha} -->`;
+
 const escapeCell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 const VERDICT_LABEL = { approve: '✅ No blocking issues', comment: '💬 Minor findings', request_changes: '⛔ Changes needed' };
 
@@ -158,7 +164,7 @@ const VERDICT_LABEL = { approve: '✅ No blocking issues', comment: '💬 Minor 
  * threads (no `<!-- imp-` marker, so the imp fix round treats them as
  * feedback); the rest go in the summary.
  */
-export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model = 'MAX', served = [], partial = false } = {}) {
+export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model = 'MAX', served = [], partial = false, reroll = false } = {}) {
     const lines = rightSideLines(diff);
     const comments = [];
     const unplaced = [];
@@ -179,6 +185,7 @@ export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model =
     const nits = (rv.findings || []).filter((f) => f.severity === 'nit').slice(0, 3);
     const body = [
         `<!-- bugbot sha=${headSha} verdict=${rv.verdict} scope=${partial ? 'partial' : 'full'} -->`,
+        ...(reroll ? [REROLL_MARK(headSha)] : []),
         `### Bugbot review: ${VERDICT_LABEL[rv.verdict] || rv.verdict}`,
         '',
         rv.summary || '(no summary)',
@@ -187,7 +194,7 @@ export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model =
     ];
     if (partial) body.push('', '**The diff was too large to review in full**, so this review does not count as a pass: the `bugbot` status stays failing until CodeRabbit or a human reviews the rest.');
     if (unplaced.length) {
-        body.push('', '**Findings outside the diff lines:**', '', '| | Finding | Where |', '| --- | --- | --- |');
+        body.push('', OUTSIDE_HEADING, '', '| | Finding | Where |', '| --- | --- | --- |');
         for (const f of unplaced) body.push(`| **${f.severity}** | ${escapeCell(f.title)} | \`${escapeCell(f.file || '?')}${f.line ? `:${f.line}` : ''}\` |`);
         for (const f of unplaced) body.push('', `<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
     }
@@ -273,7 +280,7 @@ export function headArrival({ committedAt, firstSeenAt } = {}) {
  */
 export function canClearVerdict({ verdict, scope = 'full', openBugbotThreads = 0, reviewBody = '' } = {}) {
     if (verdict !== 'request_changes' || scope === 'partial' || openBugbotThreads > 0) return false;
-    const outside = String(reviewBody).split('**Findings outside the diff lines:**')[1] || '';
+    const outside = String(reviewBody).split(OUTSIDE_HEADING)[1] || '';
     return !/\| \*\*(blocker|major)\*\* \|/.test(outside);
 }
 
@@ -480,6 +487,8 @@ export function decodeContents(json = '') {
 // it again (vhs#208 got the same false blocker twice). Threads accepted as
 // "Fixed in …" are not settled: a regression there must still be caught.
 const FIX_REPLY = /^\s*(<!--[^>]*-->\s*)*\**\s*fixed\b/i;
+// "Not in this PR" (and an unlabelled skip): the finding was accepted as deferred, not shown to be wrong.
+const DEFER_REPLY = /^\s*(<!--[^>]*-->\s*)*\**\s*(not in this pr|skipped)\b/i;
 const titleWords = (s = '') => new Set(String(s).toLowerCase().replace(/[`'"*_]/g, '').split(/[^a-z0-9.:-]+/).filter((w) => w.length > 2));
 
 /** Findings bugbot accepted a pushback on: [{ path, title, reply }]. Pure. */
@@ -564,4 +573,51 @@ export function requireEvidence(rv, diff = '') {
         return { ...f, severity: 'minor', detail: `${f.detail}\n\n_Downgraded from ${f.severity}: ${why}._` };
     });
     return { rv: downgraded.length ? recount(rv, findings) : rv, downgraded };
+}
+
+// ── forced re-review of a comment verdict ─────────────────────────────────
+// `risk:medium` needs `approve`, so a `comment` caused only by findings bugbot
+// itself later accepted as wrong could not be cleared without a new commit.
+// `review --force` may then review that head once more; settled findings are
+// dropped from the new review as usual. Everything here fails closed.
+
+/** The line buildBugbotReview writes with its thread count. Only a direct review of a head has it. */
+const INLINE_COUNT = /^CodeRabbit could not review this head \(.*\), so this adversarial review stands in for it\. (\d+) finding\(s\) are inline threads\.\r?$/gm;
+
+/**
+ * May `--force` review a head that already has this verdict? Only a full-scope
+ * `comment` whose every finding is an inline thread on which bugbot accepted a
+ * pushback, with no bugbot thread open and no earlier re-review of the head.
+ * Nits never make a verdict `comment`, so the ones in the summary do not count.
+ * @returns {{ok:boolean, reason:string}}
+ */
+export function canRerollVerdict({ bugbot, headSha, reviews = [], threads = [], trustedAuthors = [], historyComplete = false } = {}) {
+    const no = (reason) => ({ ok: false, reason });
+    if (!headSha || !bugbot || bugbot.sha !== headSha) return no('no bugbot verdict on the head');
+    if (bugbot.verdict !== 'comment') return no(`the head verdict is ${bugbot.verdict}; only a comment verdict can be re-reviewed`);
+    if (bugbot.scope !== 'full') return no('the head verdict covers only part of the diff');
+    if (!historyComplete) return no('review or thread history is incomplete; cannot rule out an earlier re-review or an open thread');
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
+    const isTrusted = (author) => trusted.has(String(author || '').toLowerCase());
+    if (reviews.some((r) => isTrusted(r.author) && String(r.body || '').includes(REROLL_MARK(headSha)))) return no('this head already had its one re-review');
+    const review = reviews.find((r) => r.url && r.url === bugbot.url && r.commit === headSha && isTrusted(r.author));
+    if (!review?.id) return no('the review that gave the verdict was not found');
+    const body = String(review.body || '');
+    if (body.includes(OUTSIDE_HEADING) || body.includes(REFUSED_ANCHORS_HEADING)) return no('the verdict lists findings only in its summary, so they were never answered on a thread');
+    const counts = [...body.matchAll(INLINE_COUNT)];
+    if (counts.length !== 1) return no('the verdict is not a direct review of this head (a cleared or carried-over verdict lists no findings of its own)');
+    const isBugbot = (t) => String(t.comments?.[0]?.body || '').includes(THREAD_MARK);
+    const open = threads.filter((t) => !t.isResolved && isBugbot(t)).length;
+    if (open) return no(`${open} bugbot thread(s) still open`);
+    const own = threads.filter((t) => isBugbot(t) && t.comments[0].reviewId === review.id && isTrusted(t.comments[0].author));
+    const expected = Number(counts[0][1]);
+    if (!expected) return no('the verdict has no finding that could have been refuted');
+    if (own.length !== expected) return no(`found ${own.length} of the verdict's ${expected} finding thread(s)`);
+    for (const t of own) {
+        const accepted = t.comments.findIndex((c, i) => i > 0 && String(c.body || '').includes(ACCEPTED_MARK));
+        if (accepted < 0 || !isTrusted(t.comments[accepted].author)) return no(`bugbot did not accept the answer on ${t.path}`);
+        const answer = [...t.comments.slice(1, accepted)].reverse().find((c) => !String(c.body || '').includes(THREAD_MARK));
+        if (!settledFindings([t]).length || DEFER_REPLY.test(String(answer?.body || ''))) return no(`the finding on ${t.path} was not accepted as a pushback (fixed, deferred or unreadable)`);
+    }
+    return { ok: true, reason: `all ${expected} finding(s) of the comment verdict were accepted as pushbacks` };
 }

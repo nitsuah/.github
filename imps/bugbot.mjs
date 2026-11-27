@@ -3,6 +3,8 @@
 //
 //   node bugbot.mjs sweep  [--dry-run] [--max 2]        every open PR in the owner's repos
 //   node bugbot.mjs review <owner/repo#n> [--dry-run] [--force]
+//          --force reviews even when CodeRabbit is not stalled. On a head that already has a verdict it works once,
+//          and only for a `comment` whose findings were all accepted as pushbacks (canRerollVerdict).
 //   node bugbot.mjs status <owner/repo#n>               print CodeRabbit state and the review gate
 //
 // Per PR, each sweep:
@@ -27,6 +29,7 @@ import {
     reviewGate, sweepCandidates, reviewsInLastDay, isCodeRabbit, THREAD_MARK, threadsAwaitingBugbot, parseThreadJudgement,
     ACCEPTED_MARK, acceptedButOpen, settledFindings, withoutSettled, requireEvidence, headArrival, canClearVerdict, APPROVE_ASK_MARK, shouldAskCodeRabbitApproval,
     latestPassedVerdict, ownChanges, sameOwnChanges, excerptLines, citedLocations, decodeContents,
+    canRerollVerdict, REFUSED_ANCHORS_HEADING,
 } from './bugbot-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,10 +89,10 @@ const PR_QUERY = `query($owner:String!,$repo:String!,$n:Int!){repository(owner:$
   closingIssuesReferences(first:3){nodes{number title body}}
   commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{
     __typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
-  reviews(last:100){nodes{databaseId author{login} state submittedAt body url commit{oid}}}
+  reviews(last:100){pageInfo{hasPreviousPage} nodes{databaseId author{login} state submittedAt body url commit{oid}}}
   comments(last:100){pageInfo{hasPreviousPage} nodes{author{login} createdAt body}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line originalLine
-    first: comments(first:1){nodes{id author{login} body createdAt originalCommit{oid}}}
+    first: comments(first:1){nodes{id author{login} body createdAt originalCommit{oid} pullRequestReview{databaseId}}}
     latest: comments(last:30){nodes{id author{login} body createdAt originalCommit{oid}}}}}
 }}}`;
 
@@ -126,7 +129,7 @@ function loadPr(slug, number) {
     const commentsComplete = d.comments.pageInfo ? !d.comments.pageInfo.hasPreviousPage : false;
     const comments = d.comments.nodes.map((c) => ({ author: c.author?.login || '', createdAt: c.createdAt, body: c.body }));
     // The original finding plus the latest replies (a long thread's newest word is what bugbot must read).
-    const toComment = (c) => ({ id: c.id, author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid });
+    const toComment = (c) => ({ id: c.id, author: c.author?.login || '', body: c.body, createdAt: c.createdAt, originalCommit: c.originalCommit?.oid, reviewId: c.pullRequestReview?.databaseId });
     const threads = d.reviewThreads.nodes.map(({ first, latest, ...t }) => {
         const head0 = first.nodes[0];
         const rest = latest.nodes.filter((c) => !head0 || c.id !== head0.id);
@@ -146,6 +149,8 @@ function loadPr(slug, number) {
         slug, number, url: d.url, title: d.title, body: d.body || '', state: d.state, baseRef: d.baseRefName, isDraft: d.isDraft, labels: d.labels.nodes,
         issues: d.closingIssuesReferences.nodes, headSha: head.oid, headAt: headArrival({ committedAt: head.committedDate, firstSeenAt: firstSeen(d.url, head.oid) }), checks, reviews, comments, threads, openThreads,
         commentsComplete,
+        // Same rule for reviews and threads: needed before a head may be reviewed a second time.
+        reviewHistoryComplete: !moreThreads && Boolean(d.reviews.pageInfo) && !d.reviews.pageInfo.hasPreviousPage,
         checksGreen: !moreChecks && evaluateChecks(gateChecks).green, crLatestState, hasBugbotStatus: checks.some((c) => c.name === STATUS_CONTEXT),
         crApprovedHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'APPROVED' && r.commit === head.oid),
         crBlocksHead: reviews.some((r) => isCodeRabbit(r.author) && r.state === 'CHANGES_REQUESTED' && r.commit === head.oid),
@@ -182,7 +187,7 @@ function writeStatus(pr, state, description, url) {
     return !res.code;
 }
 
-async function runReview(pr, reason) {
+async function runReview(pr, reason, { reroll = false } = {}) {
     const d = gh(['pr', 'diff', String(pr.number), '-R', pr.slug]);
     if (d.code || !d.out.trim()) {
         // No diff, no verdict: an empty prompt would "approve" code nobody read.
@@ -220,7 +225,7 @@ async function runReview(pr, reason) {
     const proven = requireEvidence(rv, fullDiff);
     if (proven.downgraded.length) log({ event: 'bugbot-downgraded', pr: pr.url, sha: pr.headSha, downgraded: proven.downgraded.map((f) => `${f.file}: ${f.title} (${f.why})`) });
     rv = proven.rv;
-    const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served, partial });
+    const payload = buildBugbotReview(rv, { diff: fullDiff, headSha: pr.headSha, reason, model: o.model, served: metrics.served, partial, reroll });
     let url = null;
     if (!o['dry-run']) {
         const post = (comments) => gh(['api', `repos/${pr.slug}/pulls/${pr.number}/reviews`, '-X', 'POST', '--input', '-', '--jq', '.html_url'], {
@@ -231,7 +236,7 @@ async function runReview(pr, reason) {
             // GitHub refuses the whole review if one line is off the diff; fall back to a summary-only review.
             // Keep each finding whole (evidence and fix), minus the thread marker.
             const listed = payload.comments.map((c) => `#### \`${c.path}:${c.line}\`\n\n${c.body.split(THREAD_MARK).join('').trim()}`).join('\n\n');
-            payload.body += `\n\n**Inline findings (GitHub refused the line anchors):**\n\n${listed}`;
+            payload.body += `\n\n${REFUSED_ANCHORS_HEADING}\n\n${listed}`;
             res = post([]);
         }
         if (res.code) {
@@ -245,7 +250,7 @@ async function runReview(pr, reason) {
         console.log(payload.body);
         for (const c of payload.comments) console.log(`  inline ${c.path}:${c.line} ${c.body.split('\n')[0]}`);
     }
-    log({ event: 'bugbot-review', pr: pr.url, sha: pr.headSha, reason, verdict: rv.verdict, partial: partial || undefined, counts: rv.counts, inline: payload.comments.length, url, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
+    log({ event: 'bugbot-review', pr: pr.url, sha: pr.headSha, reason, verdict: rv.verdict, partial: partial || undefined, counts: rv.counts, inline: payload.comments.length, reroll: reroll || undefined, url, served: metrics.served, tokens: metrics.tokens, dryRun: o['dry-run'] || undefined });
     return { verdict: rv.verdict, url };
 }
 
@@ -465,14 +470,25 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         pr = loadPr(slug, number);
         a = assess(pr);
     }
-    if (!a.bugbot && (a.crStatus.stalled || force)) {
+    // --force on a head that already has a verdict: one more review, only if every finding was refuted.
+    let reroll = false;
+    let refused = null;
+    if (force && a.bugbot) {
+        const check = canRerollVerdict({ bugbot: a.bugbot, headSha: pr.headSha, reviews: pr.reviews, threads: pr.threads, trustedAuthors: trustedAuthors(), historyComplete: pr.reviewHistoryComplete });
+        reroll = check.ok;
+        if (!check.ok) {
+            refused = check.reason;
+            log({ event: 'bugbot-force-refused', pr: pr.url, sha: pr.headSha, reason: refused, dryRun: o['dry-run'] || undefined });
+        }
+    }
+    if (reroll || (!a.bugbot && (a.crStatus.stalled || force))) {
         if (reviewsInLastDay(events(), pr.url) >= C.perPrPerDay) {
             log({ event: 'bugbot-skip', pr: pr.url, sha: pr.headSha, reason: `per-PR cap (${C.perPrPerDay}/day)` });
             return { pr: pr.url, action: 'capped' };
         }
         if (budget.left <= 0) return { pr: pr.url, action: 'deferred', reason: 'sweep budget used' };
         budget.left--;
-        const done = await runReview(pr, force && !a.crStatus.stalled ? 'forced' : a.crStatus.state);
+        const done = await runReview(pr, force && !a.crStatus.stalled ? 'forced' : a.crStatus.state, { reroll });
         if (!done) return { pr: pr.url, action: 'review-failed' };
         if (o['dry-run']) return { pr: pr.url, action: 'reviewed', verdict: done.verdict };
         // Reload both: the review took minutes, and checks or CodeRabbit may have moved meanwhile.
@@ -496,6 +512,7 @@ async function handle(slug, number, { force = false, budget = { left: Infinity }
         dismissCodeRabbit(pr, a.crStatus.state);
         return { pr: pr.url, action: 'dismissed-coderabbit', gate: a.gate };
     }
+    if (refused) return { pr: pr.url, action: 'force-refused', reason: refused, coderabbit: a.crStatus.state, gate: a.gate };
     return { pr: pr.url, action: a.bugbot ? 'reviewed' : 'wait', coderabbit: a.crStatus.state, gate: a.gate };
 }
 
