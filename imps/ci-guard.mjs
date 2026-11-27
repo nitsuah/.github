@@ -111,8 +111,10 @@ function filterChangelogDiff(diff) {
             if (inChangelogHunk && hasChangelogContent) {
                 output.push(...currentHunk);
             }
-            // Check if this diff is for a changelog file
-            inChangelogHunk = CHANGELOG.test(line);
+            // Extract filename from diff header: "diff --git a/<path> b/<path>"
+            const match = line.match(/^diff --git a\/(.+) b\//);
+            const filepath = match ? match[1] : '';
+            inChangelogHunk = CHANGELOG.test(filepath);
             hasChangelogContent = false;
             currentHunk = [line];
         } else if (line.startsWith('@@')) {
