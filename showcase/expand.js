@@ -2,7 +2,7 @@
  * showcase/expand.js — click-to-expand images and an expand button on videos
  * for every nitsuah GitHub Pages site. One <script> tag, no dependencies:
  *
- *   <script src="https://cdn.jsdelivr.net/gh/nitsuah/.github@main/showcase/expand.js" defer></script>
+ *   the commit-pinned tag with `integrity` in showcase/STANDARD.md (showcase/pin.mjs prints it)
  *
  * Images: click (or Enter) opens a fullscreen viewer; click, Esc or ✕ closes it;
  *   ←/→ step through every expandable image on the page.
