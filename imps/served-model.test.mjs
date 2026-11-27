@@ -105,7 +105,7 @@ test('probeServedModel sends a minimal bounded request and never returns the key
 test('imp.mjs stops before quota and dispatch puts a mismatch back on imp:ready', async () => {
     const { readFileSync } = await import('node:fs');
     const imp = readFileSync(new URL('./imp.mjs', import.meta.url), 'utf8');
-    assert.ok(imp.indexOf('probeServedModel(') < imp.indexOf('reserveQuota(MODEL_POOL, o.modelStrategy'), 'probe runs before quota is reserved');
+    assert.ok(imp.indexOf('probeCandidates(pinned') < imp.indexOf('reserveQuota(quotaPool(o.model'), 'probe runs before quota is reserved');
     const dispatch = readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
     assert.match(dispatch, /run\.out\.includes\(MODEL_MISMATCH_MARK\)[\s\S]{0,400}relabel\(repo, number, 'imp:ready', \['imp:working'\]\)/);
 });
