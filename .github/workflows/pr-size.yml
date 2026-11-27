@@ -1,0 +1,72 @@
+name: PR size
+
+# Enforces the small-PR rule now that CI is the only merge gate (fire#626 merged at 274 lines).
+# Same counting as the imp gate (imps/lib.mjs gate()): additions + deletions per file, test files
+# measured against their own budget, lockfiles / snapshots / images / CHANGELOG not counted.
+# Other repos call it with:
+#   on: { pull_request: { types: [opened, synchronize, reopened, labeled, unlabeled] } }
+#   jobs: { size: { uses: nitsuah/.github/.github/workflows/pr-size.yml@main } }
+# Escape hatch: the owner adds the `size:ok` label (logged in the job output).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_call:
+    inputs:
+      max-lines:
+        description: Cap on non-test changed lines
+        type: number
+        default: 180
+      max-test-lines:
+        description: Cap on test-file changed lines (set to max-lines for one strict cap)
+        type: number
+        default: 360
+      override-label:
+        description: Label that skips the check
+        type: string
+        default: 'size:ok'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check changed lines
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MAX: ${{ inputs.max-lines || 180 }}
+          MAX_TEST: ${{ inputs.max-test-lines || 360 }}
+          OVERRIDE: ${{ inputs.override-label || 'size:ok' }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR}" ]; then echo "Not a pull request; nothing to check."; exit 0; fi
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" \
+            --jq '.[] | [.filename, (.additions + .deletions)] | @tsv' > files.tsv
+          python3 - <<'PY'
+          import json, os, re, sys
+          exempt = re.compile(r'(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|cargo\.lock|uv\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|go\.sum|flake\.lock|deno\.lock|changelog\.md)$|\.(snap|png|jpe?g|gif|webp|svg)$', re.I)
+          test = re.compile(r'(^|/)(tests?|__tests__|tests_playwright|e2e|spec)/|\.(test|spec)\.[^/]+$', re.I)
+          code = tests = skipped = 0
+          for line in open('files.tsv'):
+              path, n = line.rstrip('\n').rsplit('\t', 1)
+              n = int(n or 0)
+              if exempt.search(path): skipped += n
+              elif test.search(path): tests += n
+              else: code += n
+          mx, mt = int(os.environ['MAX']), int(os.environ['MAX_TEST'])
+          print(f'code lines: {code}/{mx}  test lines: {tests}/{mt}  not counted: {skipped}')
+          over = [f'code {code} > {mx}'] * (code > mx) + [f'tests {tests} > {mt}'] * (tests > mt)
+          if not over: sys.exit(0)
+          label = os.environ['OVERRIDE']
+          if label in json.loads(os.environ.get('LABELS') or '[]'):
+              print(f'::warning::Over the size cap ({", ".join(over)}) but `{label}` is set; passing.')
+              sys.exit(0)
+          print(f'::error::PR too large: {", ".join(over)}. Split it, or the owner adds `{label}`.')
+          sys.exit(1)
+          PY
