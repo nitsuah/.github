@@ -8,14 +8,15 @@ import { isDocPath } from './lib.mjs';
 import { prRisk, fetchPrPaths, fetchAckEvents, ownerAcknowledged, RISK_ACK_LABEL } from './checks.mjs';
 
 export const NO_CHANGELOG_LABEL = 'no-changelog';
-const CHANGELOG = /^CHANGELOG\.md$/i;
+// The root CHANGELOG.md, or docs/CHANGELOG.md for repos that keep it there (most of the fleet).
+const CHANGELOG = /^(docs\/)?CHANGELOG\.md$/i;
 
 /** Why the PR fails the guard; an empty list passes. `error` is a failed file listing. */
 export function guardFailures({ paths = [], currentPaths = paths, error = null, labels = [], ackEvents = [], owners = [] } = {}) {
     const failures = [];
     if (error) failures.push(`could not read the PR's files: ${error}`);
     else if (paths.some((p) => !isDocPath(p)) && !currentPaths.some((p) => CHANGELOG.test(p)) && !labels.includes(NO_CHANGELOG_LABEL))
-        failures.push(`non-docs files changed but root CHANGELOG.md did not. Add a line, or label the PR ${NO_CHANGELOG_LABEL}.`);
+        failures.push(`non-docs files changed but CHANGELOG.md (root or docs/) did not. Add a line, or label the PR ${NO_CHANGELOG_LABEL}.`);
     // Classed from the paths as well as the label, so removing `risk:high` changes nothing.
     if (prRisk({ paths, error, labels }) === 'high' && !ownerAcknowledged({ labels, events: ackEvents, owners }))
         failures.push(`risk:high needs the ${RISK_ACK_LABEL} label, added by an owner (${owners.join(', ')}).`);
