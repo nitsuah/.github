@@ -463,3 +463,93 @@ test('decodeContents: keeps leading blank lines so line numbers stay exact', () 
         assert.equal(requireEvidence(rv, diff).rv, rv);
     });
 }
+
+// ── forced re-review of a comment verdict ──
+{
+    const { canRerollVerdict, REROLL_MARK, REFUSED_ANCHORS_HEADING, buildBugbotReview: build, bugbotVerdictFor: verdictFor, THREAD_MARK: TM, ACCEPTED_MARK: AM } = await import('./bugbot-lib.mjs');
+    const sha = 'c'.repeat(40);
+    const diff = ['diff --git a/s.json b/s.json', '--- a/s.json', '+++ b/s.json', '@@ -1 +1,2 @@', ' {', '+  "a": 1'].join('\n');
+    const finding = { severity: 'minor', file: 's.json', line: 2, title: 'Missing visual flag', detail: 'why' };
+    const reviewOf = (findings, opts = {}, id = 1) => ({
+        id, url: `u${id}`, author: 'nitsuah', commit: sha, submittedAt: `2026-11-27T1${id}:00:00Z`,
+        body: build({ verdict: 'comment', summary: 'One catalog gap.', findings }, { diff, headSha: sha, reason: 'forced', ...opts }).body,
+    });
+    const thread = ({ reply = 'This entry is intentional.', judged = `${TM}${AM}\n**Resolved:** ok`, judge = 'nitsuah', reviewId = 1, isResolved = true } = {}) => ({
+        path: 's.json', isResolved,
+        comments: [
+            { author: 'nitsuah', reviewId, body: `${TM}\n**minor** · Missing visual flag\n\nwhy` },
+            { author: 'nitsuah', body: reply },
+            { author: judge, body: judged },
+        ],
+    });
+    const check = ({ reviews = [reviewOf([finding])], threads = [thread()], historyComplete = true, bugbot } = {}) =>
+        canRerollVerdict({ bugbot: bugbot || verdictFor(reviews, sha, { trustedAuthors: ['nitsuah'] }), headSha: sha, reviews, threads, historyComplete, trustedAuthors: ['nitsuah'] });
+    const refused = (args, why) => {
+        const out = check(args);
+        assert.equal(out.ok, false, out.reason);
+        assert.match(out.reason, why);
+    };
+
+    test('canRerollVerdict: a comment whose every finding was accepted as a pushback', () => {
+        assert.equal(check().ok, true);
+        assert.equal(check({ threads: [thread({ reply: '<!-- imp-fix -->\n**Pushing back:** the key is optional.' })] }).ok, true);
+    });
+
+    test('canRerollVerdict: nits in the summary do not count', () => {
+        const nit = { severity: 'nit', file: 's.json', line: 2, title: 'Spacing', detail: '' };
+        assert.equal(check({ reviews: [reviewOf([finding, nit])] }).ok, true);
+    });
+
+    test('canRerollVerdict: a second re-review of the same head is refused', () => {
+        const reroll = reviewOf([finding], { reroll: true }, 2);
+        assert.ok(reroll.body.includes(REROLL_MARK(sha)));
+        // The re-review raised a new comment that was refuted too: still no third roll.
+        refused({ reviews: [reviewOf([finding]), reroll], threads: [thread(), thread({ reviewId: 2 })] }, /already had its one re-review/);
+        // The mark counts only from a trusted account.
+        const pasted = { id: 3, url: 'u3', author: 'someone', commit: sha, body: REROLL_MARK(sha) };
+        assert.equal(check({ reviews: [reviewOf([finding]), pasted] }).ok, true);
+    });
+
+    test('buildBugbotReview: only a re-review carries the reroll mark', () => {
+        assert.ok(!reviewOf([finding]).body.includes(REROLL_MARK(sha)));
+    });
+
+    test('canRerollVerdict: only a full-scope comment', () => {
+        for (const verdict of ['approve', 'request_changes'])
+            refused({ bugbot: { sha, verdict, scope: 'full', url: 'u1' } }, /only a comment/);
+        refused({ reviews: [reviewOf([finding], { partial: true })] }, /part of the diff/);
+        refused({ bugbot: { sha: 'd'.repeat(40), verdict: 'comment', scope: 'full', url: 'u1' } }, /no bugbot verdict/);
+    });
+
+    test('canRerollVerdict: open, fixed, deferred, kept or hand-resolved findings refuse', () => {
+        refused({ threads: [thread({ isResolved: false })] }, /still open/);
+        refused({ threads: [thread(), thread({ reviewId: 9, isResolved: false })] }, /still open/);
+        for (const reply of ['Fixed in abc123.', '<!-- imp-fix -->\n**Fixed in abc123:** done', '<!-- imp-fix -->\n**Not in this PR:** tracked in #9', '<!-- imp-fix -->\n**Skipped:** later'])
+            refused({ threads: [thread({ reply })] }, /not accepted as a pushback/);
+        refused({ threads: [thread({ judged: `${TM}\n**Still open:** no` })] }, /did not accept/);
+        refused({ threads: [thread({ judged: 'resolving' })] }, /did not accept/);
+        refused({ threads: [thread({ judge: 'someone' })] }, /did not accept/);
+    });
+
+    test('canRerollVerdict: every finding of the verdict needs its own accepted thread', () => {
+        const two = reviewOf([finding, { ...finding, title: 'Another' }]);
+        refused({ reviews: [two] }, /found 1 of the verdict's 2/);
+        refused({ reviews: [two], threads: [thread(), thread({ reply: 'Fixed in abc123.' })] }, /not accepted as a pushback/);
+        // An accepted thread from an earlier review does not stand in for this verdict's finding.
+        refused({ threads: [thread({ reviewId: 9 })] }, /found 0 of/);
+    });
+
+    test('canRerollVerdict: findings listed only in the summary refuse', () => {
+        refused({ reviews: [reviewOf([finding, { ...finding, line: 99, title: 'Off diff' }])] }, /only in its summary/);
+        const anchors = reviewOf([finding]);
+        anchors.body += `\n\n${REFUSED_ANCHORS_HEADING}\n\n#### s.json:2`;
+        refused({ reviews: [anchors] }, /only in its summary/);
+    });
+
+    test('canRerollVerdict: cleared or carried-over verdicts and incomplete history refuse', () => {
+        const cleared = { id: 1, url: 'u1', author: 'nitsuah', commit: sha, body: `<!-- bugbot sha=${sha} verdict=comment scope=full -->\n### Bugbot review: 💬 Findings answered` };
+        refused({ reviews: [cleared] }, /cleared or carried-over/);
+        refused({ historyComplete: false }, /incomplete/);
+        refused({ bugbot: { sha, verdict: 'comment', scope: 'full', url: 'elsewhere' } }, /not found/);
+    });
+}
