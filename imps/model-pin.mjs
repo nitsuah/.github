@@ -32,11 +32,39 @@ export const RETRY_TOOL_ERRORS = 10;
  * The model for the one retry of a failed run, or null. Only a pinned model other than the
  * failed one that has passed a gate qualifies (the latest pass wins), and a retry is never retried.
  */
-export function retryModel({ row, allowed = [], rows = [] } = {}) {
+export function retryModel({ row, allowed = [], rows = [], now = Date.now() } = {}) {
     if (!row || row.retryOf || row.gate?.pass !== false || !((row.metrics?.toolErrors ?? 0) > RETRY_TOOL_ERRORS)) return null;
-    const passedAt = (r) => Date.parse(r.gate.at || r.startedAt) || 0;
-    return rows.filter((r) => r.gate?.pass === true && r.model !== row.model && allowed.includes(r.model))
-        .sort((a, b) => passedAt(a) - passedAt(b)).at(-1)?.model ?? null;
+
+    // Use the same six-hour completion window and three-failure bench rule as orderRequestModels.
+    const gateAt = (r) => {
+        const completed = Date.parse(r.gate?.at || '');
+        return Number.isFinite(completed) ? completed : Date.parse(r.startedAt);
+    };
+    const recent = rows
+        .filter((r) => {
+            const at = gateAt(r);
+            const age = now - at;
+            return allowed.includes(r.model) && typeof r.gate?.pass === 'boolean'
+                && Number.isFinite(at) && age >= 0 && age < BENCH_WINDOW_MS;
+        })
+        .sort((a, b) => gateAt(a) - gateAt(b));
+    const state = new Map();
+    for (const r of recent) {
+        const current = state.get(r.model) || { streak: 0, benched: false, lastPassedAt: null };
+        if (r.gate.pass) {
+            current.streak = 0;
+            current.benched = false;
+            current.lastPassedAt = gateAt(r);
+        } else {
+            current.streak++;
+            if (current.streak >= 3) current.benched = true;
+        }
+        state.set(r.model, current);
+    }
+    return [...state.entries()]
+        .filter(([model, status]) => model !== row.model && !status.benched && status.lastPassedAt !== null)
+        .sort((a, b) => a[1].lastPassedAt - b[1].lastPassedAt)
+        .at(-1)?.[0] ?? null;
 }
 
 /**
