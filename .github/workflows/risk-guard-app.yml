@@ -17,7 +17,6 @@ on:
 
 permissions:
   contents: read
-  issues: read
   pull-requests: read
 
 jobs:
@@ -66,15 +65,27 @@ jobs:
           GUARD_OWNERS: nitsuah
         run: node .risk-guard-kit/imps/ci-guard.mjs
 
-      - name: Complete the dedicated App check run
-        if: always() && steps.start-check.outputs.check_run_id != ''
+      - name: Complete the dedicated App check run (success)
+        if: always() && steps.start-check.outputs.check_run_id != '' && steps.guard.outcome == 'success'
         env:
           CHECK_MODE: finish
           CHECK_APP_TOKEN: ${{ steps.app-token.outputs.token }}
           GUARD_REPO: ${{ github.repository }}
           CHECK_RUN_ID: ${{ steps.start-check.outputs.check_run_id }}
-          CHECK_CONCLUSION: ${{ steps.guard.outcome == 'success' && 'success' || 'failure' }}
-          CHECK_SUMMARY: ${{ steps.guard.outcome == 'success' && 'The shared risk guard passed.' || 'The shared risk guard failed. See the workflow annotations for the exact rule.' }}
+          CHECK_CONCLUSION: success
+          CHECK_SUMMARY: The shared risk guard passed.
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: node .risk-guard-kit/imps/ci-guard-check.mjs
+
+      - name: Complete the dedicated App check run (failure)
+        if: always() && steps.start-check.outputs.check_run_id != '' && steps.guard.outcome != 'success'
+        env:
+          CHECK_MODE: finish
+          CHECK_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GUARD_REPO: ${{ github.repository }}
+          CHECK_RUN_ID: ${{ steps.start-check.outputs.check_run_id }}
+          CHECK_CONCLUSION: failure
+          CHECK_SUMMARY: The shared risk guard failed. See the workflow annotations for the exact rule.
           GITHUB_API_URL: ${{ github.api_url }}
         run: node .risk-guard-kit/imps/ci-guard-check.mjs
 
