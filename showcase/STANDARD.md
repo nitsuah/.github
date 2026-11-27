@@ -92,14 +92,14 @@ Every Pages site (`site/` preferred, deployed by `.github/workflows/pages.yml` o
 1. **The expand kit.** Put this in `<head>`:
 
    ```html
-   <script src="https://cdn.jsdelivr.net/gh/nitsuah/.github@main/showcase/expand.js" defer></script>
+   <script src="https://cdn.jsdelivr.net/gh/nitsuah/.github@afcb5f094ef6587eda54341359518280eaef498d/showcase/expand.js" integrity="sha384-AT948tJXzcpDRvm6eWzgyLag1+H+uFV2TZZom/scUyS3R32Sau4epiqWSBil6404" crossorigin="anonymous" defer></script>
    ```
 
    - Images ≥ 160 px become click-to-expand: fullscreen viewer, ←/→ between images, Esc or click to exit.
    - Every `<video>` gets a ⛶ fullscreen button.
    - `data-no-expand` opts an element and everything inside it out. `data-no-expand="images"` opts out images only and keeps the video buttons. Use `<html data-no-expand="images">` on a site that already has its own lightbox (fire does).
    - `data-full="big.png"` serves a larger file in the viewer.
-   - Changes to `expand.js` reach every site within jsDelivr's cache window (≤ 12 h). Purge with `https://purge.jsdelivr.net/gh/nitsuah/.github@main/showcase/expand.js`.
+   - The tag is pinned to a commit and carries an `integrity` hash, so a change to `expand.js` reaches a site only through a PR in that site's repo. After a change merges, run `node showcase/pin.mjs` on an up-to-date `origin/main` checkout, paste the tag it prints here and into `templates/page-skeleton.html`, and update each site's tag on its next showcase refresh. Never load it from a branch name such as `@main`.
 2. **Big images.**
    - Primary screenshots span the content column, at least 720 px wide on desktop.
    - Galleries are at most 2-up on desktop and 1-up under 720 px.
