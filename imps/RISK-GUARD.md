@@ -1,30 +1,34 @@
-# Required risk guard
+# Trusted risk-guard check
 
-## Decision
+## Security decision
 
-The old caller-owned `pull_request` + `pull_request_target` pattern is not an enforceable required check. A target-repository PR can add another Actions job with the same workflow/job context; both checks are emitted by the GitHub Actions app. A source-app restriction therefore cannot distinguish the trusted run from the spoof.
+A required check emitted by GitHub Actions is spoofable: a pull request can add another Actions job with the same check context, and branch protection sees the same GitHub Actions app identity. Renaming the job or using `pull_request_target` does not change that identity.
 
-The preferred replacement is GitHub's **Require workflows to pass before merging** ruleset rule, selecting this repository's `.github/workflows/required-risk-guard.yml` from the `main` branch. That rule binds enforcement to the selected source workflow, not to a check name that PR code can copy. The workflow itself is stored in this shared repository, uses only read permissions, checks out this exact workflow revision from `nitsuah/.github`, and reads PR metadata through the API. It never checks out or executes target PR code.
+The enforcement check is therefore emitted by a dedicated GitHub App named **Nitsuah Risk Guard**. The trusted `pull_request_target` caller invokes this pinned reusable workflow, which evaluates PR metadata with the read-only Actions token and creates/completes the required `Nitsuah Risk Guard` check using a narrowly scoped installation token from the dedicated App. A PR cannot mint that App token or spoof its check-run identity.
 
-## Activation
+The reusable workflow checks out only `nitsuah/.github` at `job.workflow_sha`; it never checks out or executes target PR code. The App token is scoped to the current repository and `checks: write` only. The guard's authorized owner login is `nitsuah`, including for repositories owned by the `Nitsuah-Labs` organization.
 
-After this workflow is merged:
+## One-time GitHub App setup
 
-1. In each supported repository's Settings → Rules → Rulesets, edit the active default-branch ruleset.
-2. Add **Require workflows to pass before merging**.
-3. Select source repository `nitsuah/.github`, branch `main`, workflow `.github/workflows/required-risk-guard.yml`.
-4. Apply it to the default branch only. Do not target all branches.
-5. For existing open PRs, push a normal follow-up commit or update the branch to trigger the required workflow; ruleset workflows do not automatically run on PRs that were already open when the rule was created.
-6. Verify the required workflow appears and passes on a test PR before removing the old caller-owned status check from branch protection and deleting the local `.github/workflows/risk-guard.yml` caller.
+An owner must perform this account-level setup. The workflow references the resulting variable and secret but does not create, read, print, or modify either value.
 
-For `Nitsuah-Labs`, prefer an organization-level ruleset targeting the owned repositories. For user-owned `nitsuah/*` repositories, configure the rule at repository level if the account UI exposes this rule.
+1. Register a private GitHub App named **Nitsuah Risk Guard**. It needs **Checks: Read and write** and **Metadata: Read-only** only; no webhook events are required.
+2. Install the App on the `nitsuah` user account and the `Nitsuah-Labs` organization, selecting only owned repositories that use the guard.
+3. Set repository variable `RISK_GUARD_APP_CLIENT_ID` to the App's Client ID. For `Nitsuah-Labs`, an organization variable can cover all adopted repos; for personal `nitsuah/*` repos, set the variable at repository level.
+4. Set secret `RISK_GUARD_APP_PRIVATE_KEY` to the App private key, using an organization secret for `Nitsuah-Labs` where appropriate and repository secrets for personal repos. Never put the key in a brief, issue, PR comment, or file.
+5. Copy `repo-health/templates/risk-guard.yml` into each target repo as `.github/workflows/risk-guard.yml`, replacing `REPLACE_WITH_KIT_SHA` with the full commit SHA of this kit.
+6. In each target repo's branch protection, require **Nitsuah Risk Guard** from the **Nitsuah Risk Guard GitHub App**. Remove the old `Trusted guard / Risk guard` Actions check from the required list after the App-backed check has passed once. The old Actions check may remain advisory.
+7. Verify a normal PR and a high-risk PR. The high-risk check must fail without an owner-added `risk-ack`, then pass after `nitsuah` adds that label. Label changes trigger the caller automatically.
 
-## Availability and fallback
+## Runtime behavior
 
-GitHub documents ruleset workflows as an organization/enterprise ruleset capability. If **Require workflows to pass before merging** is not available on the account, do not fall back to another same-name GitHub Actions job. The safe fallback is a separately installed GitHub App that creates a check run under its own App identity, with the required status check restricted to that App. That requires an App installation and private-key secret configured by an owner; this repository deliberately does not create, read, or modify secrets.
+- The local caller uses `pull_request_target` and listens for opened, synchronize, reopened, edited, labeled, and unlabeled events. A label change therefore re-evaluates `risk-ack` and `no-changelog` without requiring an empty commit.
+- The caller passes only the App Client ID variable and the private-key secret to the pinned reusable workflow.
+- The reusable workflow creates an App-backed check in progress, runs `imps/ci-guard.mjs` with read-only API access, then completes the App check with success or failure.
+- The App token is scoped to the current repository and `checks: write`. The workflow does not use it to read PR contents or write repository files.
+- If the App is not installed, the variable/secret is missing, or check creation fails, the App check is absent and branch protection blocks the merge. This is intentionally fail-closed.
+- The App check is bound to the PR head SHA. A same-named job emitted by GitHub Actions cannot satisfy a required check restricted to the dedicated App.
 
-Until one of those two enforcement mechanisms is active, treat the legacy Actions status as advisory only and do not claim the spoofing issue is fixed.
+## Migration
 
-## Legacy caller
-
-`repo-health/templates/risk-guard.yml` is retained for historical reference and migration. It is not a secure required-check mechanism. Do not copy it into new repositories or rely on its `Trusted guard` check name for enforcement.
+Do not rely on a caller-owned Actions status as the security boundary. Update existing adopters to the pinned `risk-guard-app.yml` workflow, configure the App installation and branch-protection source, verify the App check, then remove the old Actions check from required status checks. Until the App-backed check is configured and required, the legacy Actions result is advisory only.
