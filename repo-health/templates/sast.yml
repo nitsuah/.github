@@ -1,0 +1,16 @@
+name: SAST
+
+# Copy to .github/workflows/sast.yml in a private repo and replace REPLACE_WITH_KIT_SHA with the
+# current nitsuah/.github main commit. Then make both checks required on the default branch.
+on:
+  pull_request:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sast:
+    uses: nitsuah/.github/.github/workflows/sast.yml@REPLACE_WITH_KIT_SHA # main
