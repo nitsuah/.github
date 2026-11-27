@@ -19,6 +19,6 @@ test('multi-owner queue discovery deduplicates candidates and applies case-insen
     const found = discoverQueueCandidates(rows, ['NITSUAH-LABS/DEPLOYER']);
     assert.deepEqual(found.map(({ owner, repo, number }) => [owner, repo, number]), [
         ['nitsuah', 'fire', 10],
-        ['Nitsuah-Labs', 'tooling', 3],
+        ['Nitsuah-Labs', 'Nitsuah-Labs/tooling', 3],
     ]);
 });
