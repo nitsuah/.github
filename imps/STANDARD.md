@@ -136,8 +136,8 @@ A brief's `risk:` front matter raises the class and never lowers it; an unknown 
 | Merging `medium` | green CI, no open thread and a full-scope bugbot `approve` on the head commit. `comment` is not enough, including a verdict cleared by answering its threads: that PR needs a new commit and review, or a person | `bugbot.mjs merge-check` |
 | Merging `high` | never automatic. Labelled `imp:needs-human` when it opens, and by demonguard while CodeRabbit and bugbot have not both approved the head. Only a person removes the label, since other failures set it too. Even with both approvals `merge-check` also needs `risk-ack`, last added by the owner | `imp.mjs pr`, `demonguard.mjs`, `merge-check` |
 | Acknowledgement | a fix round removes `risk-ack` before it pushes, and pushes nothing if that fails | `fix.mjs` |
-| CI: CHANGELOG | a PR that changes a non-docs file (tests included) without adding or modifying the current root `CHANGELOG.md` or `docs/CHANGELOG.md` fails, unless labelled `no-changelog`; other paths, renamed-away paths and deleted files do not qualify | `risk-guard.yml` → `ci-guard.mjs` |
-| CI: high risk | a PR that is `risk:high`, by label or by its paths, fails without an owner's `risk-ack` | `risk-guard.yml` → `ci-guard.mjs` |
+| CI: CHANGELOG | a PR that changes a non-docs file (tests included) without adding or modifying the current root `CHANGELOG.md` or `docs/CHANGELOG.md` fails, unless labelled `no-changelog`; other paths, renamed-away paths and deleted files do not qualify | ruleset-bound `required-risk-guard.yml` → `ci-guard.mjs` |
+| CI: high risk | a PR that is `risk:high`, by label or by its paths, fails without an owner's `risk-ack` | ruleset-bound `required-risk-guard.yml` → `ci-guard.mjs` |
 
 **Adopting the CI guard:** copy `repo-health/templates/risk-guard.yml` to the repo's `.github/workflows/` and pin it to a `nitsuah/.github` main SHA, as for repo-health; the guard code is checked out at that same SHA. It reads the PR through the API and never checks out its code. The check blocks merges only where branch protection requires it. The caller uses `pull_request_target`, so a PR that edits the caller file still runs the base-branch version (such a PR is also `risk:high`). Imp diffs may not touch the CHANGELOG, so an imp PR that changes non-docs files waits for a person to add the line or `no-changelog`; the fix round ignores this check.
 
@@ -446,3 +446,12 @@ Every agent-initiated squash merge must include a commit-body trailer identifyin
 Preserve the original squash commit list and every distinct `Co-Authored-By:` trailer when supplying a custom merge body. Do not replace existing attribution with the agent trailer alone.
 
 Sensitive changes require explicit owner approval before merge: `.github/workflows/**`, `**/auth/**`, `**/security/**`, `SECURITY.md`, lockfiles, or PRs labeled `security`/`auth`. The owner approval marker is `owner-approved`. CI green is not a substitute for owner approval on these paths.
+
+
+### Required-workflow enforcement
+
+The former caller-owned `pull_request` + `pull_request_target` template is advisory only: a PR can add a second Actions job with the same check name, and both checks have the GitHub Actions app identity. A same-name check is not proof that the trusted workflow ran.
+
+The supported enforcement design is GitHub's ruleset **Require workflows to pass before merging** rule, selecting `nitsuah/.github` → `main` → `.github/workflows/required-risk-guard.yml`. That rule binds to the selected source workflow rather than a caller-controlled check name. The workflow is read-only, checks out its own source revision via `github.workflow_sha`, and never checks out PR code. Setup, rollout, and the non-Enterprise fallback are documented in [RISK-GUARD.md](./RISK-GUARD.md).
+
+Do not mark the legacy `Trusted guard / Risk guard` status as a secure enforcement boundary. If the account cannot configure required workflows, the alternative is a separately installed GitHub App that emits the required check under its own App identity; do not substitute another same-named Actions job. Until one of those mechanisms is active, the CI guard is advisory and merges must not rely on it.
