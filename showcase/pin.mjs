@@ -16,6 +16,8 @@ export function pinnedTag(commit, content) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     const git = (...args) => execFileSync('git', args);
-    const commit = String(git('rev-parse', '--verify', process.argv[2] ? `${process.argv[2]}^{commit}` : String(git('log', '-1', '--format=%H', 'origin/main', '--', FILE)).trim())).trim();
+    const last = process.argv[2] ? `${process.argv[2]}^{commit}` : String(git('log', '-1', '--format=%H', 'origin/main', '--', FILE)).trim();
+    if (!last) { console.error(`no commit on origin/main changed ${FILE}; run git fetch origin, or pass a commit`); process.exit(1); }
+    const commit = String(git('rev-parse', '--verify', last)).trim();
     console.log(pinnedTag(commit, git('show', `${commit}:${FILE}`)));
 }
