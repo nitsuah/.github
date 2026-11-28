@@ -87,7 +87,7 @@ if (Test-Path -LiteralPath $machineFile) {
         New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
         $machine | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $machineFile -Encoding utf8NoBOM
         # Owner-only ACL: drop inherited entries, grant the current user full control.
-        & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null; if ($LASTEXITCODE) { Remove-Item -LiteralPath $machineFile -Force; throw "could not restrict $machineFile to the owner; removed it (keys stay in the live config)" }
+        $ok = try { & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null; -not $LASTEXITCODE } catch { $false }; if (-not $ok) { Remove-Item -LiteralPath $machineFile -Force; throw "could not restrict $machineFile to the owner; removed it (keys stay in the live config)" }
     }
 }
 if (-not $machine.secrets) { $machine.secrets = [ordered]@{} }
@@ -156,7 +156,7 @@ foreach ($dir in 'scheduled-tasks', 'private') {
     if ((Test-Path $local) -and -not (Is-Link $local)) {
         Step "back up $dir/ to private sync"
         if ($Apply) { New-Item -ItemType Directory -Force -Path $priv | Out-Null; Copy-Item "$local\*" $priv -Recurse -Force }
-    } elseif (Test-Path $priv) {
+    } elseif (-not (Test-Path $local) -and (Test-Path $priv)) {
         Step "restore $dir/ from private sync"
         if ($Apply) { Copy-Item $priv $local -Recurse -Force }
     }
