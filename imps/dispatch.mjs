@@ -2,7 +2,7 @@
 // The hourly imps dispatcher. No LLM of its own: it reads the GitHub queue,
 // picks issues, and runs each through imp.mjs run → gate → pr.
 //
-//   node dispatch.mjs [--max 5] [--wip 12] [--per-repo 6] [--concurrency 6] [--owner nitsuah] [--dry-run] [--rsi] [--only repo#N,...]
+//   node dispatch.mjs [--max 5] [--wip 12] [--per-repo 6] [--concurrency 3] [--owner nitsuah] [--dry-run] [--rsi] [--only repo#N,...]
 //
 // Queue: open issues labelled `imp:ready` that carry a brief comment (see
 // BRIEF_MARK in lib.mjs; Opus triage / rsi.mjs write them). Each issue moves to
@@ -15,7 +15,7 @@ import { homedir, hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim, repoRef, repoSlug, refDirName } from './lib.mjs';
+import { isNoopRun, noopRetryOk, feedbackEligible, feedbackSection, parseBrief, parseDepends, unmetDepends, INFRA_RETRY_CAP, infraRuns, floatConcurrency, isApiInfraError, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, outputSection, pickIssues, briefFromComments, missingBriefRequiresUnready, loopBudget, configNumber, claimBody, latestClaim, staleClaim, staleImpLabels, STALE_ON_CLOSE, lockIsStale, routerWaitDelays, parseClaim, claimExpired, prGuard, duplicateImpPrs, issueFailures, briefCommentAt, hasMark, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, normalizeModelStrategy, resolveQueueOwners, normalizeRepoExclusions, parseBriefAuthors, withKind, outcomeFromPr, CAP_MARK, NO_BRIEF_MARK, resolveRouter, validateBriefMeta, failureDiagnosticSummary, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, mayOverflow, lockBusyRepos, pendingPicks, briefSourceHash, coveringMergeAt, foreignLiveClaim, repoRef, repoSlug, refDirName } from './lib.mjs';
 import { MODEL_MISMATCH_MARK, expectedFamilies } from './served-model.mjs';
 import { retryModel, allowedRequestModels } from './model-pin.mjs';
 import { kitSha, machineName, lookupIssueGuard, originUrl, update as updateRun } from './runner.mjs';
@@ -38,7 +38,7 @@ const { values: o } = parseArgs({
         max: { type: 'string', default: String(DEFAULTS.max) },
         wip: { type: 'string', default: String(DEFAULTS.wip) },
         'per-repo': { type: 'string', default: String(DEFAULTS.perRepo) },
-        concurrency: { type: 'string', default: String(DEFAULTS.concurrency) },
+        concurrency: { type: 'string' },
         'daily-cap': { type: 'string', default: String(configNumber(HOME_CONFIG, 'dailyCap', DEFAULTS.dailyCap)) },
         owner: { type: 'string', default: DEFAULTS.owner },
         'dry-run': { type: 'boolean', default: false },
@@ -968,7 +968,17 @@ if (picked.length) {
     const byRepo = new Map();
     for (const i of picked) byRepo.set(i.repo, [...(byRepo.get(i.repo) || []), i]);
     const pool = [...byRepo.values()];
-    await Promise.all(Array.from({ length: Math.min(Number(o.concurrency), pool.length) }, async () => {
+    // --concurrency pins it; otherwise float between `concurrency` and `concurrency + concurrencyBurst`
+    // by queue depth and the last hour's infra (429/503) rate.
+    const lanes = o.concurrency !== undefined
+        ? Math.max(1, Math.min(Number(o.concurrency), pool.length))
+        : floatConcurrency({
+            base: configNumber(HOME_CONFIG, 'concurrency', DEFAULTS.concurrency),
+            burst: configNumber(HOME_CONFIG, 'concurrencyBurst', DEFAULTS.concurrencyBurst),
+            repos: pool.length, rows: readLedger(),
+        });
+    log({ event: 'lanes', lanes, repos: pool.length, pinned: o.concurrency !== undefined });
+    await Promise.all(Array.from({ length: lanes }, async () => {
         while (pool.length) {
             for (const i of pool.shift()) {
                 try {

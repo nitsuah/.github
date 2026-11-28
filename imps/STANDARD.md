@@ -62,7 +62,7 @@ Before applying `imp:ready`, verify the current default-branch code/tests, canon
 2. It sweeps open `imp` PRs with `fix.mjs` first (skip `imp:needs-human`).
 3. It picks up to `--max 5` `imp:ready` issues: **at most `--per-repo 6` per repo (counting its open imp PRs)**, and never past `--wip 12` open imp PRs in total. Review + CI are the bottleneck, so the dispatcher stops when the pile is full.
 4. It prefers **quiet repos** (no open human PRs, no commit in the last 6 h). Within a repo, `bot:review` issues (already diagnosed) go before bugs, then oldest first.
-5. It runs `--concurrency 6` repos at once through `imp.mjs run → gate → pr` (same-repo imps stay sequential so `imp-nm-<repo>` volumes don't race), then relabels and comments the result on the issue.
+5. It runs `--concurrency 3` repos at once by default, floating up to `concurrency + concurrencyBurst` (3 + 2) when more repos are queued and under 15% of the last hour's runs were infra failures (one extra lane at 15–30%, none above; `floatConcurrency`; config `concurrency`/`concurrencyBurst`, or `--concurrency N` to pin it) through `imp.mjs run → gate → pr` (same-repo imps stay sequential so `imp-nm-<repo>` volumes don't race), then relabels and comments the result on the issue.
 6. Optional `--rsi` (or `IMPS_RSI=1`) runs `rsi.mjs` after the cycle.
 
 Each cycle appends to `~/.imps/dispatch.jsonl`. `node imps/dispatch.mjs --dry-run` prints the picks and changes nothing.
@@ -103,7 +103,7 @@ Source of truth: `defaults.mjs`. `node imps/check-defaults.mjs` fails if this ta
 | Turn cap per model run | imp 60 (0 disables), fix round 25, reviewer 25 (it is told to answer by ~18) | `runClaude({ maxTurns })` |
 | Wall clock per run | imp 15 min (`defaults.runMinutes`), fix 20, review 12 | `--minutes` |
 | Overflow cycle | after the main cycle has held the lock 15 min (`defaults.overflowAfterMs`), one pick-only cycle on repos it isn't touching. Locks are created exclusively and released only by their owner; each cycle publishes its busy repos (imps and fix rounds) and its unstarted picks, which count against the other cycle's daily cap. Run ids carry the repo (`imp_<time>_<issue>_<repo>`). Lock updates are atomic (temp file + rename); the protocol is `locks.mjs` | `config.json` `overflowAfterMs`, `IMPS_OVERFLOW=0` |
-| Imps per cycle | 5, up to 6 per repo, at most 6 repos at once (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
+| Imps per cycle | 5, up to 6 per repo, 3 repos at once, floating to 5 (same-repo imps run in sequence) | `dispatch.mjs --max/--per-repo/--concurrency` |
 | Open imp PRs | 12 in total, 6 per repo | `--wip`, `--per-repo`, `pickIssues` |
 | Imp runs per 24 h / `--daily-cap` | 100 (`dailyCap` in `~/.imps/config.json` overrides) | `loopBudget` |
 | Repo cooldown | 24 h (`defaults.cooldownMs`; `cooldownMs` in `~/.imps/config.json` overrides, 0 turns it off) after two straight gate failures in a repo | `loopBudget` |
