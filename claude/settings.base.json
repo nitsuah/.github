@@ -4,20 +4,11 @@
       "Bash(docker ps)",
       "Bash(docker logs *)",
       "Bash(docker inspect *)",
-      "mcp__docker__*",
-      "mcp__obsidian__*",
-      "mcp__blender__*",
-      "mcp__playwright__*",
-      "mcp__MCP_DOCKER__*",
       "PowerShell(Set-Location {{CODE}})",
       "Read('{{CODE}}\\**')",
       "Grep('{{CODE}}\\**')",
       "Bash(git status*)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "PowerShell(git status*)",
-      "PowerShell(git diff*)",
-      "PowerShell(git log*)"
+      "PowerShell(git status*)"
     ],
     "additionalDirectories": [
       "{{CODE}}"
@@ -32,7 +23,6 @@
       }
     ]
   },
-  "model": "MAX",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Stop": [
@@ -124,11 +114,6 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
-  "modelSettings": {
-    "max": {
-      "autoCompactWindow": "auto"
-    }
-  },
   "theme": "dark",
   "editorMode": "normal",
   "preferredNotifChannel": "auto",
@@ -139,7 +124,7 @@
   "useAutoModeDuringPlan": true,
   "statusLine": {
     "type": "command",
-    "command": "node {{KIT}}\\imps\\statusline.mjs",
+    "command": "node \"{{KIT}}/imps/statusline.mjs\"",
     "refreshInterval": 5
   }
 }
