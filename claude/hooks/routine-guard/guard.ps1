@@ -13,18 +13,21 @@ if ($tool -eq 'RemoteTrigger') {
 } elseif ($tool -like '*run_scheduled_task') {
   $id = $ti.taskId
 } else { exit 0 }
+if (-not $id) { Ask "Manual routine run with no trigger/task ID ($tool); confirm manually." }
 
 $heavy = @('monthly-pmo-audit','monthly-self-improvement','monthly-tire-kick','trig_01DFtorzK5HJ9js31HhYun7L','trig_01N2UynTFCkPoNJbm6jiWgt3')
 $medium = @('week-sotu','monthly-usage-report','daily-repo-sync','trig_01BbYVwcsZPFV4QrQrTZAhJb','trig_01LZ1JrGn9J2FRPBuTnrPxvA')
 $tier = if ($heavy -contains $id) { 'HEAVY (multi-repo, can eat a large share of the 5-hour window)' } elseif ($medium -contains $id) { 'MEDIUM' } else { 'LIGHT' }
 
-$stateDir = Join-Path (Join-Path $env:USERPROFILE '.claude') 'state'; New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
-$log = Join-Path $stateDir "routine-guard-runs.log"
 $today = (Get-Date).ToString('yyyy-MM-dd')
 $again = ''
-if (Test-Path $log) {
-  if (Select-String -Path $log -SimpleMatch "$today $id " -Quiet) { $again = ' ALREADY FIRED MANUALLY TODAY: a repeat usually burns quota for the same result.' }
-}
-Add-Content -Path $log -Value "$today $id $(Get-Date -Format HH:mm)"
+# The repeat check must not fail silently: if the log cannot be read or written, say so in the prompt.
+try {
+  $stateDir = Join-Path (Join-Path $env:USERPROFILE '.claude') 'state'
+  New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction Stop | Out-Null
+  $log = Join-Path $stateDir 'routine-guard-runs.log'
+  if ((Test-Path $log) -and (Select-String -Path $log -SimpleMatch "$today $id " -Quiet -ErrorAction Stop)) { $again = ' ALREADY FIRED MANUALLY TODAY: a repeat usually burns quota for the same result.' }
+  Add-Content -Path $log -Value "$today $id $(Get-Date -Format HH:mm)" -ErrorAction Stop
+} catch { $again = " (Repeat check unavailable: $($_.Exception.Message))" }
 
 Ask "Manual routine run: $id, cost tier $tier.$again Check get_usage first. If the weekly window is above ~75% or the 5-hour window above ~50%, let ops-catchup schedule it after the Wed 05:00 UTC reset. Fire catch-ups one at a time, never several together."
