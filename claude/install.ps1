@@ -50,8 +50,16 @@ function Merge-Map($base, $over) {
     }
 }
 function Read-Json($p) { Get-Content -LiteralPath $p -Raw | ConvertFrom-Json -AsHashtable }
-function Write-Json($p, $obj) {
-    if ($Apply) { Backup $p; ($obj | ConvertTo-Json -Depth 32) | Set-Content -LiteralPath $p -Encoding utf8NoBOM }
+# Writes (and backs up the old file) only when the content changes, so repeated
+# updates do not pile up backup copies of files that hold keys.
+function Write-IfChanged($p, [string]$text, $what) {
+    $isLinked = (Test-Path -LiteralPath $p) -and ((Is-Link $p) -or (Get-Item -LiteralPath $p).LinkType -eq 'HardLink')
+    if (-not $isLinked -and (Test-Path -LiteralPath $p) -and ((Get-Content -LiteralPath $p -Raw) -eq $text)) { return }
+    Step $what
+    if ($Apply) {
+        if (Test-Path -LiteralPath $p) { Backup $p; Remove-Item -LiteralPath $p -Force }
+        Set-Content -LiteralPath $p -Value $text -Encoding utf8NoBOM -NoNewline
+    }
 }
 
 # ── machine.json: seed from the current live config on first run ──────────────
@@ -100,23 +108,15 @@ function Expand($o) {
 # ── settings.json and mcp.json: template + machine overlay ─────────────────────
 $settings = Expand (Read-Json (Join-Path $kitClaude 'settings.base.json'))
 if ($machine.settings) { Merge-Map $settings $machine.settings }
-$sPath = Join-Path $ClaudeHome 'settings.json'
-if ((Is-Link $sPath) -or ((Test-Path $sPath) -and (Get-Item $sPath).LinkType -eq 'HardLink')) { Step 'settings.json is linked to a synced copy; replacing with a local file' }
-Step "render settings.json (env keys from machine.json: $(@($settings.env.Keys) -join ', '))"
-if ($Apply -and (Test-Path $sPath)) { Backup $sPath; Remove-Item -LiteralPath $sPath -Force }
-Write-Json $sPath $settings
+Write-IfChanged (Join-Path $ClaudeHome 'settings.json') ($settings | ConvertTo-Json -Depth 32) `
+    "render settings.json (env keys from machine.json: $(@($settings.env.Keys) -join ', '))"
 
 $mcp = Expand (Read-Json (Join-Path $kitClaude 'mcp.base.json'))
 if ($machine.mcp) { Merge-Map $mcp $machine.mcp }
-$mPath = Join-Path $ClaudeHome 'mcp.json'
-Step "render mcp.json (servers: $(@($mcp.Keys) -join ', '))"
-if ($Apply -and (Test-Path $mPath)) { Backup $mPath; Remove-Item -LiteralPath $mPath -Force }
-Write-Json $mPath $mcp
+Write-IfChanged (Join-Path $ClaudeHome 'mcp.json') ($mcp | ConvertTo-Json -Depth 32) "render mcp.json (servers: $(@($mcp.Keys) -join ', '))"
 
 # ── CLAUDE.md: copied, so updates arrive with each kit update ──────────────────
-$cPath = Join-Path $ClaudeHome 'CLAUDE.md'
-Step 'copy CLAUDE.md from kit'
-if ($Apply) { if (Test-Path $cPath) { Backup $cPath; Remove-Item -LiteralPath $cPath -Force }; Copy-Item (Join-Path $kitClaude 'CLAUDE.md') $cPath }
+Write-IfChanged (Join-Path $ClaudeHome 'CLAUDE.md') (Get-Content -LiteralPath (Join-Path $kitClaude 'CLAUDE.md') -Raw) 'copy CLAUDE.md from kit'
 
 # ── skills/ and hooks/: kit entries win, private entries fill the gaps ─────────
 foreach ($pair in @(@('skills', (Join-Path $KitPath 'skills')), @('hooks', (Join-Path $kitClaude 'hooks')))) {
