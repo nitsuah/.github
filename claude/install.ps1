@@ -87,7 +87,7 @@ if (Test-Path -LiteralPath $machineFile) {
         New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
         $machine | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $machineFile -Encoding utf8NoBOM
         # Owner-only ACL: drop inherited entries, grant the current user full control.
-        & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+        & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null; if ($LASTEXITCODE) { Remove-Item -LiteralPath $machineFile -Force; throw "could not restrict $machineFile to the owner; removed it (keys stay in the live config)" }
     }
 }
 if (-not $machine.secrets) { $machine.secrets = [ordered]@{} }
