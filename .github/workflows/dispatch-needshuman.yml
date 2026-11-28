@@ -1,0 +1,25 @@
+name: Dispatch imp:needs-human
+
+on:
+  schedule:
+    - cron: '45 * * * *'  # every hour at :45
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Dispatch imp:needs-human issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/imps/dispatch-needshuman.mjs
+        working-directory: ${{ github.workspace }}
