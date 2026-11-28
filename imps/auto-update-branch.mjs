@@ -32,6 +32,10 @@ function updateBranch(repo, number) {
 }
 
 function main() {
+  if (!process.env.GH_TOKEN) {
+    console.log('::warning::Set IMPS_GITHUB_TOKEN with pull-request read/write access to the target repositories; skipping.');
+    return;
+  }
   const repos = process.argv.slice(2);
   if (!repos.length) {
     console.error('Usage: node auto-update-branch.mjs <repo1> [repo2...]');
