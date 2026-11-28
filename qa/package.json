@@ -1,0 +1,16 @@
+{
+  "name": "qa-fast-crawl",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only crawl + uptime + link sweep of the live nitsuah apps. No forms, no writes.",
+  "scripts": {
+    "crawl": "node crawl.mjs",
+    "health": "node health.mjs",
+    "links": "node link-sweep.mjs",
+    "report": "node report-issue.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56"
+  }
+}

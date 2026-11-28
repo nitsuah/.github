@@ -1,3 +1,7 @@
 # Written by the imps kit at runtime; machine state, never committed (#59).
 imps/model_quota.json
 node_modules/
+
+# QA crawl output and installs
+qa/out/
+qa/node_modules/
