@@ -23,12 +23,13 @@ jobs:
           # Untrusted values go through env, never into script or shell source.
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const branch = process.env.HEAD_BRANCH || '';
-            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 5 });
-            const pr = prs.find((p) => p.user?.login === 'dependabot[bot]' && p.head?.ref === branch);
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: process.env.HEAD_SHA });
+            const pr = prs.find((p) => p.state === 'open' && p.user?.login === 'dependabot[bot]' && p.head?.ref === branch);
             if (!pr) { core.info(`No open Dependabot PR for ${branch}; nothing to do.`); return; }
             await github.rest.issues.createComment({
               owner, repo, issue_number: pr.number,
