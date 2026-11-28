@@ -41,3 +41,7 @@ git mv qa/github-workflows/uptime.yml .github/workflows/uptime.yml
 
 Until that copy is on `main`, run the checks locally or via `workflow_dispatch`
 once the files are in place.
+
+## Pointing the crawl at a preview
+
+`crawl.mjs` reads `BASE_OVERRIDE_<APP_ID>` with the app id upper-snake-cased (`nitsuah-io` → `BASE_OVERRIDE_NITSUAH_IO=https://preview-url`). With exactly one app id on the command line, plain `BASE_OVERRIDE` works too.
