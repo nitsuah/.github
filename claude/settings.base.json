@@ -4,8 +4,6 @@
       "Bash(docker ps)",
       "Bash(docker logs *)",
       "Bash(docker inspect *)",
-      "Bash(grep *)",
-      "Bash(find *)",
       "mcp__docker__*",
       "mcp__obsidian__*",
       "mcp__blender__*",
