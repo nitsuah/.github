@@ -1,5 +1,6 @@
 name: Journeys failure alert
 
+# workflow_run only fires for workflows in this repository, so the PR (if any) lives here too.
 on:
   workflow_run:
     workflows: ["Journeys kit"]
@@ -12,32 +13,24 @@ permissions:
 
 jobs:
   alert:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && startsWith(github.event.workflow_run.head_branch, 'dependabot/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - name: Check if dependabot PR
-        id: check
-        run: |
-          PR_NUM=$(echo "${{ github.event.workflow_run.head_branch }}" | grep -oE 'dependabot[^/]+/[0-9]+' | head -1 | cut -d'/' -f2)
-          if [ -n "$PR_NUM" ]; then
-            echo "pr=$PR_NUM" >> $GITHUB_OUTPUT
-            echo "is_dependabot=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_dependabot=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Comment on dependabot PR
-        if: steps.check.outputs.is_dependabot == 'true'
+      - name: Comment on the Dependabot PR
         uses: actions/github-script@v7
+        env:
+          # Untrusted values go through env, never into script or shell source.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         with:
           script: |
-            const pr = ${{ steps.check.outputs.pr }};
-            const runId = ${{ github.event.workflow_run.id }};
-            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${runId}`;
+            const { owner, repo } = context.repo;
+            const branch = process.env.HEAD_BRANCH || '';
+            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 5 });
+            const pr = prs.find((p) => p.user?.login === 'dependabot[bot]' && p.head?.ref === branch);
+            if (!pr) { core.info(`No open Dependabot PR for ${branch}; nothing to do.`); return; }
             await github.rest.issues.createComment({
-              owner: 'nitsuah',
-              repo: 'vigil',
-              issue_number: pr,
-              body: `⚠️ **Journeys failed** on this dependabot PR.\n\nWorkflow run: ${runUrl}\n\nPlease check the logs and fix any issues. This may be a flaky test or a real regression introduced by the dependency update.`
+              owner, repo, issue_number: pr.number,
+              body: `⚠️ **Journeys failed** on this Dependabot PR.\n\nWorkflow run: ${process.env.RUN_URL}\n\nCheck the logs: this may be a flaky journey or a real regression from the dependency update.`,
             });
