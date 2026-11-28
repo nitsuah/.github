@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -File \"{{CLAUDE}}/hooks/routine-guard/guard.ps1\"",
+            "command": "powershell -NoProfile -NonInteractive -File \"{{CLAUDE}}\\hooks\routine-guard\\guard.ps1\"",
             "timeout": 10
           }
         ]
@@ -141,7 +141,7 @@
   "useAutoModeDuringPlan": true,
   "statusLine": {
     "type": "command",
-    "command": "node {{KIT}}/imps/statusline.mjs",
+    "command": "node {{KIT}}\\imps\\statusline.mjs",
     "refreshInterval": 5
   }
 }
