@@ -16,6 +16,8 @@ $kitClaude = Join-Path $KitPath 'claude'
 $machineFile = Join-Path $ClaudeHome 'machine.json'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupDir = Join-Path $ClaudeHome "backups\kit-$stamp"
+$missingTpl = @('settings.base.json', 'mcp.base.json', 'CLAUDE.md') | Where-Object { -not (Test-Path (Join-Path $kitClaude $_)) }
+if ($missingTpl) { throw "kit is missing claude/$($missingTpl -join ', claude/'); update the kit checkout first" }
 $mode = if ($Apply) { 'APPLY' } else { 'DRY RUN' }
 Write-Host "Claude kit install ($mode)`n  kit:     $KitPath`n  private: $PrivatePath`n  machine: $machineFile`n"
 
@@ -24,8 +26,9 @@ function Is-Link($p) { (Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath 
 function Backup($p) {
     if (-not (Test-Path -LiteralPath $p) -or (Is-Link $p)) { return }
     if ($Apply) {
-        New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-        Copy-Item -LiteralPath $p -Destination $backupDir -Recurse -Force
+        $dest = Join-Path $backupDir ([IO.Path]::GetRelativePath($ClaudeHome, $p))
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+        Copy-Item -LiteralPath $p -Destination $dest -Recurse -Force
     }
 }
 # Removes only the link itself, never the target's contents.
@@ -36,7 +39,7 @@ function Link-Dir($link, $target) {
         Step "relink $link -> $target"; Remove-Link $link
     } elseif (Test-Path -LiteralPath $link) {
         # Never recurse-delete through a parent link: that would delete the synced original.
-        if (Is-Link (Split-Path $link)) { throw "refusing to delete ${link}: its parent is a link" }
+        for ($a = Split-Path $link; $a; $a = Split-Path $a) { if (Is-Link $a) { throw "refusing to delete ${link}: $a is a link" } }
         Step "replace local copy $link with link -> $target (backed up)"; Backup $link
         if ($Apply) { Remove-Item -LiteralPath $link -Recurse -Force }
     } else { Step "link $link -> $target" }
@@ -50,11 +53,10 @@ function Merge-Map($base, $over) {
     }
 }
 function Read-Json($p) { Get-Content -LiteralPath $p -Raw | ConvertFrom-Json -AsHashtable }
-# Writes (and backs up the old file) only when the content changes, so repeated
-# updates do not pile up backup copies of files that hold keys.
+# Write (and back up) only on change, so updates do not pile up backups of files with keys.
 function Write-IfChanged($p, [string]$text, $what) {
     $isLinked = (Test-Path -LiteralPath $p) -and ((Is-Link $p) -or (Get-Item -LiteralPath $p).LinkType -eq 'HardLink')
-    if (-not $isLinked -and (Test-Path -LiteralPath $p) -and ((Get-Content -LiteralPath $p -Raw) -eq $text)) { return }
+    if (-not $isLinked -and (Test-Path -LiteralPath $p) -and ((Get-Content -LiteralPath $p -Raw) -ceq $text)) { return }
     Step $what
     if ($Apply) {
         if (Test-Path -LiteralPath $p) { Backup $p; Remove-Item -LiteralPath $p -Force }
@@ -69,7 +71,7 @@ if (Test-Path -LiteralPath $machineFile) {
 } else {
     $machine = [ordered]@{ secrets = [ordered]@{}; settings = [ordered]@{ env = [ordered]@{} }; mcp = [ordered]@{} }
     $live = Join-Path $ClaudeHome 'settings.json'
-    if ((Test-Path -LiteralPath $live) -and -not (Is-Link $live)) {
+    if (Test-Path -LiteralPath $live) {
         $l = Read-Json $live
         if ($l.env) { $machine.settings.env = $l.env }
     }
@@ -82,6 +84,7 @@ if (Test-Path -LiteralPath $machineFile) {
     }
     Step "create $machineFile from live config (env: $(@($machine.settings.env.Keys) -join ', '); secrets: $(@($machine.secrets.Keys) -join ', '))"
     if ($Apply) {
+        New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
         $machine | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $machineFile -Encoding utf8NoBOM
         # Owner-only ACL: drop inherited entries, grant the current user full control.
         & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
@@ -141,7 +144,6 @@ foreach ($pair in @(@('skills', (Join-Path $KitPath 'skills')), @('hooks', (Join
         }
     }
 }
-
 # ── private tier: memory link, plus two-way copy for personal folders ──────────
 $memLink = Join-Path $ClaudeHome ('projects\' + ($CodePath -replace '[:\\/]', '-') + '\memory')
 $memTarget = Join-Path $PrivatePath 'memory'
@@ -159,7 +161,6 @@ foreach ($dir in 'scheduled-tasks', 'private') {
         if ($Apply) { Copy-Item $priv $local -Recurse -Force }
     }
 }
-
 # ── checks ─────────────────────────────────────────────────────────────────────
 foreach ($f in 'settings.json', 'mcp.json') {
     $p = Join-Path $PrivatePath $f
