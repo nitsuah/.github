@@ -1,0 +1,52 @@
+name: PMO hourly
+
+# Free replacement for the hourly "github-field-maintenance-check-in" routine.
+# pulse = digest issue + alerts, merge = merge green PRs, triage = free-LLM rebrief drafts (opt-in).
+# Dry-run until the repo variable PMO_LIVE is set to 'true' (or workflow_dispatch with live=true).
+# Needs repo secret PMO_GITHUB_TOKEN (fine-grained PAT, see imps/pmo.mjs header). GEMINI_API_KEY is optional.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: pulse, merge, triage or all
+        type: choice
+        options: [all, pulse, merge, triage]
+        default: all
+      live:
+        description: Write (merge, edit issues). Off = dry run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pmo-hourly
+  cancel-in-progress: false
+
+jobs:
+  pmo:
+    if: github.repository == 'nitsuah/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Run PMO
+        env:
+          GH_TOKEN: ${{ secrets.PMO_GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MODE: ${{ github.event.inputs.mode || 'all' }}
+          LIVE: ${{ github.event.inputs.live || vars.PMO_LIVE }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo '::warning::Set repo secret PMO_GITHUB_TOKEN (fine-grained PAT). Skipping.'
+            exit 0
+          fi
+          flag=""
+          [ "$LIVE" = "true" ] && flag="--live"
+          node imps/pmo.mjs "$MODE" $flag
