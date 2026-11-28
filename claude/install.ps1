@@ -85,9 +85,10 @@ if (Test-Path -LiteralPath $machineFile) {
     Step "create $machineFile from live config (env: $(@($machine.settings.env.Keys) -join ', '); secrets: $(@($machine.secrets.Keys) -join ', '))"
     if ($Apply) {
         New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
+        # Empty file first, then a fresh protected DACL with only the current user, then the keys.
+        $ok = try { New-Item -ItemType File -Force -Path $machineFile | Out-Null; $acl = [Security.AccessControl.FileSecurity]::new(); $acl.SetAccessRuleProtection($true, $false); $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl', 'Allow')); Set-Acl -LiteralPath $machineFile -AclObject $acl; $true } catch { $false }
+        if (-not $ok) { Remove-Item -LiteralPath $machineFile -Force -EA SilentlyContinue; throw "could not restrict $machineFile to the owner; nothing written (keys stay in the live config)" }
         $machine | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $machineFile -Encoding utf8NoBOM
-        # Owner-only ACL: drop inherited entries, grant the current user full control.
-        $ok = try { & icacls $machineFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null; -not $LASTEXITCODE } catch { $false }; if (-not $ok) { Remove-Item -LiteralPath $machineFile -Force; throw "could not restrict $machineFile to the owner; removed it (keys stay in the live config)" }
     }
 }
 if (-not $machine.secrets) { $machine.secrets = [ordered]@{} }
