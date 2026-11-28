@@ -1,0 +1,54 @@
+# Lightweight health check of the live custom domains. No Playwright, no secrets.
+# Opens or updates the sticky "Uptime: live apps" issue on failure and pings
+# the owner once per outage. Closes that issue on recovery.
+name: Uptime
+
+on:
+  schedule:
+    - cron: '19 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run health checks
+        id: health
+        working-directory: qa
+        run: node health.mjs
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uptime-health
+          path: qa/out
+          if-no-files-found: ignore
+
+      - name: Upsert uptime issue
+        if: always()
+        working-directory: qa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node report-issue.mjs --kind uptime
+
+      - name: Fail the job when a check failed
+        if: steps.health.outcome != 'success'
+        run: exit 1

@@ -1,0 +1,72 @@
+# Monday live-app crawl + profile/repo link sweep. Replaces the Grok Bot
+# "Weekly QA + brand/link sweep" routine. No secrets, no writes to the apps.
+name: Weekly QA
+
+on:
+  schedule:
+    # 14:00 UTC = 9:00 AM EST / 10:00 AM EDT, Mondays.
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: qa-weekly
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install crawl dependencies
+        working-directory: qa
+        run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+
+      - name: Health checks
+        id: health
+        working-directory: qa
+        run: node health.mjs
+        continue-on-error: true
+
+      - name: Profile README + repo homepage links
+        id: links
+        working-directory: qa
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node link-sweep.mjs
+        continue-on-error: true
+
+      - name: Playwright crawl
+        id: crawl
+        working-directory: qa
+        run: node crawl.mjs
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-qa
+          path: qa/out
+          if-no-files-found: ignore
+
+      - name: Upsert QA issue
+        if: always()
+        working-directory: qa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node report-issue.mjs --kind qa
+
+      - name: Fail the job when a check failed
+        if: steps.health.outcome != 'success' || steps.links.outcome != 'success' || steps.crawl.outcome != 'success'
+        run: exit 1
