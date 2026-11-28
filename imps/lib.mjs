@@ -1882,6 +1882,20 @@ export function isApiInfraError(metrics) {
 // How many infra-flagged runs this issue had since `sinceMs`: caps the free retries so a router that keeps
 // failing cannot re-queue one issue every cycle and spend the shared daily budget.
 export const INFRA_RETRY_CAP = 3;
+/**
+ * Parallel repo lanes for one cycle: `base`, plus up to `burst` more when enough repos are queued,
+ * held back when the model route is struggling. Over the last hour's runs (at least 4): an infra share
+ * of 30%+ (429/503/api errors) allows no burst, 15%+ allows one. Never more lanes than repos, never < 1.
+ */
+export function floatConcurrency({ base = 3, burst = 2, repos = 0, rows = [], now = Date.now() } = {}) {
+    if (repos <= 0) return 0;
+    const recent = rows.filter((r) => Date.parse(r.startedAt) >= now - 3600_000);
+    const share = recent.length >= 4 ? recent.filter((r) => r.infra).length / recent.length : 0;
+    const allowed = share >= 0.3 ? 0 : share >= 0.15 ? Math.min(1, burst) : burst;
+    const want = Math.max(0, repos - base);
+    return Math.max(1, Math.min(repos, base + Math.min(allowed, want)));
+}
+
 export function infraRuns(rows = [], repo, issue, sinceMs = 0) {
     return rows.filter((r) => r.repo === repo && Number(r.issue) === Number(issue) && r.infra && Date.parse(r.startedAt) >= sinceMs).length;
 }

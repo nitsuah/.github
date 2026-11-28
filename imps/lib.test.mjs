@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
+import { effectiveMaxLines, TEST_PATH, validateBriefMaxLines, validateBriefMeta, noopRetryOk, isNoopRun, NOOP_FREE, lastLines, feedbackEligible, feedbackSection, parseDepends, unmetDepends, deriveFormat, isSizeOnlyFailure, INFRA_RETRY_CAP, infraRuns, floatConcurrency, isApiInfraError, parseBrief, summarizeRun, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, gate, humanOnlyPaths, report, pickIssues, repoTable, tokenTable, sweepIsRepeat, isTransientNetworkError, isReadOnlyGh, runGhWithReadRetry, tailOutput, outputSection, redactSecrets, kitTable, triageWork, briefFromComments, missingBriefRequiresUnready, BRIEF_MARK, parseReview, renderReview,
     feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, loopBudget, configNumber, riskClass, maxRisk, activeCooldowns, briefSourceHash, isStaleFailure, coveringMergeAt, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, COMMIT_RECOVERY_FAILED_MARK, commitRecoveryFailureBlocksReclaim, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, staleImpLabels, STALE_ON_CLOSE, lockIsStale,
     parseClaim, claimExpired, CLAIM_MARK, claimBody, routerWaitDelays, foreignLiveClaim,
     closesIssue, duplicateImpPrs, withKind, issueFailures, briefCommentAt, parseBriefAuthors, resolveQueueOwners, normalizeRepoExclusions, hasMark, outcomeFromPr, NO_BRIEF_MARK, shouldResolveFixDecision, writeStreamJsonMessage, EPIC_MARK, isEpicIssueBody, resolveImpsCodeRoot, targetCheckout, uniqueImpBranchName, normalizeModelStrategy, extractFailureDiagnostic, sanitizeDiagnostic, formatFailureDiagnostic, failureDiagnosticSummary, fixRoundProgress, feedbackCutoff, formatMergedByAgentTrailer, mergedByAgentCommitBody } from './lib.mjs';
@@ -2376,4 +2376,22 @@ test('feedbackItems never hands the risk guard to an imp', () => {
     const failing = (name) => ({ name, state: 'FAILURE' });
     const items = feedbackItems({ threads: [], comments: [], checks: ['guard / Risk guard', 'Risk guard', 'test', 'risk guard unit tests'].map(failing) });
     assert.deepEqual(items.map((i) => i.id), ['ci:test', 'ci:risk guard unit tests'], 'only the guard job itself is skipped');
+});
+
+test('floatConcurrency floats 3..5 lanes by queue depth and backs off on infra failures', () => {
+    const now = Date.parse('2026-11-28T10:00:00Z');
+    const run = (min, infra) => ({ startedAt: new Date(now - min * 60_000).toISOString(), ...(infra ? { infra: true } : {}) });
+    const healthy = [run(5), run(10), run(20), run(30)];
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 0, rows: healthy, now }), 0);
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 2, rows: healthy, now }), 2);
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 3, rows: healthy, now }), 3);
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 4, rows: healthy, now }), 4);
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 9, rows: healthy, now }), 5);
+    // 1 in 5 infra (20%): one extra lane at most.
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 9, rows: [...healthy, run(15, true)], now }), 4);
+    // 2 in 4 infra (50%): no burst.
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 9, rows: [run(5, true), run(6, true), run(7), run(8)], now }), 3);
+    // Runs older than an hour and samples under 4 don't throttle.
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 9, rows: [run(90, true), run(95, true), run(99, true), run(100, true)], now }), 5);
+    assert.equal(floatConcurrency({ base: 3, burst: 2, repos: 9, rows: [run(5, true), run(6, true)], now }), 5);
 });

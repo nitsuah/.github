@@ -13,7 +13,9 @@ export const DEFAULTS = {
     max: 8,
     wip: 12,
     perRepo: 6,
-    concurrency: 6,
+    concurrency: 3,
+    // Extra parallel repos allowed when the queue is deep and the model route is healthy (floatConcurrency).
+    concurrencyBurst: 2,
     dailyCap: 100,
     quietHours: 6,
 
