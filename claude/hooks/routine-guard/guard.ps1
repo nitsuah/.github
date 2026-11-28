@@ -1,6 +1,5 @@
 # PreToolUse guard for manual routine runs (added 2026-09-26, stash routine-audit-2026-09-26).
 # Forces a confirmation prompt on RemoteTrigger run / run_scheduled_task, with a cost tier and a same-day repeat warning.
-$ErrorActionPreference = 'SilentlyContinue'
 function Ask($why) { @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'ask'; permissionDecisionReason = $why } } | ConvertTo-Json -Compress; exit 0 }
 # Fail closed: if the input cannot be read, still ask rather than let the run through silently.
 try { $in = [Console]::In.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop } catch { Ask 'Routine guard could not read the tool input; confirm this run manually.' }
