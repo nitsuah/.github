@@ -1,0 +1,29 @@
+{
+  "obsidian": {
+    "type": "http",
+    "url": "http://127.0.0.1:27123/mcp/",
+    "headers": {
+      "Authorization": "{{secret:OBSIDIAN_AUTH}}"
+    }
+  },
+  "opencut": {
+    "type": "stdio",
+    "command": "{{HOME}}\\.bun\\bin\\bun.exe",
+    "args": [
+      "run",
+      "{{CODE}}\\opencut-controller\\src\\index.ts"
+    ]
+  },
+  "github": {
+    "type": "stdio",
+    "command": "powershell",
+    "args": [
+      "-WindowStyle",
+      "Hidden",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$env:GITHUB_PERSONAL_ACCESS_TOKEN = (gh auth token); docker run --rm -i -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server"
+    ]
+  }
+}
