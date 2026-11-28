@@ -2,7 +2,7 @@ name: Journeys failure alert
 
 on:
   workflow_run:
-    workflows: ["Journeys"]
+    workflows: ["Journeys kit"]
     types: [completed]
 
 permissions:
