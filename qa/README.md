@@ -26,3 +26,18 @@ fixable code defect can be briefed by hand (or groom) and then promoted.
 Schedules (UTC): uptime every 4 hours at :19; weekly crawl Mondays 14:00 UTC
 (9:00 AM Eastern Standard / 10:00 AM Eastern Daylight). Both also have
 `workflow_dispatch`.
+
+## Activating the schedules
+
+The workflow YAML lives in `qa/github-workflows/` because the token that
+opens this PR does not have GitHub's `workflow` scope, so it cannot write
+`.github/workflows/`. To turn the schedules on, copy (or `git mv`) the two
+files into `.github/workflows/` and merge:
+
+```bash
+git mv qa/github-workflows/qa-weekly.yml .github/workflows/qa-weekly.yml
+git mv qa/github-workflows/uptime.yml .github/workflows/uptime.yml
+```
+
+Until that copy is on `main`, run the checks locally or via `workflow_dispatch`
+once the files are in place.
