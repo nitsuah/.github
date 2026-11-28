@@ -168,5 +168,4 @@ foreach ($f in 'settings.json', 'mcp.json') {
     if (Test-Path $p) { Write-Warning "$p is a retired copy that may hold keys in a synced folder. Delete it once this install works." }
 }
 if ($missing.Count) { Write-Warning "Secrets not set in machine.json (secrets.*): $(($missing | Sort-Object -Unique) -join ', ')" }
-if (-not $Apply) { Write-Host "`nNothing changed. Re-run with -Apply." }
-else { Write-Host "`nDone. Backups (if any): $backupDir. Restart Claude Code to load the new config." }
+if (-not $Apply) { Write-Host "`nNothing changed. Re-run with -Apply." } else { Write-Host "`nDone. Backups (if any): $backupDir. Restart Claude Code to load the new config." }
