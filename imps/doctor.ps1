@@ -1,9 +1,15 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Check prerequisites without installing. Exit 0 if all ok, 1 otherwise.
 #
 #   pwsh -File imps/doctor.ps1
 [CmdletBinding()]
-param()
+param(
+    # Same owner dispatch.mjs searches (its --owner flag); default read from defaults.mjs.
+    [string]$Owner = $(
+        $m = Select-String -LiteralPath (Join-Path $PSScriptRoot 'defaults.mjs') -Pattern "^\s*owner:\s*'([^']+)'" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($m) { $m.Matches[0].Groups[1].Value } else { 'nitsuah' }
+    )
+)
 $ErrorActionPreference = 'Continue'
 $failed = $false
 function Ok($m) { Write-Host "  ok  $m" -ForegroundColor Green }
@@ -36,6 +42,25 @@ if (Get-Command docker -EA SilentlyContinue) {
     if ($LASTEXITCODE -eq 0) { Ok 'docker reachable' } else { Bad 'docker not running' }
 } else { Bad 'docker missing' }
 
+# The runner spawns the npm-installed claude.exe itself (the .cmd shim splits args), so
+# `claude --version` working in a shell is not enough. Same lookup as runner.mjs.
+# An explicit IMPS_CLAUDE_BIN is used exclusively (no fallback), exactly as runner.mjs does.
+$claudePkg = 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
+$claudeCandidates = if ($env:IMPS_CLAUDE_BIN) { @($env:IMPS_CLAUDE_BIN) }
+    else { @((Join-Path $env:APPDATA "npm\$claudePkg"), $(if ($env:npm_config_prefix) { Join-Path $env:npm_config_prefix $claudePkg })) | Where-Object { $_ } }
+$claudeBin = $claudeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($claudeBin) { Ok "claude binary $claudeBin" }
+else { Bad "claude binary not found (looked at: $($claudeCandidates -join ', ')); npm i -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code, or set IMPS_CLAUDE_BIN" }
+
+# Briefs' test:/lint: commands are POSIX-style and run through Git Bash (cmd.exe does not
+# group single quotes and the gate fails "tests exit 2" before testing the imp's code).
+# Like runner.mjs gateShell(): an explicit IMPS_SHELL wins and is never replaced by a default.
+$shellCandidates = if ($env:IMPS_SHELL) { @($env:IMPS_SHELL) }
+    else { @("$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe", "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe") }
+$gitBash = $shellCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($gitBash) { Ok "gate shell $gitBash" }
+else { Bad "Git Bash not found (looked at: $($shellCandidates -join ', ')); install Git for Windows or fix IMPS_SHELL, else brief test commands run under cmd.exe and fail" }
+
 . (Join-Path $PSScriptRoot 'router-env.ps1')
 $router = Resolve-Router
 $base = $router.BaseUrl
@@ -63,6 +88,22 @@ if (Test-Path -LiteralPath (Join-Path $codeKit 'imps\dispatch.mjs')) {
 } else { Bad "kit self-work clone missing at $codeKit (re-run setup.ps1)" }
 
 if (Test-Path -LiteralPath $stateDir) { Ok "state dir $stateDir" } else { Bad "state dir missing $stateDir" }
+
+# An imp can only work in a repo cloned under IMPS_CODE; a missing clone used to show up
+# as a failed run on the issue. Check every repo that has an imp:ready issue.
+$codeRoot = if ($env:IMPS_CODE) { $env:IMPS_CODE } else { Join-Path $env:USERPROFILE 'code' }
+if (Get-Command gh -EA SilentlyContinue) {
+    $readyJson = gh search issues --owner $Owner --state open --label imp:ready --limit 100 --json repository 2>&1
+    $ghExit = $LASTEXITCODE
+    $ready = if ($ghExit -eq 0) { $readyJson | ConvertFrom-Json }
+    if ($ghExit -ne 0) { Info "could not list imp:ready issues, so the clone check was skipped: $(($readyJson | Out-String).Trim())" }
+    elseif ($ready) {
+        $names = $ready | ForEach-Object { $_.repository.name } | Sort-Object -Unique
+        $missing = @($names | Where-Object { -not (Test-Path -LiteralPath (Join-Path $codeRoot $_)) })
+        if ($missing.Count) { Bad "imp:ready issues in repos not cloned under ${codeRoot}: $($missing -join ', ') (gh repo clone $Owner/<repo> $codeRoot\<repo>)" }
+        else { Ok "all $($names.Count) repos with imp:ready issues are cloned under $codeRoot" }
+    }
+}
 
 $vault = $env:IMPS_VAULT_PROMPT
 if ([string]::IsNullOrWhiteSpace($vault)) {

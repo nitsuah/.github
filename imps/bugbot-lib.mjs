@@ -1,0 +1,623 @@
+// bugbot: pure decisions for the fallback PR reviewer (imps/bugbot.mjs).
+//
+// CodeRabbit is the primary reviewer. When it cannot review the current head
+// commit (its free tier is rate-limited, or it has gone silent), bugbot runs an
+// adversarial 9router review and posts it the way CodeRabbit does: one inline
+// review thread per finding, plus a `bugbot` commit status on the head. It only
+// reviews; it never edits code. The PR's owner fixes the threads (the imp fix
+// round on imp PRs, the hypervisor elsewhere). CodeRabbit's stale
+// CHANGES_REQUESTED is dismissed only when CodeRabbit is stalled on the head,
+// bugbot passed that same head, and no thread is open.
+// Contract: imps/STANDARD.md § Bugbot.
+
+import { parseJsonLenient } from './lib.mjs';
+
+export const BUGBOT_MARK = '<!-- bugbot';
+export const STATUS_CONTEXT = 'bugbot';
+// On every inline comment and thread reply bugbot writes, so it can find its own threads and its own last word.
+export const THREAD_MARK = '<!-- bugbot-thread -->';
+
+export const BUGBOT_DEFAULTS = {
+    graceMinutes: 20, // how long CodeRabbit gets to review a new head before it counts as silent
+    pendingMaxMinutes: 45, // a CodeRabbit check still pending after this long counts as stalled
+    maxPerSweep: 4, // bugbot reviews per sweep (each one is a 9router completion)
+    perPrPerDay: 6, // bugbot reviews of one PR in 24 h, so a fix/re-review loop cannot spin
+    skipLabel: 'bugbot:skip',
+    skipRepos: ['security-program', '9router', '9router-fork'],
+};
+
+const CR_LOGIN = /^coderabbitai(\[bot\])?$/i;
+export const isCodeRabbit = (login = '') => CR_LOGIN.test(String(login));
+
+// CodeRabbit's own words when it will not review (free OSS quota, hourly chat limit, paused reviews).
+export const CR_STALL_TEXT =
+    /review(s)? rate limited|review limit reached|rate limit exceeded|used all free (oss )?reviews|rate limited by coderabbit|exceeded the limit for the number of|reviews? (are )?paused/i;
+// Its reply when the head commit was in fact already reviewed.
+const CR_ALREADY_REVIEWED = /already reviewed the last commit/i;
+
+const ts = (s) => {
+    const t = Date.parse(s || '');
+    return Number.isFinite(t) ? t : 0;
+};
+
+/**
+ * Where does CodeRabbit stand on the PR's current head commit?
+ * Pure; every input is passed in.
+ *  reviewed      it submitted a review for the head commit (it is working; defer to it)
+ *  working       its check on the head is still pending (give it time)
+ *  waiting       the head is younger than the grace period
+ *  rate-limited  its latest note after the head says it will not review (stalled)
+ *  silent        no review for the head after the grace period (stalled)
+ *  absent        it has never touched this PR (no CodeRabbit here; stalled)
+ * @returns {{state:string, stalled:boolean, reason:string}}
+ */
+export function codeRabbitStatus({ headSha, headAt, reviews = [], comments = [], checks = [], now = Date.now(), graceMinutes = BUGBOT_DEFAULTS.graceMinutes, pendingMaxMinutes = BUGBOT_DEFAULTS.pendingMaxMinutes } = {}) {
+    const out = (state, reason) => ({ state, stalled: ['rate-limited', 'silent', 'absent'].includes(state), reason });
+    const crReviews = reviews.filter((r) => isCodeRabbit(r.author));
+    if (crReviews.some((r) => r.commit === headSha && r.state !== 'PENDING')) return out('reviewed', 'CodeRabbit reviewed the head commit');
+
+    const headTime = ts(headAt);
+    const age = now - headTime;
+    // A CodeRabbit check still running on the head wins over any notice: it is working (CodeRabbit #320 review).
+    const crCheck = checks.find((c) => /coderabbit/i.test(c.name || ''));
+    if (crCheck && /^(PENDING|IN_PROGRESS|QUEUED|EXPECTED|pending)$/i.test(crCheck.state || '') && age < pendingMaxMinutes * 60_000)
+        return out('working', 'CodeRabbit check is still running');
+
+    const crComments = comments.filter((c) => isCodeRabbit(c.author)).sort((a, b) => ts(a.createdAt) - ts(b.createdAt));
+    const afterHead = crComments.filter((c) => ts(c.createdAt) >= headTime);
+    const latest = afterHead[afterHead.length - 1];
+    if (latest && CR_STALL_TEXT.test(latest.body || '')) return out('rate-limited', 'CodeRabbit says it is rate-limited for this head');
+    if (latest && CR_ALREADY_REVIEWED.test(latest.body || '')) return out('reviewed', 'CodeRabbit says it already reviewed the head');
+
+    if (age < graceMinutes * 60_000) return out('waiting', `head is ${Math.round(age / 60_000)} min old (grace ${graceMinutes} min)`);
+    if (!crReviews.length && !crComments.length && !crCheck) return out('absent', 'CodeRabbit has not touched this PR');
+    return out('silent', `no CodeRabbit review of the head after ${graceMinutes} min`);
+}
+
+/** Read `<!-- bugbot sha=<sha> verdict=<verdict> scope=<full|partial> -->` from a review body. */
+export function parseBugbotMarker(body = '') {
+    const m = String(body).match(/<!-- bugbot sha=([0-9a-f]{7,40}) verdict=(approve|comment|request_changes)(?: scope=(full|partial))? -->/);
+    return m ? { sha: m[1], verdict: m[2], scope: m[3] || 'full' } : null;
+}
+
+/**
+ * The latest bugbot verdict for this exact head commit, or null. A marker only
+ * counts on a review written by a trusted bugbot account and submitted on the
+ * head commit itself, so a pasted marker cannot pass the gate.
+ */
+export function bugbotVerdictFor(reviews = [], headSha, { trustedAuthors = [] } = {}) {
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
+    let found = null;
+    for (const r of [...reviews].sort((a, b) => ts(a.submittedAt) - ts(b.submittedAt))) {
+        const m = parseBugbotMarker(r.body);
+        if (!m || !headSha || m.sha !== headSha || r.commit !== headSha) continue;
+        if (!trusted.has(String(r.author || '').toLowerCase())) continue;
+        found = { ...m, url: r.url || null };
+    }
+    return found;
+}
+
+/** A bugbot result the gate may count as a pass: not request_changes, and the whole diff was reviewed. */
+export const bugbotPassed = (b) => Boolean(b) && b.verdict !== 'request_changes' && b.scope !== 'partial';
+
+/**
+ * New-side line numbers each file shows in a unified diff (added and context
+ * lines). GitHub only accepts an inline review comment on one of these lines.
+ * @returns {Map<string, Set<number>>}
+ */
+export function rightSideLines(diff = '') {
+    const files = new Map();
+    let file = null;
+    let line = 0;
+    let oldLeft = 0; // lines of the current hunk still to read, per side (from the @@ header),
+    let newLeft = 0; // so hunk content such as "+++ heading" is never mistaken for a file header
+    for (const raw of String(diff).split('\n')) {
+        if (oldLeft > 0 || newLeft > 0) {
+            if (raw.startsWith('\\')) continue; // "\ No newline at end of file"
+            const tag = raw[0];
+            if (tag === '+') {
+                if (file) files.get(file).add(line);
+                line++;
+                newLeft--;
+            } else if (tag === '-') {
+                oldLeft--;
+            } else {
+                if (file) files.get(file).add(line);
+                line++;
+                oldLeft--;
+                newLeft--;
+            }
+            continue;
+        }
+        if (raw.startsWith('diff --git ')) {
+            file = null;
+            continue;
+        }
+        if (raw.startsWith('+++ ')) {
+            const p = raw.slice(4).trim();
+            file = p === '/dev/null' ? null : p.replace(/^b\//, '');
+            if (file && !files.has(file)) files.set(file, new Set());
+            continue;
+        }
+        const h = raw.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        if (h) {
+            oldLeft = h[1] === undefined ? 1 : Number(h[1]);
+            line = Number(h[2]);
+            newLeft = h[3] === undefined ? 1 : Number(h[3]);
+        }
+    }
+    return files;
+}
+
+// Findings that got no thread are listed in the summary under one of these headings.
+const OUTSIDE_HEADING = '**Findings outside the diff lines:**';
+export const REFUSED_ANCHORS_HEADING = '**Inline findings (GitHub refused the line anchors):**';
+// On the one forced re-review a head may get, so a second is refused from the PR itself, on any machine.
+export const REROLL_MARK = (sha) => `<!-- bugbot-reroll sha=${sha} -->`;
+
+const escapeCell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+const VERDICT_LABEL = { approve: '✅ No blocking issues', comment: '💬 Minor findings', request_changes: '⛔ Changes needed' };
+
+/**
+ * Turn a parsed review (lib.mjs parseReview) into a GitHub review payload.
+ * Findings above nit that point at a line visible in the diff become inline
+ * threads (no `<!-- imp-` marker, so the imp fix round treats them as
+ * feedback); the rest go in the summary.
+ */
+export function buildBugbotReview(rv, { diff = '', headSha, reason = '', model = 'MAX', served = [], partial = false, reroll = false } = {}) {
+    const lines = rightSideLines(diff);
+    const comments = [];
+    const unplaced = [];
+    for (const f of rv.findings || []) {
+        if (f.severity === 'nit') continue;
+        const okLine = f.file && Number.isInteger(f.line) && lines.get(f.file)?.has(f.line);
+        if (!okLine) {
+            unplaced.push(f);
+            continue;
+        }
+        comments.push({
+            path: f.file,
+            line: f.line,
+            side: 'RIGHT',
+            body: `${THREAD_MARK}\n**${f.severity}** · ${f.title}\n\n${f.detail}\n\n<sub>bugbot: fallback review while CodeRabbit is unavailable. Fix it, or reply with evidence; bugbot reads the reply and resolves the thread if it holds.</sub>`,
+        });
+    }
+    const nits = (rv.findings || []).filter((f) => f.severity === 'nit').slice(0, 3);
+    const body = [
+        `<!-- bugbot sha=${headSha} verdict=${rv.verdict} scope=${partial ? 'partial' : 'full'} -->`,
+        ...(reroll ? [REROLL_MARK(headSha)] : []),
+        `### Bugbot review: ${VERDICT_LABEL[rv.verdict] || rv.verdict}`,
+        '',
+        rv.summary || '(no summary)',
+        '',
+        `CodeRabbit could not review this head (${reason || 'unavailable'}), so this adversarial review stands in for it. ${comments.length} finding(s) are inline threads.`,
+    ];
+    if (partial) body.push('', '**The diff was too large to review in full**, so this review does not count as a pass: the `bugbot` status stays failing until CodeRabbit or a human reviews the rest.');
+    if (unplaced.length) {
+        body.push('', OUTSIDE_HEADING, '', '| | Finding | Where |', '| --- | --- | --- |');
+        for (const f of unplaced) body.push(`| **${f.severity}** | ${escapeCell(f.title)} | \`${escapeCell(f.file || '?')}${f.line ? `:${f.line}` : ''}\` |`);
+        for (const f of unplaced) body.push('', `<details><summary><b>${f.severity}</b>: ${f.title}</summary>\n\n${f.detail}\n\n</details>`);
+    }
+    if (nits.length) body.push('', `Nits: ${nits.map((f) => `${f.title} (\`${f.file}${f.line ? `:${f.line}` : ''}\`)`).join('; ')}`);
+    const statusState = rv.verdict === 'request_changes' || partial ? 'failure' : 'success';
+    body.push('', `<sub>Read-only review through 9router (\`${model}\`, served ${served.join(', ') || '?'}). Bugbot never edits code or merges; the \`bugbot\` status on this commit is ${statusState}.</sub>`);
+    return { body: body.join('\n'), comments, unplaced, statusState };
+}
+
+/**
+ * May CodeRabbit's CHANGES_REQUESTED be dismissed? Only when CodeRabbit is
+ * stalled on the head, bugbot passed this exact head, every thread is resolved
+ * and checks are green. A working CodeRabbit is never overridden.
+ */
+export function shouldDismissCodeRabbit({ crLatestState, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
+    if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
+    if (!crStatus?.stalled) return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head; defer to it` };
+    if (!bugbot) return { ok: false, reason: 'no bugbot review of the head yet' };
+    if (!bugbotPassed(bugbot)) return { ok: false, reason: bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
+    if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
+    if (!checksGreen) return { ok: false, reason: 'checks are not green' };
+    return { ok: true, reason: 'CodeRabbit is stalled; bugbot passed the head with every thread resolved and green checks' };
+}
+
+/**
+ * The independent-review half of the merge rule: CodeRabbit approved the head,
+ * or (when it is stalled) bugbot passed the head. Either way no thread may be
+ * open and checks must be green.
+ */
+export function reviewGate({ crApprovedHead = false, crBlocksHead = false, crStatus, bugbot, openThreads = 0, checksGreen = false } = {}) {
+    if (!checksGreen) return { ok: false, reason: 'checks are not green' };
+    if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
+    if (crApprovedHead) return { ok: true, reason: 'CodeRabbit approved the head' };
+    // Repos with CodeRabbit approvals disabled only ever get COMMENTED reviews (`@coderabbitai approve` is refused,
+    // stash#425): a review of the head that requests nothing, with every thread answered, is the clean review.
+    if (crStatus?.state === 'reviewed' && !crBlocksHead) return { ok: true, reason: 'CodeRabbit reviewed the head and left nothing open' };
+    if (crStatus?.stalled && bugbotPassed(bugbot)) return { ok: true, reason: `CodeRabbit ${crStatus.state}; bugbot passed the head` };
+    if (crStatus?.stalled) return { ok: false, reason: !bugbot ? 'CodeRabbit stalled and bugbot has not reviewed the head' : bugbot.scope === 'partial' ? 'bugbot only reviewed part of the diff' : 'bugbot requests changes on the head' };
+    return { ok: false, reason: `waiting for CodeRabbit (${crStatus?.state || 'unknown'})` };
+}
+
+/**
+ * Bugbot threads waiting for bugbot: unresolved, opened by bugbot, and the last
+ * word is someone else's (a fix round's "Fixed in …" / "Pushing back", or a human).
+ */
+export function threadsAwaitingBugbot(threads = []) {
+    return threads.filter((t) => {
+        const cs = t.comments || [];
+        if (t.isResolved || cs.length < 2) return false;
+        if (!String(cs[0].body || '').includes(THREAD_MARK)) return false;
+        return !String(cs[cs.length - 1].body || '').includes(THREAD_MARK);
+    });
+}
+
+// On a reply where bugbot accepted the answer, so a resolve that failed is retried without another judgement.
+export const ACCEPTED_MARK = '<!-- bugbot-accepted -->';
+
+/** Bugbot threads it already accepted (its own last reply says so) that are still unresolved. */
+export function acceptedButOpen(threads = []) {
+    return threads.filter((t) => {
+        const cs = t.comments || [];
+        if (t.isResolved || cs.length < 2 || !String(cs[0].body || '').includes(THREAD_MARK)) return false;
+        return String(cs[cs.length - 1].body || '').includes(ACCEPTED_MARK);
+    });
+}
+
+/**
+ * When did this head reach the PR? GitHub does not expose push time, so use the
+ * later of the commit date and when bugbot first saw the SHA: an old commit
+ * pushed now still gets the full grace period.
+ */
+export function headArrival({ committedAt, firstSeenAt } = {}) {
+    const c = ts(committedAt);
+    const f = ts(firstSeenAt);
+    return new Date(Math.max(c, f) || Date.now()).toISOString();
+}
+
+/**
+ * A `request_changes` head verdict whose findings were all answered on threads
+ * (every bugbot thread resolved) may be cleared to `comment` without a new
+ * commit, unless the review also carried blocker/major findings it could not
+ * place inline: those were never answerable on a thread.
+ */
+export function canClearVerdict({ verdict, scope = 'full', openBugbotThreads = 0, reviewBody = '' } = {}) {
+    if (verdict !== 'request_changes' || scope === 'partial' || openBugbotThreads > 0) return false;
+    const outside = String(reviewBody).split(OUTSIDE_HEADING)[1] || '';
+    return !/\| \*\*(blocker|major)\*\* \|/.test(outside);
+}
+
+/** Read bugbot's answer to a reply: `{"decision":"accept|keep","reply":"…"}` in a json block. */
+export function parseThreadJudgement(text = '') {
+    const blocks = [...String(text).matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+    // Models sometimes answer with a bare object: take the last {...} that names a decision.
+    if (!blocks.length) {
+        const bare = String(text).match(/\{[^{}]*"decision"\s*:[^{}]*\}/g);
+        if (bare) blocks.push(bare[bare.length - 1]);
+    }
+    if (!blocks.length) return { error: 'no json block' };
+    try {
+        const raw = parseJsonLenient(blocks[blocks.length - 1]);
+        if (!['accept', 'keep'].includes(raw.decision)) return { error: `bad decision ${raw.decision}` };
+        return { decision: raw.decision, reply: String(raw.reply || '').trim() || (raw.decision === 'accept' ? 'Agreed.' : 'This still applies.') };
+    } catch (e) {
+        return { error: `unparseable json: ${e.message}` };
+    }
+}
+
+/** Open PRs bugbot may look at: not drafts, not bot-authored, not skipped repos or labelled bugbot:skip. */
+export function sweepCandidates(prs = [], { skipRepos = BUGBOT_DEFAULTS.skipRepos, skipLabel = BUGBOT_DEFAULTS.skipLabel } = {}) {
+    return prs.filter((p) => {
+        if (p.isDraft) return false;
+        const repo = p.repository?.name || p.repo;
+        if (skipRepos.includes(repo)) return false;
+        const author = p.author?.login || '';
+        if (/\[bot\]$|^app\/|^(dependabot|renovate|github-actions)$/i.test(author)) return false;
+        if ((p.labels || []).some((l) => (l.name || l) === skipLabel)) return false;
+        return true;
+    });
+}
+
+/** How many bugbot reviews this PR got in the last 24 h (from bugbot.jsonl events). */
+export function reviewsInLastDay(events = [], prUrl, now = Date.now()) {
+    return events.filter((e) => e && e.event === 'bugbot-review' && !e.dryRun && e.pr === prUrl && now - ts(e.at) < 24 * 3600_000).length;
+}
+
+const prName = (url = '') => {
+    const m = String(url).match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
+    return m ? `${m[1]}#${m[2]}` : String(url);
+};
+
+/**
+ * What the status line shows for bugbot, from bugbot.jsonl events only (no network).
+ * `blocked` lists PRs whose latest bugbot verdict on a head asks for changes (or was partial)
+ * and was not cleared since.
+ */
+export function bugbotSummary(events = [], now = Date.now(), { open = null } = {}) {
+    const day = events.filter((e) => e && !e.dryRun && now - ts(e.at) < 24 * 3600_000);
+    const reviews = day.filter((e) => e.event === 'bugbot-review');
+    const threads = day.filter((e) => e.event === 'bugbot-thread');
+    const latest = new Map(); // pr -> { verdict, partial, sha, at, counts }
+    for (const e of day) {
+        if (e.event === 'bugbot-review') latest.set(e.pr, { verdict: e.verdict, partial: !!e.partial, sha: e.sha, at: e.at, counts: e.counts || {} });
+        if (e.event === 'bugbot-verdict-cleared' && latest.get(e.pr)?.sha === e.sha) latest.set(e.pr, { ...latest.get(e.pr), verdict: 'comment', partial: false });
+    }
+    const blocked = [...latest.entries()]
+        .filter(([pr, v]) => (v.verdict === 'request_changes' || v.partial) && (!open || open.has(pr)))
+        .map(([pr, v]) => ({ pr: prName(pr), why: v.partial ? 'partial' : `${(v.counts.blocker || 0) + (v.counts.major || 0)} blocking` }));
+    // A sweep heartbeat is not activity: it only shows bugbot is alive.
+    const last = events.filter((e) => e && !e.dryRun && /^bugbot-/.test(e.event || '') && e.event !== 'bugbot-sweep').reduce((t, e) => Math.max(t, ts(e.at)), 0);
+    const lastSweep = events.filter((e) => e && e.event === 'bugbot-sweep').reduce((t, e) => Math.max(t, ts(e.at)), 0);
+    return {
+        reviews: reviews.length,
+        changes: reviews.filter((e) => e.verdict === 'request_changes').length,
+        passed: reviews.filter((e) => e.verdict !== 'request_changes' && !e.partial).length,
+        partial: reviews.filter((e) => e.partial).length,
+        accepted: threads.filter((e) => e.decision === 'accept').length,
+        kept: threads.filter((e) => e.decision === 'keep').length,
+        lifted: day.filter((e) => e.event === 'bugbot-dismiss').length,
+        errorsLastHour: events.filter((e) => e && e.event === 'bugbot-error' && now - ts(e.at) < 3600_000).length,
+        blocked,
+        lastAt: last || null,
+        lastSweepAt: lastSweep || null,
+        lastReview: reviews.length ? { pr: prName(reviews[reviews.length - 1].pr), verdict: reviews[reviews.length - 1].verdict } : null,
+    };
+}
+
+/** Full rows while something is happening or blocked; otherwise the dim idle line. */
+export const bugbotActive = (s, now = Date.now()) => !!s && (s.blocked.length > 0 || s.errorsLastHour > 0 || (s.lastAt && now - s.lastAt < 30 * 60_000));
+
+// Hidden after the command, so CodeRabbit still parses `@coderabbitai approve` and bugbot can see it asked.
+export const APPROVE_ASK_MARK = (sha) => `<!-- bugbot-approve-ask sha=${sha} -->`;
+
+/**
+ * CodeRabbit reviewed the head and its old CHANGES_REQUESTED is the only thing left: ask it once per head
+ * to approve. Imp PRs are left to the fix round, which already does this for them.
+ */
+export function shouldAskCodeRabbitApproval({ crStatus, crLatestState, openThreads = 0, checksGreen = false, headSha, comments = [], historyComplete = false, isImpPr = false } = {}) {
+    if (isImpPr) return { ok: false, reason: 'imp PR: the fix round asks' };
+    if (crLatestState !== 'CHANGES_REQUESTED') return { ok: false, reason: 'CodeRabbit is not blocking' };
+    if (crStatus?.state !== 'reviewed') return { ok: false, reason: `CodeRabbit is ${crStatus?.state || 'unknown'} on the head` };
+    if (openThreads > 0) return { ok: false, reason: `${openThreads} review thread(s) still open` };
+    if (!checksGreen) return { ok: false, reason: 'checks are not green' };
+    if (comments.some((c) => String(c.body || '').includes(APPROVE_ASK_MARK(headSha)))) return { ok: false, reason: 'already asked for this head' };
+    // Older comments were not read, so an earlier ask for this head may be among them: fail closed.
+    if (!historyComplete) return { ok: false, reason: 'comment history incomplete; cannot rule out an earlier ask' };
+    return { ok: true, reason: 'CodeRabbit reviewed the head, nothing is open and checks are green' };
+}
+
+/**
+ * The latest passing bugbot verdict on any commit of the PR, or null. Same trust
+ * rules as bugbotVerdictFor (trusted author, marker sha equals the review's commit);
+ * used to carry a verdict over a head that only merged the base branch in.
+ */
+export function latestPassedVerdict(reviews = [], { trustedAuthors = [] } = {}) {
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
+    let found = null;
+    for (const r of [...reviews].sort((a, b) => ts(a.submittedAt) - ts(b.submittedAt))) {
+        const m = parseBugbotMarker(r.body);
+        if (!m || !r.commit || !r.commit.startsWith(m.sha)) continue;
+        if (!trusted.has(String(r.author || '').toLowerCase())) continue;
+        found = { ...m, sha: r.commit, url: r.url || null };
+    }
+    return bugbotPassed(found) ? found : null;
+}
+
+/**
+ * A PR's own changes, as compare-API files: per file, only the added and removed
+ * lines (no context, no hunk headers), so the same change measured against an
+ * older and a newer base compares equal. Returns null (fail closed) when the
+ * file list may be truncated or a changed file has no patch to compare.
+ */
+export function ownChanges(files = [], { maxFiles = 300 } = {}) {
+    if (!Array.isArray(files) || files.length >= maxFiles) return null;
+    const out = new Map();
+    for (const f of files) {
+        if (typeof f.patch !== 'string') {
+            // No patch: a binary or oversized change whose content we cannot compare. Only a
+            // deletion is safe to compare by status alone; anything else forces a full review.
+            if (f.status !== 'removed') return null;
+            out.set(f.filename, 'removed');
+            continue;
+        }
+        // A per-file compare patch has no file headers, so every +/- line is content
+        // (a source line "++i;" appears as "+++i;" and must be kept).
+        const lines = f.patch.split('\n').filter((l) => l.startsWith('+') || l.startsWith('-'));
+        out.set(f.filename, `${f.status}${f.previous_filename ? `<${f.previous_filename}` : ''}\n${lines.join('\n')}`);
+    }
+    return out;
+}
+
+/** True only when both change sets are known and identical file by file. */
+export function sameOwnChanges(a, b) {
+    if (!a || !b || a.size !== b.size) return false;
+    for (const [file, change] of a) if (b.get(file) !== change) return false;
+    return true;
+}
+
+/**
+ * Numbered lines around `line` (1-based) for the thread judge, so it can check
+ * evidence that sits outside the diff. With no line, the start of the file.
+ */
+export function excerptLines(text = '', line = null, radius = 60) {
+    const all = String(text).split('\n');
+    const center = Number.isInteger(line) && line > 0 ? line : 1;
+    const from = Math.max(1, center - radius);
+    const to = Math.min(all.length, center + radius);
+    const width = String(to).length;
+    return all.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(width)}  ${l}`).join('\n');
+}
+
+/**
+ * `path:line` locations cited in reply text (e.g. "app/lib/db.js:140"), deduped,
+ * at most `max`. URLs are ignored; only repo-relative paths with an extension.
+ */
+export function citedLocations(text = '', max = 3) {
+    const out = [];
+    const seen = new Set();
+    const cleaned = String(text).replace(/https?:\/\/\S+/g, ' ');
+    for (const m of cleaned.matchAll(/(?<![\w/.-])((?:\.\/)?(?:[\w@-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8}):(\d{1,6})\b/g)) {
+        const path = m[1].replace(/^\.\//, '');
+        if (path.startsWith('/') || path.includes('..')) continue;
+        const key = `${path}:${m[2]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ path, line: Number(m[2]) });
+        if (out.length >= max) break;
+    }
+    return out;
+}
+
+/**
+ * Text of a contents-API JSON response (base64), untrimmed so line numbers stay
+ * exact; null for anything that is not a readable text file.
+ */
+export function decodeContents(json = '') {
+    let d;
+    try {
+        d = typeof json === 'string' ? JSON.parse(json) : json;
+    } catch {
+        return null;
+    }
+    if (!d || d.type !== 'file' || d.encoding !== 'base64' || typeof d.content !== 'string') return null;
+    const text = Buffer.from(d.content, 'base64').toString('utf8');
+    return text.includes('\u0000') ? null : text;
+}
+
+// ── settled findings ──────────────────────────────────────────────────────
+// A finding bugbot raised, someone pushed back on with evidence, and bugbot
+// accepted, is settled for the PR. A later review of a new head must not raise
+// it again (vhs#208 got the same false blocker twice). Threads accepted as
+// "Fixed in …" are not settled: a regression there must still be caught.
+const FIX_REPLY = /^\s*(<!--[^>]*-->\s*)*\**\s*fixed\b/i;
+// "Not in this PR" (and an unlabelled skip): the finding was accepted as deferred, not shown to be wrong.
+const DEFER_REPLY = /^\s*(<!--[^>]*-->\s*)*\**\s*(not in this pr|skipped)\b/i;
+const titleWords = (s = '') => new Set(String(s).toLowerCase().replace(/[`'"*_]/g, '').split(/[^a-z0-9.:-]+/).filter((w) => w.length > 2));
+
+/** Findings bugbot accepted a pushback on: [{ path, title, reply }]. Pure. */
+export function settledFindings(threads = []) {
+    const out = [];
+    for (const t of threads) {
+        const cs = t.comments || [];
+        const first = String(cs[0]?.body || '');
+        if (!first.includes(THREAD_MARK)) continue;
+        const at = cs.findIndex((c, i) => i > 0 && String(c.body || '').includes(ACCEPTED_MARK));
+        if (at < 0) continue;
+        const answer = [...cs.slice(1, at)].reverse().find((c) => !String(c.body || '').includes(THREAD_MARK));
+        if (!answer || FIX_REPLY.test(String(answer.body || ''))) continue;
+        const m = first.match(/\*\*(?:blocker|major|minor|nit)\*\*\s*·\s*(.+)/);
+        if (!m) continue;
+        out.push({ path: t.path || '', title: m[1].trim(), reply: String(answer.body || '').split('\n').filter((l) => !l.trim().startsWith('<!--')).join('\n').replace(/[<>]/g, '').trim().slice(0, 500) });
+    }
+    return out;
+}
+
+/** Same file and most title words shared (Jaccard ≥ 0.5). */
+export function matchesSettled(f, settled = []) {
+    const a = titleWords(f.title);
+    return settled.find((s) => {
+        if (!s.path || s.path !== f.file) return false;
+        const b = titleWords(s.title);
+        const inter = [...a].filter((w) => b.has(w)).length;
+        const union = new Set([...a, ...b]).size;
+        return union > 0 && inter / union >= 0.5;
+    }) || null;
+}
+
+/** The review without settled findings, counts and verdict recomputed. Pure. */
+export function withoutSettled(rv, settled = []) {
+    if (!settled.length || !rv?.findings) return { rv, dropped: [] };
+    const dropped = [];
+    const findings = rv.findings.filter((f) => (matchesSettled(f, settled) ? (dropped.push(f), false) : true));
+    if (!dropped.length) return { rv, dropped };
+    return { rv: recount(rv, findings), dropped };
+}
+
+function recount(rv, findings) {
+    const sev = ['blocker', 'major', 'minor', 'nit'];
+    const counts = Object.fromEntries(sev.map((s) => [s, findings.filter((f) => f.severity === s).length]));
+    const verdict = counts.blocker || counts.major ? 'request_changes' : findings.some((f) => f.severity !== 'nit') ? 'comment' : 'approve';
+    return { ...rv, findings, counts, verdict };
+}
+
+// ── evidence rule ─────────────────────────────────────────────────────────
+// A blocker or major blocks the merge, so it must quote a line that is really
+// in the diff. "X is not a valid key / does not exist" claims come from the
+// model's possibly stale knowledge (vhs#208: a documented key called invalid
+// twice) and never block on their own.
+const EXISTENCE_CLAIM = /\b(invalid|not (a )?valid|unsupported|not supported|does not exist|doesn't exist|unknown (key|option|flag|property|field)|no such (key|option|flag|api|method)|not a recognized)\b/i;
+const squash = (s = '') => String(s).replace(/\s+/g, ' ').trim();
+
+/** Added and context lines of a unified diff, whitespace-squashed. Pure. */
+export function diffLineSet(diff = '') {
+    const out = new Set();
+    for (const l of String(diff).split('\n')) {
+        if (l.startsWith('+++') || l.startsWith('---')) continue;
+        if (l.startsWith('+') || l.startsWith(' ')) {
+            const t = squash(l.slice(1));
+            if (t) out.add(t);
+        }
+    }
+    return out;
+}
+
+/** Downgrade unproven blockers/majors to minor and recompute the verdict. Pure. */
+export function requireEvidence(rv, diff = '') {
+    if (!rv?.findings) return { rv, downgraded: [] };
+    const lines = diffLineSet(diff);
+    const downgraded = [];
+    const findings = rv.findings.map((f) => {
+        if (f.severity !== 'blocker' && f.severity !== 'major') return f;
+        const q = squash(f.quote).replace(/^[+ ]/, '').trim();
+        const quoted = q.length >= 6 && [...lines].some((l) => l.includes(q));
+        const why = !quoted ? 'no quoted diff line' : EXISTENCE_CLAIM.test(`${f.title} ${f.detail}`) ? 'existence claim without a reproduction' : null;
+        if (!why) return f;
+        downgraded.push({ ...f, why });
+        return { ...f, severity: 'minor', detail: `${f.detail}\n\n_Downgraded from ${f.severity}: ${why}._` };
+    });
+    return { rv: downgraded.length ? recount(rv, findings) : rv, downgraded };
+}
+
+// ── forced re-review of a comment verdict ─────────────────────────────────
+// `risk:medium` needs `approve`, so a `comment` caused only by findings bugbot
+// itself later accepted as wrong could not be cleared without a new commit.
+// `review --force` may then review that head once more; settled findings are
+// dropped from the new review as usual. Everything here fails closed.
+
+/** The line buildBugbotReview writes with its thread count. Only a direct review of a head has it. */
+const INLINE_COUNT = /^CodeRabbit could not review this head \(.*\), so this adversarial review stands in for it\. (\d+) finding\(s\) are inline threads\.\r?$/gm;
+
+/**
+ * May `--force` review a head that already has this verdict? Only a full-scope
+ * `comment` whose every finding is an inline thread on which bugbot accepted a
+ * pushback, with no bugbot thread open and no earlier re-review of the head.
+ * Nits never make a verdict `comment`, so the ones in the summary do not count.
+ * @returns {{ok:boolean, reason:string}}
+ */
+export function canRerollVerdict({ bugbot, headSha, reviews = [], threads = [], trustedAuthors = [], historyComplete = false } = {}) {
+    const no = (reason) => ({ ok: false, reason });
+    if (!headSha || !bugbot || bugbot.sha !== headSha) return no('no bugbot verdict on the head');
+    if (bugbot.verdict !== 'comment') return no(`the head verdict is ${bugbot.verdict}; only a comment verdict can be re-reviewed`);
+    if (bugbot.scope !== 'full') return no('the head verdict covers only part of the diff');
+    if (!historyComplete) return no('review or thread history is incomplete; cannot rule out an earlier re-review or an open thread');
+    const trusted = new Set(trustedAuthors.map((a) => String(a).toLowerCase()));
+    const isTrusted = (author) => trusted.has(String(author || '').toLowerCase());
+    if (reviews.some((r) => isTrusted(r.author) && String(r.body || '').includes(REROLL_MARK(headSha)))) return no('this head already had its one re-review');
+    const review = reviews.find((r) => r.url && r.url === bugbot.url && r.commit === headSha && isTrusted(r.author));
+    if (!review?.id) return no('the review that gave the verdict was not found');
+    const body = String(review.body || '');
+    if (body.includes(OUTSIDE_HEADING) || body.includes(REFUSED_ANCHORS_HEADING)) return no('the verdict lists findings only in its summary, so they were never answered on a thread');
+    const counts = [...body.matchAll(INLINE_COUNT)];
+    if (counts.length !== 1) return no('the verdict is not a direct review of this head (a cleared or carried-over verdict lists no findings of its own)');
+    const isBugbot = (t) => String(t.comments?.[0]?.body || '').includes(THREAD_MARK);
+    const open = threads.filter((t) => !t.isResolved && isBugbot(t)).length;
+    if (open) return no(`${open} bugbot thread(s) still open`);
+    const own = threads.filter((t) => isBugbot(t) && t.comments[0].reviewId === review.id && isTrusted(t.comments[0].author));
+    const expected = Number(counts[0][1]);
+    if (!expected) return no('the verdict has no finding that could have been refuted');
+    if (own.length !== expected) return no(`found ${own.length} of the verdict's ${expected} finding thread(s)`);
+    for (const t of own) {
+        const accepted = t.comments.findIndex((c, i) => i > 0 && String(c.body || '').includes(ACCEPTED_MARK));
+        if (accepted < 0 || !isTrusted(t.comments[accepted].author)) return no(`bugbot did not accept the answer on ${t.path}`);
+        const answer = [...t.comments.slice(1, accepted)].reverse().find((c) => !String(c.body || '').includes(THREAD_MARK));
+        if (!settledFindings([t]).length || DEFER_REPLY.test(String(answer?.body || ''))) return no(`the finding on ${t.path} was not accepted as a pushback (fixed, deferred or unreadable)`);
+    }
+    return { ok: true, reason: `all ${expected} finding(s) of the comment verdict were accepted as pushbacks` };
+}

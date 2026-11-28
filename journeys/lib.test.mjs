@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
     errorClass, fingerprint, failingStep, flattenReport, failureOf, readMarker,
     issueBody, issueTitle, plan, bugsMarkdown, coverage, pickImages, FP_MARK, META_MARK, journeyId,
-    isInfraError,
+    isInfraError, vercelSkipFiles,
 } from './lib.mjs';
 
 test('isInfraError catches a broken run environment, not product failures', () => {
@@ -195,4 +195,11 @@ test('coverage counts only user-visible spots.json features', () => {
     assert.deepEqual([c.covered, c.total], [2, 3]);
     assert.deepEqual(c.uncovered, ['chaos-mode']);
     assert.equal(coverage(recs, null), null);
+});
+
+test('vercelSkipFiles disables Vercel deploys of the bot branch at every root', () => {
+    const files = vercelSkipFiles('bot/journeys', ['app', './app/', 'web']);
+    assert.deepEqual(files.map((f) => f.path), ['vercel.json', 'app/vercel.json', 'web/vercel.json']);
+    assert.deepEqual(JSON.parse(files[0].content), { git: { deploymentEnabled: { 'bot/journeys': false } } });
+    assert.deepEqual(vercelSkipFiles('bot/journeys').map((f) => f.path), ['vercel.json']);
 });

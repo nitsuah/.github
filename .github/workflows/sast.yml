@@ -1,0 +1,60 @@
+name: SAST
+
+# Free code and secret scanning for private repos: Semgrep CE and the gitleaks CLI.
+# No paid GitHub features; results stay in the run (nothing goes to code scanning).
+# Callers copy repo-health/templates/sast.yml.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        # On a pull request only new findings fail. Matched code is kept out of the log.
+        run: |
+          set -euo pipefail
+          pipx run semgrep==1.185.0 scan --config p/default --config p/secrets --error --metrics=off --quiet \
+            ${BASE:+--baseline-commit "$BASE"} --sarif-output=semgrep.sarif > /dev/null
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        # A pull request scans its own commits; a scheduled run scans the whole history.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -sSfLo gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git "$GITHUB_WORKSPACE" --redact --no-banner --exit-code 1 ${BASE:+--log-opts="$BASE..HEAD"}

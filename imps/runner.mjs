@@ -2,13 +2,15 @@
 // helpers, the clean environment and the headless `claude -p` launcher.
 // Everything that talks to a model goes through runClaude, so both workers
 // get the same guardrails (clean env, 9router only, no shell splitting).
+import { pinnedModelEnv } from './model-pin.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, renameSync, appendFileSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { summarizeRun, parseBrief, closesIssue, resolveRouter } from './lib.mjs';
+import { memorySection } from './memory.mjs';
+import { summarizeRun, effectiveMaxLines, effectiveMaxTestLines, parseBrief, briefRepoName, closesIssue, resolveRouter, errorKind, repeatFailureGuard, REPEAT_GUARD_KINDS, inScopeChanged, isDeniedPath, writeStreamJsonMessage, isPidAlive, foldChatStream } from './lib.mjs';
 import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +43,8 @@ export function resolveVaultPrompt(config = {}, env = process.env) {
     return null;
 }
 
+export const originUrl = (dir) => git(dir, 'remote', 'get-url', 'origin').out;
+
 // ── ledger ────────────────────────────────────────────────────────────────
 export const rows = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []);
 
@@ -59,7 +63,7 @@ export const kitSha = () => {
 // heartbeat issues, claim comments, ledger rows, dispatch events.
 // Falls back to hostname if IMPS_MACHINE and config.machine are both unset.
 export function resolveMachine(config = {}, env = process.env) {
-    return env.IMPS_MACHINE || config.machine || hostname();
+    return (env.IMPS_MACHINE || '').trim() || config.machine || hostname();
 }
 export const machineName = () => resolveMachine({}, process.env);
 // How many edit-less tool calls a run may make: env, then ~/.imps/config.json, then defaults.
@@ -68,6 +72,12 @@ export function resolveNoEditTurns(config = {}, env = process.env) {
     const set = (v) => (v == null || String(v).trim() === '' ? undefined : v);
     const n = Number(set(env.IMPS_NO_EDIT_TURNS) ?? set(config.noEditTurns) ?? DEFAULTS.noEditTurns);
     return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.noEditTurns;
+}
+// How many tool-call turns an imp may use: config, then defaults; 0 disables.
+export function resolveMaxTurns(config = {}) {
+    const set = (v) => (v == null || typeof v === 'boolean' || String(v).trim() === '' ? undefined : v);
+    const n = Number(set(config.maxTurns) ?? DEFAULTS.maxTurns);
+    return Number.isInteger(n) && n >= 0 ? n : DEFAULTS.maxTurns;
 }
 // Check if the kit repo has uncommitted changes (used for provenance in ledger rows).
 export function isGitDirty(path) {
@@ -78,24 +88,129 @@ export function isGitDirty(path) {
         return false;
     }
 }
+// A cross-process lock around every ledger write. update() reads the whole file, patches one row and renames a
+// temp file over it, while imp.mjs appends a row when a run starts: an append that landed between the read and
+// the rename used to be lost. An exclusive lock file (O_EXCL) serialises them. A lock is broken ONLY by age:
+// nobody holds it for more than milliseconds, and checking the owner pid first is a check-then-delete race (the
+// owner can finish and a new holder take the lock between the check and the unlink, which then deletes a live
+// lock and lets two writers in). A crashed holder therefore costs at most LOCK_STALE_MS. IMPS_LEDGER_LOCK=0
+// turns the lock off.
+const LOCK = `${LEDGER}.lock`;
+export const LOCK_STALE_MS = 10_000;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+let lockDepth = 0;
+export function withLedgerLock(fn, { timeoutMs = 15_000 } = {}) {
+    if (process.env.IMPS_LEDGER_LOCK === '0' || lockDepth > 0) return fn(); // reentrant: update() -> save()
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        try {
+            const fd = openSync(LOCK, 'wx');
+            writeFileSync(fd, String(process.pid));
+            closeSync(fd);
+            break;
+        } catch (e) {
+            // Windows reports EPERM/EACCES (not EEXIST) while another process's delete of the lock is still pending.
+            if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+            let age = 0;
+            try {
+                age = Date.now() - statSync(LOCK).mtimeMs;
+            } catch (er) {
+                // Vanished between our failed create and this stat: retry the create at once. Never unlink here: a new
+                // holder may already have made a fresh lock at the same path, and deleting it lets two writers in.
+                if (er.code === 'ENOENT') continue;
+            }
+            if (age > LOCK_STALE_MS) { try { unlinkSync(LOCK); } catch { /* someone else broke it first */ } continue; }
+            if (Date.now() > deadline) throw new Error(`ledger lock busy for ${timeoutMs} ms (${LOCK})`);
+            sleepSync(15 + Math.floor(Math.random() * 25));
+        }
+    }
+    lockDepth++;
+    try {
+        return fn();
+    } finally {
+        lockDepth--;
+        try { unlinkSync(LOCK); } catch { /* already gone */ }
+    }
+}
 // Atomic: a crash mid-write must not truncate the run history.
-export const save = (all) => {
+export const save = (all) => withLedgerLock(() => {
     const tmp = `${LEDGER}.${process.pid}.tmp`;
     writeFileSync(tmp, all.map((r) => JSON.stringify(r)).join('\n') + '\n');
-    renameSync(tmp, LEDGER);
-};
+    // Windows can refuse the rename for a moment while another process (a viewer, an indexer) has the file open.
+    for (let attempt = 0; ; attempt++) {
+        try {
+            renameSync(tmp, LEDGER);
+            return;
+        } catch (e) {
+            if (attempt >= 8 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+            sleepSync(25 * (attempt + 1));
+        }
+    }
+});
 export function update(id, patch) {
-    const all = rows();
-    const r = all.find((x) => x.id === id);
-    if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
-    Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
-    save(all);
-    return r;
+    return withLedgerLock(() => {
+        const all = rows();
+        const r = all.find((x) => x.id === id);
+        if (!r) throw new Error(`no run ${id} in ${LEDGER}`);
+        Object.assign(r, typeof patch === 'function' ? patch(r) : patch);
+        save(all);
+        return r;
+    });
 }
+
+export const COMMIT_RECOVERY_CLAIM_TTL_MS = 10 * 60_000;
+
+// Claim a run's one-shot commit recovery atomically through the ledger lock.
+// A live, fresh claim blocks a second gate process; stale claims may be recovered.
+export function claimCommitRecovery(id, now = Date.now()) {
+    let claimed = false;
+    const claimedAt = new Date(now).toISOString();
+    const row = update(id, (current) => {
+        const existing = current.commitRecovery;
+        const at = Date.parse(existing?.claimedAt || '');
+        const fresh = Number.isFinite(at) && now - at < COMMIT_RECOVERY_CLAIM_TTL_MS;
+        const holderAlive = existing?.pid ? isPidAlive(Number(existing.pid)) : fresh;
+        if (existing?.inProgress && fresh && holderAlive) return {};
+        if (existing?.attempted && !existing.inProgress) return {};
+        claimed = true;
+        return {
+            outcome: null,
+            commitRecovery: {
+                attempted: true,
+                pass: null,
+                inProgress: true,
+                claimedAt,
+                pid: process.pid,
+            },
+        };
+    });
+    return { claimed, row, claimedAt: claimed ? claimedAt : null };
+}
+/** Append one run row under the same lock update() takes. */
+export const appendRow = (row) => withLedgerLock(() => appendFileSync(LEDGER, JSON.stringify(row) + '\n'));
 
 // ── processes ─────────────────────────────────────────────────────────────
 const LOG_FILE = join(HOME, 'logs', 'tool-errors.log');
 mkdirSync(dirname(LOG_FILE), { recursive: true });
+const RISK_COLORS = { low: '0e8a16', medium: 'fbca04', high: 'b60205' };
+
+/** Create the `risk:<level>` label if the repo lacks it, and return its name. */
+export function ensureRiskLabel(slug, level) {
+    const name = `risk:${level}`;
+    sh('gh', ['label', 'create', name, '-R', slug, '-c', RISK_COLORS[level], '-d', 'Risk class, set from the changed paths (imps/STANDARD.md)', '--force']);
+    return name;
+}
+
+/** Put exactly one `risk:*` label on a PR. */
+export function applyRiskLabel(url, slug, level) {
+    // Add before removing: if the add fails, the old label stays rather than leaving none.
+    const added = sh('gh', ['pr', 'edit', url, '--add-label', ensureRiskLabel(slug, level)]);
+    if (added.code) return added;
+    for (const other of Object.keys(RISK_COLORS).filter((l) => l !== level))
+        sh('gh', ['pr', 'edit', url, '--remove-label', `risk:${other}`]);
+    return added;
+}
+
 export const sh = (bin, args, opts = {}) => {
     const start = Date.now();
     const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, ...opts });
@@ -109,6 +224,32 @@ export const sh = (bin, args, opts = {}) => {
     return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 };
 export const git = (wt, ...args) => sh('git', ['-C', wt, ...args]);
+
+export const RUNNER_COMMIT_TRAILER = 'Co-Authored-By: 9router imp <noreply@anthropic.com>';
+
+/**
+ * Commit an imp's uncommitted work for it, deterministically (#256). Models that stop with edits in the
+ * tree (Nemotron: commit-recovery-failed, vigil#437) lose the run even when the work is right, and a
+ * second model prompt to commit is as fallible as the first. Stages exactly the changed paths inside the
+ * brief's `allow:` list that the gate would not deny anyway, and makes one commit with the imp trailer.
+ * Returns { pass, reason, paths }; pass only when the tree is clean afterwards (any leftover change, such as
+ * an allowed-but-denied lockfile edit, fails it so the model recovery path still runs).
+ */
+export function autoCommitScoped(wt, allow = [], issue = '') {
+    const status = spawnSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', windowsHide: true });
+    if (status.status !== 0) return { pass: false, reason: 'git status failed', paths: [] };
+    const paths = inScopeChanged(String(status.stdout || '').trimEnd(), allow).filter((p) => !isDeniedPath(p));
+    if (!paths.length) return { pass: false, reason: 'no in-scope changed path to commit', paths };
+    for (const p of paths) {
+        if (git(wt, 'add', '--', p).code) return { pass: false, reason: 'git add failed', paths };
+    }
+    const subject = `imp: work for #${issue} (runner commit)`;
+    const c = git(wt, 'commit', '-q', '-m', [subject, '', RUNNER_COMMIT_TRAILER].join(String.fromCharCode(10)));
+    if (c.code) return { pass: false, reason: 'git commit failed', paths };
+    const after = spawnSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true });
+    if (String(after.stdout || '').trim()) return { pass: false, reason: 'worktree not clean after the runner commit', paths };
+    return { pass: true, reason: null, paths };
+}
 
 // Everything prGuard needs about one issue: its state, every imp/<n>-* PR, and
 // merged PRs whose body closes it. Throws when a lookup fails (fail closed).
@@ -150,28 +291,95 @@ const ALWAYS_DENY = ['PowerShell', 'WebFetch', 'WebSearch', 'Task', 'Skill', 'No
 // and records the limit as metrics.noEditTurns.
 // Context trim: the default CLI session sends ~60 slash commands, skills and every
 // built-in tool each turn; workers only need `tools`. IMPS_NO_TRIM=1 turns the trim off.
-export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits' }) {
-    const args = ['-p', prompt, '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
+//
+// Where the CLI lives. IMPS_CLAUDE_BIN wins; on Windows the npm global .exe (not the
+// .cmd shim); elsewhere `claude` on PATH. A fresh machine with no install used to
+// spawn a missing path and end `killed-timeout` in 4 ms, which read as a gate failure
+// of the issue; now it is `spawn-failed`, an infrastructure error.
+export function claudeBinCandidates(env = process.env, platform = process.platform) {
+    if (env.IMPS_CLAUDE_BIN) return [env.IMPS_CLAUDE_BIN];
+    if (platform !== 'win32') return ['claude'];
+    const pkg = 'node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+    return [env.APPDATA && join(env.APPDATA, 'npm', pkg), env.npm_config_prefix && join(env.npm_config_prefix, pkg)].filter(Boolean);
+}
+export function resolveClaudeBin(env = process.env, platform = process.platform, exists = existsSync) {
+    if (platform !== 'win32' && !env.IMPS_CLAUDE_BIN) return 'claude';
+    return claudeBinCandidates(env, platform).find((p) => exists(p)) || null;
+}
+// The shell for a brief's `test:` / `lint:` commands. Briefs are written POSIX-style
+// (`sh -c '...&&...'`); node's `shell: true` is cmd.exe on Windows, which does not group
+// single quotes, so the command split and the container's sh died with exit 2 before
+// the imp's code was ever tested. Use Git Bash (IMPS_SHELL overrides). The WSL
+// bash.exe in System32 is not it. `true` (the platform default) elsewhere.
+export function gateShell(env = process.env, platform = process.platform, exists = existsSync) {
+    if (env.IMPS_SHELL) return env.IMPS_SHELL;
+    if (platform !== 'win32') return true;
+    const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs')].filter(Boolean);
+    return roots.map((r) => join(r, 'Git', 'bin', 'bash.exe')).find((p) => exists(p)) || true;
+}
+function spawnFailed(t0) {
+    const metrics = summarizeRun([], { startedAt: t0, endedAt: Date.now() });
+    metrics.end = 'spawn-failed';
+    metrics.toolTurns = 0;
+    return metrics;
+}
+// env: optional environment for the child. Default is cleanEnv() (9router, no tokens). Callers that pass their own env
+// own its contents (it must still carry no GitHub tokens).
+export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes, budget, maxTurns = 40, noEditByTurn = 0, transcript, permissionMode = 'acceptEdits', env = null }) {
+    const guardEnabled = process.env.IMPS_REPEAT_FAILURE_GUARD === '1';
+    const args = ['-p', '--model', model, '--permission-mode', permissionMode, '--strict-mcp-config',
         '--setting-sources', 'project', '--allowedTools', tools.join(' '),
         '--disallowedTools', [...ALWAYS_DENY, ...deny].join(' '), '--max-budget-usd', String(budget),
         '--output-format', 'stream-json', '--verbose'];
+    if (!guardEnabled) {
+        // Preserve the original CLI argument order: -p, prompt, then options.
+        args.splice(1, 0, prompt);
+    } else {
+        // Streaming mode: prompt via stdin with --input-format stream-json
+        args.push('--input-format', 'stream-json');
+    }
     if (!process.env.IMPS_NO_TRIM) {
         const builtin = [...new Set(tools.map((t) => t.replace(/\(.*$/, '')))];
         args.push('--disable-slash-commands', '--no-session-persistence', '--tools', builtin.join(','));
     }
+    const t0 = Date.now();
     // Spawn the binary itself: a shell (the npm .cmd shim) splits multi-word args.
-    const bin = process.platform === 'win32'
-        ? join(process.env.APPDATA, 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
-        : 'claude';
+    const bin = resolveClaudeBin();
+    if (!bin) {
+        console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
+        return spawnFailed(t0);
+    }
     const out = createWriteStream(transcript);
     const events = [];
-    const t0 = Date.now();
-    const child = spawn(bin, args, { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const stdio = guardEnabled ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'];
+    let child;
+    try {
+        child = spawn(bin, args, { cwd, env: pinnedModelEnv(env || cleanEnv(), model), stdio, windowsHide: true });
+    } catch (e) { // e.g. an env value with a NUL byte throws synchronously: close the transcript, report like a failed spawn
+        console.error(`spawn failed: ${e.message}`);
+        await new Promise((done) => out.end(done));
+        return spawnFailed(t0);
+    }
     let buf = '';
     let toolTurns = 0;
     let capped = false;
     let edited = false;
     let noEdit = false;
+    // Guard state (local to this run). A failed/backpressured stdin write disables
+    // only future guard messages; it never terminates or gates the worker.
+    const guardState = { counts: new Map(), nudged: new Set() };
+    const stdinState = { disabled: false, closed: false };
+    let promptSent = false;
+
+    const writeStdin = (msg) => writeStreamJsonMessage(child.stdin, msg, stdinState);
+
+    const closeStdin = () => {
+        if (stdinState.closed || !child.stdin?.writable) return;
+        stdinState.closed = true;
+        try { child.stdin.end(); } catch { /* ignore */ }
+    };
+    child.stdin?.on('error', () => { stdinState.disabled = true; });
+
     child.stdout.on('data', (d) => {
         buf += d;
         let i;
@@ -194,23 +402,54 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
                     console.log(`  ${noEditByTurn} tool calls with no edit; stopping`);
                     child.kill('SIGTERM');
                 }
-                if (uses.length && ++toolTurns > maxTurns && !capped) {
-                    capped = true;
-                    console.log(`  turn cap ${maxTurns} reached; stopping`);
-                    child.kill('SIGTERM');
+                if (uses.length) {
+                    toolTurns++;
+                    if (maxTurns > 0 && toolTurns > maxTurns && !capped) {
+                        capped = true;
+                        console.log(`  turn cap ${maxTurns} reached; stopping`);
+                        child.kill('SIGTERM');
+                    }
                 }
+            } else if (guardEnabled && ev.type === 'user') {
+                for (const c of ev.message?.content || []) {
+                    if (c.type !== 'tool_result' || !c.is_error) continue;
+                    const kind = errorKind(typeof c.content === 'string' ? c.content : JSON.stringify(c.content));
+                    const nudge = repeatFailureGuard(kind, guardState);
+                    if (nudge) {
+                        // Advisory nudge: send as a user message with only the normalized kind
+                        writeStdin({ type: 'user', message: { role: 'user', content: nudge } });
+                    }
+                }
+            } else if (ev.type === 'result') {
+                // Final result event: close stdin in streaming mode
+                if (guardEnabled) closeStdin();
             }
         }
     });
     child.stderr.on('data', () => {});
     const timer = setTimeout(() => child.kill('SIGTERM'), Number(minutes) * 60_000);
     // `close`, not `exit`: stdout can still hold the final result event at exit.
+    // spawn-failed means the process never started. An `error` after `spawn` (e.g. a failed
+    // kill) must not discard the collected events: `close` still follows and ends the run.
+    let spawnError = false;
+    let started = false;
+    child.once('spawn', () => {
+        started = true;
+        if (guardEnabled && !promptSent) {
+            writeStdin({ type: 'user', message: { role: 'user', content: prompt } });
+            promptSent = true;
+        }
+    });
     const code = await new Promise((done) => {
-        child.once('error', (e) => { console.error(`spawn failed: ${e.message}`); done(null); });
+        child.once('error', (e) => {
+            console.error(`${started ? 'child error' : 'spawn failed'}: ${e.message}`);
+            if (!started) { spawnError = true; done(null); }
+        });
         child.once('close', done);
     });
     clearTimeout(timer);
     await new Promise((done) => out.end(done));
+    if (spawnError) return spawnFailed(t0);
     const metrics = summarizeRun(events, { startedAt: t0, endedAt: Date.now() });
     if (capped) metrics.end = 'killed-max-turns';
     else if (noEdit) metrics.end = 'no-edit-timeout';
@@ -224,16 +463,32 @@ export async function runClaude({ cwd, prompt, model, tools, deny = [], minutes,
 // One plain chat completion through 9router (OpenAI format): no agent loop, no tools, no
 // 30k-token session resent every turn. For read-only work whose whole input fits in one prompt
 // (reviews). Returns the same shape the review path reads from runClaude.
-export async function chat({ prompt, model = 'MAX', maxTokens = 6000, minutes = 6 }) {
+export async function chat({ prompt, model = 'MAX', maxTokens = 6000, minutes = 6, stream = false }) {
     const env = cleanEnv();
     const t0 = Date.now();
     try {
         const res = await fetch(`${env.ANTHROPIC_BASE_URL.replace(/\/$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.ANTHROPIC_API_KEY}` },
-            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream: false }),
+            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream, ...(stream ? { stream_options: { include_usage: true } } : {}) }),
             signal: AbortSignal.timeout(Number(minutes) * 60_000),
         });
+        // Streaming: headers arrive at once, so Node's 300 s headers timeout cannot kill a long completion
+        // (a 60 KB bugbot review took over 5 min and ended "fetch failed", 2026-11-21).
+        if (stream && res.ok && res.body) {
+            let state = {};
+            let rest = '';
+            const decoder = new TextDecoder();
+            for await (const chunk of res.body) ({ state, rest } = foldChatStream(state, rest + decoder.decode(chunk, { stream: true })));
+            ({ state } = foldChatStream(state, `${rest}\n`));
+            const u = state.usage || {};
+            return {
+                end: state.finish === 'length' ? 'length' : 'success',
+                finalText: state.content || '',
+                served: state.model ? [state.model] : [], turns: 1, toolErrors: 0, durationMs: Date.now() - t0,
+                tokens: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cacheRead: u.prompt_tokens_details?.cached_tokens || 0, cacheWrite: 0 },
+            };
+        }
         const body = await res.json().catch(() => ({}));
         if (!res.ok) return { end: `http-${res.status}`, finalText: '', served: [], turns: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, durationMs: Date.now() - t0, toolErrors: 0 };
         const u = body.usage || {};
@@ -258,12 +513,19 @@ export function loadBrief(path, wt) {
     // The gate's scope and size limits go in the prompt too, so the imp knows them.
     const limits = [
         meta.allow && `- You may only change files under: ${meta.allow}. Anything else fails the gate.`,
-        `- The whole diff must stay under ${meta.maxLines || DEFAULTS.maxLines} changed lines.`,
+        `- Non-test changes must stay under ${effectiveMaxLines(meta.maxLines)} changed lines; test files (\`tests/\`, \`*.test.*\`, \`*.spec.*\`) under ${effectiveMaxTestLines(meta.maxTestLines, meta.maxLines)}.`,
         (meta.test || meta.lint) && `- Run the tests and lint with exactly \`${RUNTEST}\` (no arguments, one command on its own). It runs this brief's test and lint commands for you. Never run the brief's docker/npm/npx commands yourself; they're denied.`,
     ].filter(Boolean).join('\n');
     // Vault playbook (IMPS_VAULT_PROMPT) is for humans / RSI logging — never
     // injected into the worker prompt (token cost). See resolveVaultPrompt().
-    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n---\n\n${body}`);
+    // Per-repo memory (memory.mjs): this machine's recent failures in the repo,
+    // the kit's curated lessons for it, and a digest of the repo's agent docs.
+    // Never fatal: a broken ledger line or unreadable doc just drops the section.
+    let memory = '';
+    try {
+        memory = memorySection({ rows: rows(), repo: briefRepoName(meta.repo), kitDir: HERE, wt });
+    } catch { memory = ''; }
+    const prompt = fill(`${preamble}\n\n## Gate limits for this run\n${limits}\n\n${memory ? `${memory}\n\n` : ''}---\n\n${body}`);
     const hash = createHash('sha1').update(prompt.replaceAll(wt.replaceAll('\\', '/'), '{wt}')).digest('hex');
     return { meta: Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, fill(v)])), prompt, hash };
 }
@@ -284,7 +546,7 @@ export const RUNTEST = `node ${join(HERE, 'runtest.mjs').split('\\').join('/')}`
 // (b) dirty-tree'd the checkout so update.ps1/setup.ps1 refused to run at all
 // (#59). One counter per machine also matches what it measures — this
 // machine's spend — and a per-machine home is what a second machine gets.
-export const MODEL_POOL = { prefer: ['openrouter/free'], fallback: ['MAX'] };
+export const MODEL_POOL = { prefer: [], fallback: ['MAX'] };
 const QUOTA = join(HOME, 'model_quota.json');
 
 // Counters refill on a rolling window. Without one, a counter that can finally

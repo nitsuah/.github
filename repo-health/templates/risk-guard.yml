@@ -1,0 +1,32 @@
+# Copy to .github/workflows/risk-guard.yml and replace REPLACE_WITH_KIT_SHA
+# with the full commit SHA of the merged nitsuah/.github kit.
+#
+# The trusted Actions guard runs for every adopter. The stronger App-backed check
+# is opt-in: configure RISK_GUARD_APP_CLIENT_ID and RISK_GUARD_APP_PRIVATE_KEY
+# before enabling it and requiring its check-run identity in branch protection.
+name: Risk guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    name: Trusted guard
+    uses: nitsuah/.github/.github/workflows/risk-guard.yml@REPLACE_WITH_KIT_SHA
+    permissions:
+      contents: read
+      pull-requests: read
+
+  app:
+    name: App-backed guard (opt-in)
+    if: vars.RISK_GUARD_APP_CLIENT_ID != ''
+    uses: nitsuah/.github/.github/workflows/risk-guard-app.yml@REPLACE_WITH_KIT_SHA
+    with:
+      app_client_id: ${{ vars.RISK_GUARD_APP_CLIENT_ID }}
+    secrets:
+      RISK_GUARD_APP_PRIVATE_KEY: ${{ secrets.RISK_GUARD_APP_PRIVATE_KEY }}

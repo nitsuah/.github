@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+// Lint a brief before it is posted as an issue comment, the way the dispatcher will read it.
+//   node brieflint.mjs <brief.md ...> [--code-dir ~/code]
+// Exits 1 on any problem. Warnings (new files, size advice) do not fail the run.
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { BRIEF_MARK, briefFromComments, parseBrief, parseDepends, isDeniedPath, dockerGitProblem, briefProblem } from './lib.mjs';
+
+// A brief that spells out N lines of code leads to a diff of about 2.5x that once the tests and
+// wiring are written (vigil#359: 56 inline lines, 136-line diff; fire#335: 107 lines, 160-line diff).
+export const SIZE_FACTOR = 2.5;
+
+/**
+ * Accept the standalone brief file or the marker-first comment as posted to GitHub.
+ * Match the documented optional outer fence, but reject nested or malformed
+ * fences before a truncated brief can pass preflight.
+ */
+export function extractBriefInput(text) {
+    const input = String(text);
+    const trimmed = input.trimStart();
+    if (!trimmed.startsWith(BRIEF_MARK)) return { brief: input, error: null };
+
+    const commentBody = trimmed.slice(BRIEF_MARK.length).replace(/\r\n/g, '\n');
+    // A short prose intro may sit before the outer fence, as groom-promote posts it
+    // ("Groomed brief, auto-promoted …"); briefFromComments takes the fenced block too.
+    // An intro that already holds front matter is a raw brief with an inner fence.
+    const opening = commentBody.match(/^(?:\s*|[\s\S]*?\n)```(?:markdown|md)?\n/);
+    const intro = opening ? opening[0].slice(0, opening[0].lastIndexOf('```')) : '';
+    if (opening && !/^---\s*$/m.test(intro)) {
+        const closingIndex = commentBody.lastIndexOf('\n```');
+        if (closingIndex < opening[0].length) return { brief: '', error: 'unclosed outer fence' };
+        const inner = commentBody.slice(opening[0].length, closingIndex);
+        const trailing = commentBody.slice(closingIndex + 4).trim();
+        if (trailing) return { brief: '', error: 'content after outer fence' };
+        if (/```/.test(inner)) {
+            return { brief: '', error: 'nested triple fence inside outer marker-first fence; use ~~~ for inner code' };
+        }
+        return { brief: inner.trim() + '\n', error: null };
+    }
+    if (/^\s*```/.test(commentBody)) return { brief: '', error: 'unsupported or unclosed outer fence' };
+    if (/```/.test(commentBody)) {
+        return { brief: '', error: 'raw marker-first brief contains a triple fence; use ~~~ for inner code or wrap the whole brief' };
+    }
+    return { brief: commentBody.trim() + '\n', error: null };
+}
+
+export function codeLines(body) {
+    let inside = false;
+    let n = 0;
+    for (const line of body.split(/\r?\n/)) {
+        if (/^~~~/.test(line)) inside = !inside;
+        else if (inside) n++;
+    }
+    return n;
+}
+
+/** @param exists (path) => boolean, whether the path is on origin/main (omit to skip path checks) */
+export function lintBrief(text, { exists } = {}) {
+    const problems = [];
+    const warnings = [];
+    const extracted = extractBriefInput(text);
+    if (extracted.error) return { meta: {}, problems: [extracted.error], warnings: [] };
+    const { meta, body } = parseBrief(extracted.brief);
+    for (const k of ['repo', 'issue', 'test', 'maxLines', 'allow']) if (!meta[k]) problems.push(`missing front matter: ${k}`);
+    for (const k of ['allow', 'maxLines', 'repo', 'issue']) if (/\s#\s/.test(meta[k] || '')) problems.push(`trailing # comment in ${k}`);
+    const dockerGit = dockerGitProblem(meta);
+    if (dockerGit) problems.push(dockerGit);
+    // The dispatcher's own structural check (no test, bad mode, no named file): fail here, before an attempt is spent.
+    const structural = meta.test ? briefProblem(extracted.brief) : null;
+    if (structural) problems.push(structural);
+    const max = Number(meta.maxLines);
+    if (meta.maxLines && !(max >= 20)) problems.push(`maxLines ${meta.maxLines} is not a number >= 20`);
+    if (/^```/m.test(body)) problems.push('nested ``` fence in the body (use ~~~)');
+    const posted = briefFromComments([{ author: { login: 'nitsuah' }, body: `${BRIEF_MARK}\n\`\`\`markdown\n${extracted.brief.trim()}\n\`\`\`` }]);
+    if (!posted || parseBrief(posted).body.trim() !== body.trim()) problems.push('briefFromComments does not return the whole brief');
+    if (!meta.depends && /depends on|has not merged|not merged yet|must be merged|after #\d+ (?:is )?merged|child \d of \d/i.test(body)) {
+        warnings.push('the body mentions a dependency but the front matter has no `depends:` line (e.g. `depends: #318`); without it the dispatcher can run this issue before its dependency has merged');
+    }
+    // The gate matches `allow` with startsWith on repo-relative paths and always denies some paths (friction #29: a brief that
+    // named .env.example could never pass). Catch both before an attempt is spent.
+    for (const p of (meta.allow || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+        if (/^\.\/|^\/|^[A-Za-z]:|\\/.test(p)) problems.push(`allow entry must be a repo-relative POSIX prefix without ./, a leading / or backslashes: ${p}`);
+        else if (/[*?{}[\]]/.test(p)) problems.push(`allow entry is a glob but the gate matches plain path prefixes (use a directory prefix or exact file): ${p}`);
+        else if (isDeniedPath(p)) problems.push(`allow entry is always denied by the gate (.github/, .env*, secrets/, lockfiles, CODEOWNERS, imps/defaults.mjs): ${p}`);
+    }
+    if (meta.depends && !/^(none|n\/a|-)\s*(;|$)/i.test(meta.depends.trim()) && !parseDepends(meta.depends, meta.repo || '').length) problems.push(`depends: has no parseable reference (start with #N or repo#N, no quotes; notes go after a ;): ${meta.depends}`);
+    const code = codeLines(body);
+    if (max >= 20 && code * SIZE_FACTOR > max) warnings.push(`${code} inline code lines but maxLines ${max}; expect a diff near ${Math.round(code * SIZE_FACTOR)}. Suggest maxLines: ${Math.ceil((code * SIZE_FACTOR) / 10) * 10}, or split the issue`);
+    if (exists) {
+        for (const p of (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean)) if (!exists(p)) warnings.push(`allow path not on origin/main (new file?): ${p}`);
+        for (const m of (meta.test || '').matchAll(/--config\s+(\S+)/g)) if (!exists(m[1])) problems.push(`test config not on origin/main: ${m[1]}`);
+    }
+    return { meta, problems, warnings };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const args = process.argv.slice(2);
+    const i = args.indexOf('--code-dir');
+    const codeDir = i >= 0 ? args.splice(i, 2)[1] : join(homedir(), 'code');
+    let bad = 0;
+    for (const file of args) {
+        const text = readFileSync(file, 'utf8');
+        const repo = parseBrief(text).meta.repo;
+        const exists = repo ? (p) => spawnSync('git', ['-C', join(codeDir, repo), 'cat-file', '-e', `origin/main:${p.replace(/\/$/, '')}`]).status === 0 : undefined;
+        const r = lintBrief(text, { exists });
+        console.log(`${r.problems.length ? 'FAIL' : 'ok  '} ${file}`);
+        for (const p of r.problems) console.log(`  - ${p}`);
+        for (const w of r.warnings) console.log(`  ! ${w}`);
+        bad += r.problems.length;
+    }
+    process.exit(bad ? 1 : 0);
+}

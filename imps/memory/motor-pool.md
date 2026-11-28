@@ -1,0 +1,6 @@
+- **Tests never run at gate** (motor-pool#149, #150, #168): imp edited files but didn't execute `node .github/imps/runtest.mjs`. Rule 4/10: always run RUNTEST before committing; read full output.
+- **Lint failed at gate** (motor-pool#150, #168): RUNTEST runs lint too; clear every lint error before committing.
+- **Missing paths on tool calls** (4 recent calls): use repo-relative forward-slash paths; Glob before Read when unsure.
+- **Edits left uncommitted** (multiple runs): imp made changes but never `git add` + `git commit`. Rule 5: always commit after RUNTEST passes.
+- **Commands denied** (7 recent): chained ops (`a && b`, pipes) or non-allowlist tools. One allowed command per Bash call; tests only through RUNTEST.
+- **Turn cap / idle** (2 runs): hit 20+ tool calls without edits. Open the target file first, make the edit within first few turns.

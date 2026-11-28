@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Repeatable tables: open work per repo, and what each imp run cost in tokens.
-//   node stats.mjs [--repos] [--tokens] [--since 24h|7d|all] [--owner nitsuah] [--json]
+//   node stats.mjs [--repos] [--tokens] [--kits] [--since 24h|7d|all] [--owner nitsuah] [--json]
 // With neither --repos nor --tokens it prints both. Token numbers come from the
 // ledger (~/.imps/runs.jsonl); runs killed before a result event have no usage, so
 // their cost is ESTIMATED as tool calls x the median input per turn (marked `~`).
@@ -8,18 +8,19 @@ import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { rows } from './runner.mjs';
-import { repoTable, tokenTable } from './lib.mjs';
+import { repoTable, tokenTable, kitTable } from './lib.mjs';
 
 const { values: o } = parseArgs({
     options: {
         repos: { type: 'boolean', default: false },
         tokens: { type: 'boolean', default: false },
+        kits: { type: 'boolean', default: false },
         since: { type: 'string', default: 'all' },
         owner: { type: 'string', default: 'nitsuah' },
         json: { type: 'boolean', default: false },
     },
 });
-const both = !o.repos && !o.tokens;
+const both = !o.repos && !o.tokens && !o.kits;
 const out = {};
 
 const gh = (args) => {
@@ -42,9 +43,15 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
         if (ms === undefined) throw new Error('--since must be 24h, 7d or all');
         out.tokens = tokenTable(rows(), { sinceMs: ms });
     }
+    if (o.kits) {
+        const ms = { all: 0, '24h': 864e5, '7d': 7 * 864e5 }[o.since];
+        if (ms === undefined) throw new Error('--since must be 24h, 7d or all');
+        out.kits = kitTable(rows(), { sinceMs: ms });
+    }
     if (o.json) console.log(JSON.stringify(out, null, 2));
     else {
         if (out.repos) console.log(md(['Repo', 'Issues', 'Bugs', 'PRs', 'Imp PRs', 'imp:ready', 'imp:failed'], out.repos.map((r) => [r.repo, r.issues, r.bugs, r.prs, r.impPrs, r.ready, r.failed])) + '\n');
+        if (out.kits) console.log(md(['Kit', 'Since', 'Runs', 'Gated', 'Pass', 'PRs', 'Top gate failures', 'New', 'Gone'], out.kits.map((r) => [r.kit, r.first.slice(0, 16), r.runs, r.gated, r.pass, r.pr, r.top.join('; ') || '-', (r.newReasons || []).join('; ') || '-', (r.gone || []).join('; ') || '-'])) + '\n');
         if (out.tokens) {
             const t = out.tokens;
             console.log(md(['Run', 'Issue', 'Turns', 'Input', 'In/turn', 'Min', '1st edit', 'Ctx tools', 'End', 'Gate'],

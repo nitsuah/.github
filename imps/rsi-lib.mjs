@@ -27,6 +27,27 @@ export function rsiEnabled(config = {}, env = {}) {
     return true;
 }
 
+/**
+ * Whether the dispatcher should run the RSI pass at the end of this cycle:
+ * always with --rsi or IMPS_RSI=1, never with IMPS_RSI=0, and otherwise once a
+ * UTC day when config.json says `"rsi": true` (no `rsi` event yet today in the
+ * dispatch log lines given).
+ */
+export function rsiDue({ flag = false, env = {}, config = {}, dispatchLines = [], now = Date.now() } = {}) {
+    if (env.IMPS_RSI === '0' || env.IMPS_RSI === 'false') return false;
+    if (flag || env.IMPS_RSI === '1') return true;
+    if (config.rsi !== true) return false;
+    const today = new Date(now).toISOString().slice(0, 10);
+    for (const line of dispatchLines) {
+        if (!line.includes('"event":"rsi"')) continue;
+        try {
+            const e = JSON.parse(line);
+            if (e.event === 'rsi' && String(e.at || '').startsWith(today)) return false;
+        } catch { /* a cut line */ }
+    }
+    return true;
+}
+
 /** Normalize a gate reason into a recurrence key. */
 export function gateSignature(reason = '') {
     return String(reason)
@@ -35,6 +56,92 @@ export function gateSignature(reason = '') {
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 120);
+}
+
+/** Internal model state for the fallback policy. */
+const modelState = new Map();
+let passSequence = 0;
+
+/**
+ * Record a gate result for a model.
+ * @param {string} model - Model identifier (e.g., "nemotron", "recursive/flint")
+ * @param {boolean} passed - Whether the gate passed
+ */
+export function recordModelGateResult(model, passed) {
+    if (!model) return;
+    const state = modelState.get(model) || { streak: 0, benched: false, lastPassedAt: null, passSeq: 0 };
+    if (passed) {
+        state.streak = 0;
+        state.benched = false;
+        state.lastPassedAt = Date.now();
+        passSequence += 1;
+        state.passSeq = passSequence;
+    } else {
+        state.streak += 1;
+        if (state.streak >= 3) {
+            state.benched = true;
+        }
+    }
+    modelState.set(model, state);
+}
+
+/**
+ * Select a model from the given list, skipping benched models and
+ * falling back to the most recent last-known-good model.
+ * The served model may be retried with 0-2 failures without a recorded pass.
+ * Fallback candidates must have a recorded gate pass.
+ * Among models with passes, the most recent pass (highest passSeq) wins.
+ * @param {string[]} models - Ordered list of candidate models (preferred first)
+ * @param {string} [servedModel] - Currently served model (allowed 0-2 failures without pass)
+ * @returns {string|null} Selected model or null if none available
+ */
+export function selectModel(models = [], servedModel = null) {
+    // First pass: served model - used unless benched (a fresh model with no record is allowed)
+    if (servedModel && models.includes(servedModel)) {
+        const state = modelState.get(servedModel);
+        if (!state || !state.benched) {
+            return servedModel;
+        }
+    }
+    // Second pass: among preferred models with passes, pick the most recent pass
+    let bestPreferred = null;
+    let bestTime = -1;
+    let bestSeq = -1;
+    for (const model of models) {
+        if (model === servedModel) continue;
+        const state = modelState.get(model);
+        if (state && !state.benched && state.lastPassedAt) {
+            if (state.lastPassedAt > bestTime ||
+                (state.lastPassedAt === bestTime && state.passSeq > bestSeq)) {
+                bestPreferred = model;
+                bestTime = state.lastPassedAt;
+                bestSeq = state.passSeq;
+            }
+        }
+    }
+    if (bestPreferred) return bestPreferred;
+    // Third pass: fallback to last-known-good across all models, using passSeq for tiebreaking
+    let lastGood = null;
+    let lastGoodTime = -1;
+    let lastGoodSeq = -1;
+    for (const [model, state] of modelState) {
+        if (!state.benched && state.lastPassedAt) {
+            if (state.lastPassedAt > lastGoodTime ||
+                (state.lastPassedAt === lastGoodTime && state.passSeq > lastGoodSeq)) {
+                lastGood = model;
+                lastGoodTime = state.lastPassedAt;
+                lastGoodSeq = state.passSeq;
+            }
+        }
+    }
+    return lastGood;
+}
+
+/**
+ * Reset all model state (for testing).
+ */
+export function resetModelState() {
+    modelState.clear();
 }
 
 /** Extract a brief `test:` line from an issue body, or null. */
@@ -65,6 +172,7 @@ export function proposeRsiIssues({
     minRecurrence = DEFAULTS.rsiMinRecurrence,
     dailyCap = DEFAULTS.rsiDailyIssueCap,
     testsByRepo = {},
+    struggling = [],
 } = {}) {
     const openTitles = new Set(openRsi.map((i) => i.title));
     const used = new Set(filedKeys);
@@ -125,6 +233,46 @@ export function proposeRsiIssues({
             body: `Recurring gate failure \`${sig}\` appeared **${v.count}** times.\n\nSamples: ${v.samples.join(', ')}.`,
             brief,
             kind: 'gate',
+        });
+    }
+
+    // ── 1b. Repos where imps keep failing → curated per-repo memory ────────
+    // `struggling` comes from memory.mjs strugglingRepos(): repo, stats and the
+    // ledger notes. The brief asks an imp to turn them into imps/memory/<repo>.md,
+    // which every later imp prompt for that repo includes (runner.loadBrief).
+    for (const st of struggling) {
+        const key = `struggle:${st.repo}:${st.week}`;
+        // Stable title: the open-issue dedupe matches on it, so counts stay in the body.
+        const title = `imps RSI: imps keep failing in ${st.repo}`;
+        const brief = [
+            '---',
+            `repo: ${targetKit}`,
+            'issue: (set after create)',
+            'maxLines: 60',
+            `allow: imps/memory/${st.repo}.md`,
+            `test: ${KIT_TEST}`,
+            '---',
+            `## Imps keep failing in ${st.repo}`,
+            '',
+            `Last ${st.runs} runs: ${st.merged} merged, ${st.passed}/${st.gated} passed the gate. Samples: ${st.samples.join(', ')}.`,
+            '',
+            'What the ledger says:',
+            ...st.notes.map((n) => `- ${n}`),
+            '',
+            '### The fix',
+            `Create or update \`imps/memory/${st.repo}.md\`: 3 to 6 bullet lines, each naming one trap specific to this repo (a file layout, a test quirk, a command that fails, a convention imps keep breaking) and the rule that avoids it. Use the notes above and the sample issues' gate reasons; do not restate the general PREAMBLE rules.`,
+            '',
+            '### Done when',
+            `- \`imps/memory/${st.repo}.md\` exists with 3 to 6 repo-specific lessons.`,
+            `- \`${KIT_TEST}\` still passes.`,
+        ].join('\n');
+        take({
+            key,
+            title,
+            repo: targetKit,
+            body: `Imps merged ${st.merged} of the last ${st.runs} runs in ${st.repo}.\n\n${st.notes.map((n) => `- ${n}`).join('\n')}`,
+            brief,
+            kind: 'struggle',
         });
     }
 

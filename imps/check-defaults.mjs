@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fail if STANDARD.md / CLI headers disagree with defaults.mjs.
+// Fail if STANDARD.md / README / CLI headers disagree with defaults.mjs.
 //   node imps/check-defaults.mjs
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -8,6 +8,7 @@ import { DEFAULTS } from './defaults.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const std = readFileSync(join(HERE, 'STANDARD.md'), 'utf8');
+const readme = readFileSync(join(HERE, 'README.md'), 'utf8');
 const dispatch = readFileSync(join(HERE, 'dispatch.mjs'), 'utf8');
 const errors = [];
 
@@ -18,10 +19,16 @@ const need = [
     [`daily-cap ${DEFAULTS.dailyCap}`, new RegExp(`${DEFAULTS.dailyCap}[^\\n]*--daily-cap|--daily-cap[^\\n]*${DEFAULTS.dailyCap}`, 'i')],
     [`maxLines default ${DEFAULTS.maxLines}`, new RegExp(`maxLines[^\\n]*default[^\\n]*${DEFAULTS.maxLines}|default[^\\n]*${DEFAULTS.maxLines}[^\\n]*maxLines`, 'i')],
     [`autoMergeTrust ${DEFAULTS.autoMergeTrust}`, new RegExp(`(earned.?trust|autoMergeTrust)[^\\n]*${DEFAULTS.autoMergeTrust}|${DEFAULTS.autoMergeTrust}[^\\n]*(clean merged|autoMergeTrust|earned)`, 'i')],
+    ['maxTurns ' + DEFAULTS.maxTurns, new RegExp('Turn cap per model run[^\\n]*imp ' + DEFAULTS.maxTurns)],
+    ['repo cooldown ' + (DEFAULTS.cooldownMs / 3600000) + ' h', new RegExp('Repo cooldown[^\\n]*' + (DEFAULTS.cooldownMs / 3600000) + ' h[^\\n]*defaults\\.cooldownMs')],
+    ['noEditTurns ' + DEFAULTS.noEditTurns, new RegExp('No-edit fail-fast[^\\n]*' + DEFAULTS.noEditTurns + ' tool calls')],
 ];
 
 for (const [label, re] of need) {
     if (!re.test(std)) errors.push(`STANDARD.md missing/outdated: ${label}`);
+}
+if (!readme.includes(`maxLines fallback **${DEFAULTS.maxLines}**`)) {
+    errors.push(`README.md missing/outdated: maxLines fallback ${DEFAULTS.maxLines}`);
 }
 
 // dispatch header comment should match DEFAULTS

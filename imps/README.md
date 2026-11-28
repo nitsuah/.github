@@ -23,6 +23,7 @@ That:
 5. Writes `hourly.cmd` + `label-watch.cmd` and registers `imps-dispatch` (hourly :07, plus 2 min after logon) and `imps-label-watch` (every 5 min).
 
 Kill switches: `-SkipLabelWatch` / `IMPS_LABEL_WATCH=0` / config `"labelWatch": false`. `-SkipTask` installs the kit only.
+The **groomer** is opt-in: setup registers `imps-groom` only with `-WithGroomer`. It drafts briefs every 3 hours and promotes only the ones that pass its safety checks (see [Groomer (opt-in)](#groomer-opt-in)).
 
 ```powershell
 pwsh -File $env:LOCALAPPDATA\imps-runner\imps\doctor.ps1   # health check (incl. topology)
@@ -62,6 +63,12 @@ Task Scheduler tasks only see new user variables after you **sign out and back i
 
 macOS / Linux: `export NINEROUTER_KEY=...` (and optionally `NINEROUTER_URL`) in `~/.profile` (login shells; cron does not read it, so prefix the crontab line or use `environment.d`), or for systemd user timers put `NINEROUTER_KEY=...` in `~/.config/environment.d/imps.conf` and re-login. Keep that file `chmod 600`. `setup.sh` reports where it found the URL and key.
 
+### Served-model identity guard
+
+The router answers with the model that actually served a request. Set the family you expect (`~/.imps/config.json` `"expectedModelFamilies": ["nemotron"]`, or `IMPS_EXPECT_MODEL_FAMILY=nemotron`) and `imp.mjs run` makes one minimal probe (`max_tokens: 1`) before it reserves quota or creates a worktree. The served id is read from the response body `model` field, else an `x-served-model` / `x-model` header (both accepted until the real 9router field is confirmed with one local `curl`). If the served model is a different family (for example `glm-4.7-flash` for a Nemotron expectation) the run stops with `served model mismatch`, and dispatch puts the issue back on `imp:ready` without consuming an attempt. A router that is unreachable or returns no model id is reported, not treated as a mismatch. With no expectation configured nothing is probed. Logic and fixtures: `served-model.mjs` / `served-model.test.mjs`.
+
+With expected families set, a run no longer asks the router for a combo such as `MAX` (a combo can fall through to a free auto-router that serves anything). It asks for the first concrete id in `pinnedModels` (`defaults.mjs`, or `~/.imps/config.json` `"pinnedModels"`) whose family is expected, and Claude Code's background model names are pinned to the same id. A model with three straight failed gates in 6 hours is benched in favour of the last known good one. `"pinModels": false` goes back to the combo. A failed run with more than 10 tool errors is retried once, in the same claim, on another pinned model that has passed a gate; with none, there is no retry. Logic: `model-pin.mjs`.
+
 ## What lives where
 
 | Path | What | Reset by updates? |
@@ -89,6 +96,10 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
                                          │
                                     earned trust + every check green? → squash merge
                                          else leave open
+                                         │
+                                    demonguard (lingering imp PRs) → bugbot (any PR CodeRabbit
+                                    can't review: inline threads + `bugbot` status; lifts CodeRabbit's
+                                    stale block only after its own review passed)
 ```
 
 | Signal | Behaviour |
@@ -103,7 +114,7 @@ hourly (:07) + label-watch (*/5) ──► dispatch.lock? ──► 9router MAX 
 | `no-brief` | an `imp:ready` issue with no brief gets one explanatory comment (not repeated) |
 | Label watch (default on) | Extra 5‑min tick for new `imp:ready`; lock still prevents overlap |
 
-Defaults (from `defaults.mjs`): per-repo **4**, concurrency **4**, wip **8**, daily **15**, maxLines fallback **80**, auto-merge trust **3** clean merges.
+Defaults (from `defaults.mjs`): per-repo **6**, concurrency **6**, wip **12**, daily **60**, maxLines fallback **180**, auto-merge trust **3** clean merges.
 
 ## Ledger outcomes
 
@@ -134,6 +145,26 @@ node imps/rsi.mjs --dry-run
 
 `rsi.mjs` turns recurring gate failures, fix-loop `needs-human` spikes, and open `bot:journey` / `bot:review` issues into capped `imp:ready` issues with briefs (including kit briefs against `.github`). Kill switch: `IMPS_RSI=0` or `~/.imps/config.json` → `"rsi": false`. Still inside the normal gate / path deny / caps.
 
+## Groomer (opt-in)
+
+`groom.mjs` drafts briefs every 3 hours, up to `groomDailyIssueCap` (25) a day, for open issues with no `imp:*` label that a trusted author filed (the owner, plus `groomTrustedAuthors`); no `bug`/`enhancement` label is needed. It skips untrusted, security/audit/design and epic or multi-phase issues before drafting, so they cannot use up the cap (`groom-select.mjs`). The drafting prompt gets the repo file list (one `git/trees` call, images and build output dropped, capped at 400 paths), the files the issue names (up to 4, from the default branch) and the brief checklist, and it copies the test command and style of the repo's newest trusted brief. Each draft then goes through `groom-promote.mjs`, which is fail-closed:
+
+- **Promoted** (posted as a real `<!-- imp-brief -->` with `imp:ready`, so the next dispatch cycle runs it) only when all of these hold: the issue author is the owner or in `groomTrustedAuthors`; no security label; no security term (auth, token, secret, webhook, payment, crypto, session, permission, injection and similar) in the issue or the brief, unless the owner wrote the issue (filing it without a `security` label is the owner's call); brieflint finds no problem; `repo:`/`issue:` match; `maxLines` is within the cap; no `depends:`; the brief names its target file without hedging (no "(or similar …)" / "(or wherever …)"), at least one allow: path outside package.json/CHANGELOG/README/TASKS/ROADMAP and `docs/`/`tests/` is on the default branch, and every `npm` step in the test command runs where there is a package.json. The steps are walked in order, following `cd` (scoped to `( … )` subshells, with `.`/`..` resolved). A subdirectory goes in as `cd <dir> &&` inside `sh -c`, because `-w` must be `/app` for the sandbox shape. Those two existence checks only run when the repo tree is fetched in full; if the `git/trees` call fails or GitHub truncates the tree, only the hedge check runs, so they are a guard, not a guarantee; and every `test:`/`lint:`/`format:` is the sandboxed Docker shape (worktree at `/app`, the repo's own `imp-nm-<repo>` volume, an allowlisted `node`/`python`/`golang`/`rust` image, no other flags or mounts, no `$`, backticks, `%`, `!` or backslashes).
+- **Held** otherwise: posted as an `imp-brief-draft` comment listing every failed check, with `imp:needs-brief`. Copy it as an `<!-- imp-brief -->` and add `imp:ready` to run it.
+
+Because it writes to GitHub, the task is **off by default**:
+
+```powershell
+pwsh -File imps/setup.ps1 -WithGroomer   # registers imps-groom (every 3 h from 06:07)
+$env:IMPS_GROOM = '1'; node imps/groom.mjs --dry-run   # one-off manual run: prints what it would promote or hold
+```
+
+- `groomEnabled()` is true only when `IMPS_GROOM=1`. The scheduled `groom.cmd` sets it itself, so the task is the opt-in.
+- Without `-WithGroomer`, `setup.ps1` does not register the task (and removes a previously registered one).
+- Config (`~/.imps/config.json`): `"groomAutoPromote": false` holds every draft; `"groomTrustedAuthors": [...]` adds issue authors; `"groomRequireQuiet": true` grooms only repos with no open PRs and no commits for `quietHours`; `"groomDailyIssueCap"` overrides the cap. `"groomOwnerKeywordHold": true` holds the owner's issues for security terms too.
+- Kill switches: `IMPS_GROOM=0` / `false` (checked first in the wrapper), `-SkipGroomer` (deprecated; off is the default), or `~/.imps/config.json` `"groom": false`, which wins even when `IMPS_GROOM=1`.
+- `warlock.mjs` reports the task as informational and does not fail when it is absent.
+
 ## Recover a broken runner
 
 ```powershell
@@ -157,10 +188,30 @@ Repos that call the kit through thin wrappers (`scripts/imp-run.ps1`, `.github/i
 
 No change to wrapper *CLI* contract is required if they already resolve `IMPS_KIT_PATH` → `imps/imp.mjs`. See STANDARD.md § Stash.
 
+## Watching a run
+
+Live view of the imps without a second window. `watch.mjs` is read-only (no writes, no network, no spawns) and reads only the tail of `~/.imps/dispatch.jsonl`, `runs.jsonl` and the running imps' transcripts, so it costs the same after a year of history.
+
+**In a Claude Code session (status line).** Add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node \"$(tr -d '\\r\\n' < \"${IMPS_HOME:-$HOME/.imps}/kit-path.txt\")/imps/statusline.mjs\"",
+    "refreshInterval": 5
+  }
+}
+```
+
+`statusline.mjs` shows the imps (health, squares: blue running, red needs you, yellow PR waiting, dim □ queued, then 24 h ▪ green PR / red fail) and, when `security-program/vuln` is present, the vuln pipeline: full rows while it has open PRs, workers or something that needs you, one dim line when idle (`IMPS_VULN_DIR` moves it, `IMPS_VULN=0` hides it). `watch.mjs --statusline` still prints the imps-only rows. Claude Code runs this under Git Bash on Windows, so `%VAR%` does not expand; the command resolves the kit from `kit-path.txt` (setup writes it with CRLF, hence the `tr`). Verified in a real `claude` 2.1.312 session on Windows 11. Rows: cycle state (running + elapsed from `dispatch.lock`, queue, picked, quota used), one lane per running imp (`repo#issue  elapsed  turns  tool errors  last tool`), then the latest dispatch events (PR green, gate-fail/error red, fix-sweep cyan). Anything read from files is sanitized and truncated; Bash shows only its first word.
+
+**In a spare pane (full screen).** `node imps/watch.mjs` redraws at 1 Hz; `q` quits. Flags for both modes: `--once` (one frame, no TTY), `--home <dir>` (default `IMPS_HOME` or `~/.imps`), `--no-color`.
+
 ## Tests
 
 ```bash
 node --test imps/*.test.mjs
-node imps/check-defaults.mjs   # STANDARD.md vs defaults.mjs
+node imps/check-defaults.mjs   # STANDARD.md/README.md vs defaults.mjs
 node imps/warlock.mjs          # this machine's topology (WARLOCK.md)
 ```

@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Bootstrap or repair a detached imps-runner checkout and (on Windows) the
 # hourly Scheduled Task + 5-minute label-watch (on by default). Idempotent:
 # re-running updates the kit without clobbering ~/.imps state (locks, logs,
@@ -8,6 +8,7 @@
 #   pwsh -File imps/setup.ps1 -RunnerPath 'D:\tools\imps-runner'
 #   pwsh -File imps/setup.ps1 -SkipLabelWatch   # hourly only
 #   pwsh -File imps/setup.ps1 -SkipTask         # kit only
+#   pwsh -File imps/setup.ps1 -WithGroomer      # also register the opt-in daily groomer
 #
 # Env overrides: IMPS_RUNNER, IMPS_HOME, IMPS_CODE, IMPS_KIT_REPO, IMPS_LABEL_WATCH=0
 [CmdletBinding()]
@@ -21,12 +22,15 @@ param(
     [switch]$SkipTask,
     [switch]$SkipLabelWatch,
     [switch]$EnableLabelWatch, # deprecated alias: label watch is ON by default
+    [switch]$WithGroomer,      # opt-in: register the daily imps-groom task
+    [switch]$SkipGroomer,      # deprecated: the groomer is off unless -WithGroomer
     [switch]$SkipDoctor
 )
 
 $ErrorActionPreference = 'Stop'
 $TaskName = 'imps-dispatch'
 $WatchName = 'imps-label-watch'
+$GroomName = 'imps-groom'
 $KitFolder = '.github'
 $CodeKitPath = Join-Path $CodePath $KitFolder
 
@@ -34,6 +38,12 @@ $CodeKitPath = Join-Path $CodePath $KitFolder
 $wantLabelWatch = -not $SkipLabelWatch
 if ($env:IMPS_LABEL_WATCH -eq '0' -or $env:IMPS_LABEL_WATCH -eq 'false') { $wantLabelWatch = $false }
 if ($EnableLabelWatch) { $wantLabelWatch = $true }
+
+# Groomer is OFF by default (it posts public draft comments and labels). Register
+# the task only with -WithGroomer; IMPS_GROOM=0/false or -SkipGroomer still vetoes it.
+$wantGroomer = [bool]$WithGroomer
+if ($SkipGroomer) { $wantGroomer = $false }
+if ($env:IMPS_GROOM -eq '0' -or $env:IMPS_GROOM -eq 'false') { $wantGroomer = $false }
 
 function Write-Ok($m) { Write-Host "  ok  $m" -ForegroundColor Green }
 function Write-Bad($m) { Write-Host "  !!  $m" -ForegroundColor Red }
@@ -254,8 +264,10 @@ Write-Ok "preflight: $RunnerPath is a real kit"
 
 # Pointer file for stash wrappers (IMPS_KIT_PATH / .imps/kit-path.txt)
 $env:IMPS_KIT_PATH = $RunnerPath
-$kitPointer = Join-Path $HomePath 'kit-path.txt'
-Set-Content -LiteralPath $kitPointer -Value $RunnerPath -Encoding utf8
+# Resolve to a filesystem path: .NET resolves relative paths against the process directory, not the PowerShell location.
+$kitPointer = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $HomePath 'kit-path.txt'))
+# No BOM: Windows PowerShell 5.1's -Encoding utf8 writes one, and shell readers (git -C "$(cat …)") choke on it.
+[System.IO.File]::WriteAllText($kitPointer, $RunnerPath, [System.Text.UTF8Encoding]::new($false))
 Write-Ok "kit pointer → $kitPointer (stash can copy to <repo>/.imps/kit-path.txt)"
 
 # ── CODE/.github: first-class clone for kit self-work (worktrees only) ────
@@ -367,6 +379,11 @@ node imps\dispatch.mjs %IMPS_DRY_ARGS% >> "%IMPS_HOME%\label-watch.log" 2>&1
     Write-Ok "wrote $watch (5-min label watch; lock prevents overlap)"
 }
 
+# An embedded quote in a native-command argument: pwsh 7.3+ escapes it for the child itself,
+# so a pre-escaped \" would land in the task as a literal backslash-quote (cmd.exe ignores it).
+# Windows PowerShell 5.1 passes the string as written, so it needs the \" spelling.
+$q = if ($PSNativeCommandArgumentPassing -and $PSNativeCommandArgumentPassing -ne 'Legacy') { '"' } else { '\"' }
+
 # ── Scheduled Task ────────────────────────────────────────────────────────
 if (-not $SkipTask) {
     Write-Host "`nscheduled task:" -ForegroundColor Cyan
@@ -380,15 +397,15 @@ if (-not $SkipTask) {
         # Next :07, not today's — a past start would fire the task immediately on every re-run.
         $start = (Get-Date).Date.AddMinutes(7)
         while ($start -le (Get-Date)) { $start = $start.AddHours(1) }
-        $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c \`"{0}\`"" -f $hourly)
+        $hourlyTrigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ("--headless cmd.exe /d /c `"{0}`"" -f $hourly)
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $hourlyTrigger -Force -ErrorAction Stop | Out-Null
         Write-Ok "registered task '$TaskName' (hourly at :07)"
     } catch {
         # Policy or elevation refused the logon trigger: keep the hourly task anyway.
-        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
+        & schtasks /Create /TN $TaskName /SC HOURLY /ST ("{0:HH:mm}" -f (Get-Date).Date.AddMinutes(7)) /TR ("conhost.exe --headless cmd.exe /d /c {1}{0}{1}" -f $hourly, $q) /RL LIMITED /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR ("cmd.exe /d /c \`"{0}\`"" -f $hourly) /RL LIMITED /F 2>$null | Out-Null
+            & schtasks /Create /TN $TaskName /SC HOURLY /MO 1 /ST 00:07 /TR ("cmd.exe /d /c {1}{0}{1}" -f $hourly, $q) /RL LIMITED /F 2>$null | Out-Null
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Bad "no at-logon trigger: $($_.Exception.Message)"
@@ -415,11 +432,46 @@ if (-not $SkipTask) {
 
     & schtasks /Delete /TN $WatchName /F 2>$null | Out-Null
     if ($wantLabelWatch) {
-        & schtasks /Create /TN $WatchName /SC MINUTE /MO 5 /TR "conhost.exe --headless cmd.exe /d /c \`"$watch\`"" /RL LIMITED /F | Out-Null
+        & schtasks /Create /TN $WatchName /SC MINUTE /MO 5 /TR "conhost.exe --headless cmd.exe /d /c $q$watch$q" /RL LIMITED /F | Out-Null
         if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$WatchName' (every 5 min; lock prevents overlap)" }
         else { Write-Bad "could not register '$WatchName'" }
     } else {
         Write-Ok "skipped '$WatchName' (IMPS_LABEL_WATCH=0 / -SkipLabelWatch / labelWatch:false)"
+    }
+
+    # ── Groomer Scheduled Task ───────────────────────────────────────────────
+    & schtasks /Delete /TN $GroomName /F 2>$null | Out-Null
+    if ($wantGroomer) {
+        $groom = Join-Path $HomePath 'groom.cmd'
+        $groomBody = @"
+@echo off
+REM Generated by imps/setup.ps1 from $wrappedFrom — do not put secrets here.
+REM Re-run setup.ps1 after a kit change to this file; warlock.mjs warns on drift.
+setlocal
+REM Registered only by setup.ps1 -WithGroomer. Kill switches: IMPS_GROOM=0/false
+REM (checked before it is set below), or config.json "groom": false.
+if /I "%IMPS_GROOM%"=="0" exit /b 0
+if /I "%IMPS_GROOM%"=="false" exit /b 0
+set IMPS_GROOM=1
+set IMPS_HOME=$HomePath
+set IMPS_CODE=$CodePath
+set IMPS_KIT_PATH=$RunnerPath
+cd /d "$RunnerPath"
+git fetch -q origin $Branch
+if errorlevel 1 exit /b 1
+git reset -q --hard origin/$Branch
+if errorlevel 1 exit /b 1
+node imps\groom.mjs >> "%IMPS_HOME%\groom.log" 2>&1
+"@
+        Set-Content -LiteralPath $groom -Value $groomBody -Encoding ascii
+        Write-Ok "wrote $groom"
+
+        # Every 3 hours from 06:07, so new issues reach imp:ready the same day
+        & schtasks /Create /TN $GroomName /SC HOURLY /MO 3 /ST 06:07 /TR "conhost.exe --headless cmd.exe /d /c $q$groom$q" /RL LIMITED /F | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Ok "registered task '$GroomName' (every 3 h from 06:07)" }
+        else { Write-Bad "could not register '$GroomName'" }
+    } else {
+        Write-Ok "skipped '$GroomName' (opt-in: pass -WithGroomer to register it)"
     }
 }
 

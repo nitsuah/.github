@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // imps: headless `claude -p` workers that take one GitHub issue to one PR.
-// The imp edits and commits in its own worktree; this runner gates the result,
+// The imp edits in its own worktree; if it leaves dirty changes, the gate offers
+// one commit-only recovery prompt before the normal gate. This runner then gates,
 // pushes and opens the PR. Every run lands in a ledger for the RSI loop.
 // Contract: imps/STANDARD.md. Defaults: imps/defaults.mjs.
 //
-//   node imp.mjs run     --brief <brief.md> [--model MAX] [--minutes 25] [--budget 15]
+//   node imp.mjs run     --brief <brief.md> [--model MAX] [--minutes 15] [--budget 15]
 //   node imp.mjs gate    <run-id>          tests in Docker + diff/scope/trailer checks
 //   node imp.mjs pr      <run-id>          gate must have passed; opens an `imp` PR (auto-merge when trusted)
 //   node imp.mjs outcome <run-id>          records merged / closed / open from GitHub
@@ -18,17 +19,24 @@
 // (the ledger), runs/<id>.jsonl (transcripts). Kit code lives in the detached
 // imps-runner checkout (see setup.ps1 / STANDARD.md § Install).
 import { spawnSync } from 'node:child_process';
-import { readFileSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
+import { buildImpPrLabels } from './pr-labels.mjs';
+import { readFileSync, appendFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseBrief, summarizeRun, gate, report, shouldAutoCommit, prGuard, outcomeFromPr } from './lib.mjs';
+import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, targetCheckout, refDirName } from './lib.mjs';
+import { mergedByAgentCommitBody } from './merge-attribution.mjs';
+import { expectedFamilies, mismatchLine, auditServed, auditLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, quotaPool } from './model-pin.mjs';
 import { DEFAULTS } from './defaults.mjs';
-import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady } from './checks.mjs';
-import { HOME, LEDGER, CODE, rows, save, update, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard } from './runner.mjs';
+import { ensureFinalNewlines } from './eol.mjs';
+import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
+import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped, ensureRiskLabel, originUrl } from './runner.mjs';
+import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const COMMIT_RECOVERY_TOOLS = ['Read', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git log:*)'];
 function loadHomeConfig() {
     try {
         const p = join(HOME, 'config.json');
@@ -58,7 +66,7 @@ const { values: o, positionals: pos } = parseArgs({
     options: {
         brief: { type: 'string' },
         model: { type: 'string', default: 'MAX' },
-        minutes: { type: 'string', default: '25' },
+        minutes: { type: 'string', default: String(DEFAULTS.runMinutes) },
         budget: { type: 'string', default: '15' },
         worktree: { type: 'string' },
         slack: { type: 'string', default: '0' },
@@ -69,13 +77,13 @@ const { values: o, positionals: pos } = parseArgs({
 // ── commands ──────────────────────────────────────────────────────────────
 /**
  * Validate brief front‑matter.
- * Ensures required `repo` and `issue` fields exist and that `maxLines` is numeric.
+ * Ensures required `repo` and `issue` fields exist and that optional `maxLines` is finite.
  * Throws on validation errors.
  */
 function validateBrief(meta) {
     if (!meta.repo) throw new Error('Brief must specify repo');
     if (!meta.issue) throw new Error('Brief must specify issue');
-    if (meta.maxLines && isNaN(Number(meta.maxLines))) throw new Error('Brief maxLines must be numeric');
+    validateBriefMaxLines(meta.maxLines);
     // add more checks as needed
 }
 
@@ -87,17 +95,61 @@ async function run() {
         console.error('Docker not available – ensure Docker Desktop is running.');
         process.exit(1);
     }
-    const { meta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const { meta: parsedMeta } = parseBrief(readFileSync(o.brief, 'utf8'));
+    const meta = { ...parsedMeta, repo: briefRepoName(parsedMeta.repo) };
     validateBrief(meta);
+    // `mode: script` briefs never call a model: the brief's test command makes the change (regenerated
+    // screenshots, generated files) and the runner commits what lands inside `allow:`. So none of the
+    // model checks below apply to them.
+    const scripted = String(meta.mode || '').trim() === 'script';
+    // No claude binary means no run can start: say so before reserving quota, so each
+    // hourly retry on such a machine does not spend a reservation. dispatch reads this
+    // line and puts the issue back on imp:ready instead of labelling it failed.
+    if (!scripted && !resolveClaudeBin()) {
+        console.error(`claude binary not found (looked at: ${claudeBinCandidates().join(', ')}). Install Claude Code or set IMPS_CLAUDE_BIN.`);
+        process.exit(1);
+    }
+    // Served-model identity guard (#258) and request pinning (#392): when expected model families are
+    // configured (config.expectedModelFamilies or IMPS_EXPECT_MODEL_FAMILY), a combo such as MAX is
+    // replaced by a pinned concrete id from those families, then probed. A family mismatch stops the
+    // run before any quota, worktree or ledger row, so no attempt is consumed; dispatch sees the
+    // marker line and puts the issue back on imp:ready.
+    const cfg = loadHomeConfig();
+    const expected = expectedFamilies(cfg, process.env);
+    if (!scripted && expected.length) {
+        const router = resolveRouter();
+        const pinning = isComboModel(o.model) && cfg.pinModels !== false;
+        const pinned = pinning
+            ? orderRequestModels(allowedRequestModels({ pinned: cfg.pinnedModels ?? DEFAULTS.pinnedModels, expected }), rows())
+            : [];
+        // Never fall back to the combo while pinning: nothing eligible stops the run.
+        if (pinning && !pinned.length) {
+            console.error(`${MODEL_MISMATCH_MARK}: no pinned model is in expected ${expected.join('/')}; add one to pinnedModels or set "pinModels": false`);
+            process.exit(1);
+        }
+        const probe = await probeCandidates(pinned.length ? pinned : [o.model], { baseUrl: router.baseUrl, key: router.key, expected });
+        if (!probe.ok) {
+            console.error(mismatchLine(probe));
+            process.exit(1);
+        }
+        o.model = probe.model;
+        console.log(`served-model probe: ${probe.verdict} for ${o.model}${probe.served ? ` (${probe.served}, from ${probe.source})` : ''}`);
+    }
     // Pick and reserve before the worktree exists: an exhausted pool must cost nothing.
-    const chosenModel = reserveQuota(MODEL_POOL, o.modelStrategy || 'fallback');
+    const chosenModel = scripted ? 'none (script)' : reserveQuota(quotaPool(o.model, MODEL_POOL), o.modelStrategy || 'fallback');
     if (!chosenModel) {
         console.error(`every model in the pool is out of quota (${join(HOME, 'model_quota.json')}); run stopped`);
         process.exit(1);
     }
-    const id =`imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}`;
-    const repoDir = join(CODE, meta.repo);
-    if (!existsSync(repoDir)) {
+    // The repo is part of the id: main and overflow cycles can start fire#42 and vhs#42 in the same minute,
+    // and every ledger lookup is by id. Readers match `^imp_\d`, which this keeps.
+    const idBase = `imp_${new Date().toISOString().replace(/\D/g, '').slice(2, 12)}_${meta.issue}_${String(meta.repo).replace(/[^\w-]/g, '-')}`;
+    const taken = new Set(rows().map((x) => x.id));
+    let id = idBase;
+    for (let n = 2; taken.has(id); n++) id = `${idBase}_${n}`;
+    const target = targetCheckout(meta.repo, { codeRoot: CODE, exists: existsSync, originOf: originUrl });
+    const repoDir = target.path;
+    if (!target.checkedOut) {
         throw new Error(
             `missing checkout ${repoDir}. Setup clones ${DEFAULTS.kitRepo} into IMPS_CODE/${DEFAULTS.kitFolder}; ` +
             `other repos must live under IMPS_CODE alongside it.`,
@@ -108,10 +160,26 @@ async function run() {
     const fetch = sh('git', ['-C', repoDir, 'fetch', '-q', 'origin']);
     if (fetch.code) throw new Error(`git fetch failed: ${fetch.err}`);
     const base = meta.base || git(repoDir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').out.replace(/^origin\//, '') || 'main';
-    const wt = resolve(CODE, `${meta.repo}-${id}`);
-    const branch = `imp/${meta.issue}-${id.slice(4, 14)}`;
-    const add = git(repoDir, 'worktree', 'add', '-q', wt, '-b', branch, `origin/${base}`);
-    if (add.code) throw new Error(add.err);
+    const wt = resolve(CODE, `${refDirName(meta.repo)}-${id}`);
+    const runSuffix = id.slice(4, 14);
+    const branchExists = (candidate) => {
+        const check = git(repoDir, 'show-ref', '--verify', '--quiet', `refs/heads/${candidate}`);
+        if (check.code === 0) return true;
+        if (check.code === 1) return false;
+        throw new Error(`git show-ref failed: ${check.err}`);
+    };
+    let branch = uniqueImpBranchName(meta.issue, runSuffix, branchExists);
+    let add;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        add = git(repoDir, 'worktree', 'add', '-q', wt, '-b', branch, `origin/${base}`);
+        if (!add.code) break;
+
+        // A concurrent or previous retry can create the ref between the
+        // preflight and worktree add. Never delete/reuse that branch.
+        if (!branchExists(branch)) throw new Error(add.err);
+        branch = uniqueImpBranchName(meta.issue, `${runSuffix}-retry${attempt + 1}`, branchExists);
+    }
+    if (add?.code) throw new Error(add.err);
     const lock = git(wt, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (lock.code) throw new Error(`could not disable push: ${lock.err}`);
     // Worktree-local identity: never inherit a repo's stale user (fire had `openhands`).
@@ -130,34 +198,151 @@ async function run() {
         pid: process.pid,
         startedAt: new Date().toISOString(), transcript: join(HOME, 'runs', `${id}.jsonl`),
     };
-    appendFileSync(LEDGER, JSON.stringify(row) + '\n');
+    appendRow(row);
     console.log(`${id}  ${wt}`);
+
+    if (scripted) return finishRun(id, meta, scriptRun(id, wt, bm));
+    // Base preflight: run the brief's test once on the unchanged base, before any model time. A command
+    // that cannot run at all (bad flag, missing script, broken docker build) fails here in seconds as
+    // `brief-broken` instead of after a full model run (vhs#178, 2026-11-19). An ordinary failing test is
+    // expected on a bug's base and only recorded. Kill switch: IMPS_BASE_PREFLIGHT=0.
+    if (bm.test && process.env.IMPS_BASE_PREFLIGHT !== '0') {
+        const t0 = Date.now();
+        // Bounded: a hanging test would otherwise hold the dispatch cycle with no model clock running.
+        const limitMin = DEFAULTS.preflightMinutes;
+        const p = briefShell(wt, bm.test, limitMin * 60_000);
+        const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
+        const timedOut = p.error?.code === 'ETIMEDOUT';
+        const broken = timedOut
+            ? `the test command did not finish within ${limitMin} min on the unchanged base`
+            : p.error ? `could not start the test command: ${p.error.code || 'spawn error'}` : brokenCommandSignature(p.status, out);
+        // The test may have written files (snapshots, reports): the imp starts from a clean base.
+        git(wt, 'reset', '-q', '--hard');
+        git(wt, 'clean', '-qfd');
+        update(id, { baseTest: { exit: p.status, ms: Date.now() - t0, ...(timedOut ? { timedOut: true } : {}), ...(broken ? { broken } : {}), tail: tailOutput(out, 600) } });
+        console.log(`base preflight: test exit ${p.status} in ${Math.round((Date.now() - t0) / 1000)}s${broken ? ` — broken: ${broken}` : ''}`);
+        if (broken) {
+            return finishRun(id, meta, { end: 'brief-broken', isError: true, turns: 0, toolTurns: 0, toolErrors: 0, tools: {}, served: [], durationMs: Date.now() - t0, finalText: broken });
+        }
+    }
 
     const tools = IMP_TOOLS;
     console.log(`using model ${chosenModel}`);
-    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
-    update(id, { endedAt: new Date().toISOString(), metrics });
-    console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${metrics.served.join(', ')}`);
-    console.log(metrics.finalText);
+    const metrics = await runClaude({ cwd: wt, prompt, model: chosenModel, tools, minutes: o.minutes, budget: o.budget, maxTurns: DEFAULTS.maxTurns || 40, noEditByTurn: resolveNoEditTurns(loadHomeConfig()), transcript: row.transcript });
+    finishRun(id, meta, metrics);
+}
+
+function finishRun(id, meta, metrics) {
+    // Record which models actually served the run and whether they match the expected tier (#256).
+    const servedCheck = auditServed({ served: metrics.served, expected: expectedFamilies(loadHomeConfig(), process.env) });
+    if (!servedCheck.ok) console.error(auditLine(servedCheck));
+    update(id, { endedAt: new Date().toISOString(), metrics, servedCheck });
+    writeTelemetry({ home: HOME, runId: id, repo: meta.repo, event: 'run-end', outcome: runOutcome(metrics), failureSignatures: metrics.errorKinds });
+    console.log(`${id} ended: ${metrics.end} · ${metrics.turns} turns · ${metrics.toolErrors} tool errors · served ${(metrics.served || []).join(', ') || 'none'}`);
+    console.log(metrics.finalText || '');
     console.log(`next: node imp.mjs gate ${id}`);
 }
 
-function runGate(id) {
+const NL = String.fromCharCode(10);
+
+/** Run a brief command in the worktree the same way the gate does. */
+function briefShell(wt, cmd, timeoutMs) {
+    return spawnSync(cmd, { cwd: wt, shell: gateShell(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' }, ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}) });
+}
+
+/**
+ * A `mode: script` run: the brief's test command makes the change, and the
+ * runner commits the changed files inside `allow:` (everything else is
+ * restored or deleted). No model, no quota. The gate then runs as usual, so a
+ * script that changes nothing fails "no commits" and a failing command fails
+ * on its exit code. Returns the run's metrics.
+ */
+function scriptRun(id, wt, bm) {
+    const t0 = Date.now();
+    console.log(`script mode: ${bm.test}`);
+    const limitMin = DEFAULTS.preflightMinutes;
+    const p = briefShell(wt, bm.test, limitMin * 60_000);
+    const out = [p.stdout, p.stderr].filter(Boolean).join(NL);
+    process.stdout.write(tailOutput(out, 2000) + NL);
+    const ran = p.status === 0 && !p.error;
+    const allow = String(bm.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+    removeStrayUntracked(wt, bm.allow);
+    revertOutOfScope(wt, bm.allow);
+    const files = inScopeChanged(porcelainStatus(wt, '--untracked-files=all'), allow);
+    let committed = false;
+    let gitFailure = null;
+    let gitError = null;
+    if (ran && files.length) {
+        const failedAdd = files.find((f) => git(wt, 'add', '--', f).code);
+        if (failedAdd) gitFailure = `git add failed for ${failedAdd}`;
+        else {
+            const subject = String(bm.commit || '').trim() || `chore: scripted update for #${bm.issue}`;
+            const c = git(wt, 'commit', '-q', '-m', [subject, '', `Refs #${bm.issue}`, '', 'Co-Authored-By: 9router imp <noreply@anthropic.com>'].join(NL));
+            committed = !c.code;
+            // The reason is posted on the issue, so it stays a fixed phrase; git's own message (hooks can print
+            // anything) is kept only in the ledger as gitError.
+            if (!committed) { gitFailure = 'git commit failed'; gitError = String(c.err || '').split(NL)[0].slice(0, 160); }
+        }
+    }
+    // Leave nothing behind for the gate's dirty check: the commit holds the only change.
+    git(wt, 'reset', '-q', '--hard');
+    git(wt, 'clean', '-qfd');
+    const why = p.error?.code === 'ETIMEDOUT' ? `script command did not finish within ${limitMin} min`
+        : p.error ? `script command could not start: ${p.error.code || 'spawn error'}`
+        : p.status !== 0 ? `script command exited ${p.status}`
+        : gitFailure ? `${gitFailure}; nothing committed`
+        : committed ? `committed ${files.length} file(s)` : 'script changed no allowed file';
+    console.log(`script mode: ${why}`);
+    return {
+        end: ran ? 'script' : 'script-failed', isError: !ran || !committed, turns: 0, toolTurns: 0, toolErrors: 0, tools: {},
+        served: [], durationMs: Date.now() - t0, finalText: why, scriptFiles: files.length, ...(gitError ? { gitError } : {}), outputTail: tailOutput(out, 1200), unmetered: true,
+    };
+}
+
+async function runGate(id) {
     const r = rows().find((x) => x.id === id);
     const { meta } = loadBrief(r.brief, r.worktree);
-    const shell = (c) => spawnSync(c, { cwd: r.worktree, shell: true, stdio: 'inherit', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } }).status;
+    // Output is echoed as before, and the tail of 'test' and 'lint' runs is kept for the ledger and the issue comment.
+    const tails = {};
+    const ends = {};
+    const shell = (c, key) => {
+        const p = spawnSync(c, { cwd: r.worktree, shell: gateShell(), stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
+        process.stdout.write(p.stdout || '');
+        process.stderr.write(p.stderr || '');
+        // Each stream keeps its own bounded tail so a noisy stderr cannot push the failure out of stdout.
+        if (key) {
+            tails[key] = [tailOutput(p.stdout, 1200), tailOutput(p.stderr, 800)].filter(Boolean).join('\n');
+            // A null status is either a signal (timeout, OOM kill) or a spawn error; say which.
+            if (p.status !== 0 || p.signal || p.error) {
+                ends[key] = {
+                    ...(p.status !== null && p.status !== undefined ? { exitCode: p.status } : {}),
+                    ...(p.signal ? { signal: p.signal } : {}),
+                    ...(p.error ? { error: String(p.error.code || p.error.message).slice(0, 80) } : {}),
+                    diagnostic: extractFailureDiagnostic([p.stdout, p.stderr].filter(Boolean).join('\n'), id, r.worktree),
+                };
+            }
+        }
+        return p.status;
+    };
     // Formatting is mechanical, so the runner does it, not the model: run the
     // repo's formatter and commit any change as a separate runner commit.
     let formatted = false;
     // On a re-run the runner's format commit is already there; size is
     // measured up to the imp's last commit either way.
     const runnerCommit = git(r.worktree, 'log', '-1', '--format=%s').out.includes('(imp runner)');
-    const impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
+    let impHead = git(r.worktree, 'rev-parse', runnerCommit ? 'HEAD~1' : 'HEAD').out;
     // Never format over uncommitted imp work: it would be swept into the runner commit.
     const dirtyBefore = git(r.worktree, 'status', '--porcelain').out;
-    if (meta.format && !runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
-        console.log(`format: ${meta.format}`);
-        shell(meta.format);
+    const formatCmd = meta.format || deriveFormat(meta.lint);
+    if (!runnerCommit && !dirtyBefore && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out !== '0') {
+        if (formatCmd) {
+            console.log(`format: ${formatCmd}`);
+            shell(formatCmd);
+        }
+        // Missing final newlines fail pre-commit's end-of-file-fixer in CI (motor-pool#205, #213).
+        const touched = git(r.worktree, 'diff', '--name-only', '--diff-filter=AM', `${r.baseSha}..HEAD`).out.split(/\r?\n/).filter(Boolean);
+        const eol = ensureFinalNewlines(r.worktree, touched);
+        if (eol.length) console.log(`added a final newline to ${eol.length} file(s): ${eol.slice(0, 5).join(', ')}`);
         if (git(r.worktree, 'status', '--porcelain').out) {
             git(r.worktree, 'add', '-A');
             git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
@@ -165,55 +350,276 @@ function runGate(id) {
         }
     }
     // --no-renames: a rename's numstat path ("a => b") would dodge the scope and deny checks.
-    // An imp that edits, verifies, and stops should not lose the work over the
-    // one step it forgets (#53/#54). The runner commits instead — only when the
-    // imp made no commits of its own and the brief's test passes on that exact
-    // tree, so a genuinely red run still fails. The runner writes the trailer,
-    // so it cannot be forgotten either.
-    let autoCommitted = false;
-    let earlyTestExit = null;
-    const leftover = git(r.worktree, 'status', '--porcelain').out;
-    if (meta.test && leftover && !runnerCommit && git(r.worktree, 'rev-list', '--count', `${r.baseSha}..HEAD`).out === '0') {
-        console.log(`tests (dirty tree): ${meta.test}`);
-        earlyTestExit = shell(meta.test);
-        const dirtyOut = git(r.worktree, 'status', '--porcelain').out;
-        if (shouldAutoCommit({ impCommits: 0, dirty: dirtyOut, testExit: earlyTestExit })) {
-            git(r.worktree, 'add', '-A');
-            git(r.worktree, 'commit', '-q', '-m', `imp: work for #${r.issue} (committed by runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>`);
-            autoCommitted = true;
+    // A dirty worktree gets one commit-only recovery prompt; the runner never
+    // stages or commits those edits itself. The normal gate runs only after a
+    // new non-empty commit and clean status are verified.
+    let commitRecovered = false;
+    let commitRecovery = r.commitRecovery || null;
+    // Stray untracked files outside `allow:` are deleted first (never tracked
+    // files): they are never the fix, and leaving them turns a finished run
+    // into a commit-recovery failure (vhs#169).
+    const strays = removeStrayUntracked(r.worktree, meta.allow);
+    if (strays.length) {
+        console.log(`removed ${strays.length} stray untracked file(s) outside allow: ${strays.slice(0, 5).join(', ')}`);
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...strays].slice(0, 20) }));
+    }
+    // Uncommitted edits to tracked files outside `allow:` could only ever fail
+    // the gate; restore them so the gate judges what the imp committed (fire#483).
+    const reverted = revertOutOfScope(r.worktree, meta.allow);
+    // Unstage+checkout cannot remove an added path that did not exist in HEAD;
+    // after reset it is untracked, so run the scoped cleanup again before recovery.
+    const postRestoreStrays = removeStrayUntracked(r.worktree, meta.allow);
+    if (postRestoreStrays.length) {
+        console.log(`removed ${postRestoreStrays.length} staged-addition stray file(s): ${postRestoreStrays.slice(0, 5).join(', ')}`);
+        update(id, (current) => ({ strayRemoved: [...(current.strayRemoved || []), ...postRestoreStrays].slice(0, 20) }));
+    }
+    if (reverted.length) {
+        console.log(`restored ${reverted.length} out-of-scope file(s) to HEAD: ${reverted.slice(0, 5).join(', ')}`);
+        update(id, { outOfScopeReverted: reverted.slice(0, 20) });
+    }
+    let leftover = git(r.worktree, 'status', '--porcelain').out;
+    // #256: commit the in-scope work ourselves before any model is asked to (Nemotron runs end with edits
+    // in the tree). Kill switch: IMPS_RUNNER_COMMIT=0. A failure falls through to the model recovery below.
+    if (leftover && process.env.IMPS_RUNNER_COMMIT !== '0' && !commitRecovery?.inProgress) {
+        const allowList = String(meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        const auto = autoCommitScoped(r.worktree, allowList, r.issue);
+        if (auto.pass) {
+            const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+            console.log(`runner committed ${auto.paths.length} in-scope file(s): ${auto.paths.slice(0, 5).join(', ')}`);
+            commitRecovery = { attempted: true, pass: true, inProgress: false, method: 'runner', beforeHead, afterHead, clean: true, changed: true, commitCount: 1, trailerValid: true, reason: null, paths: auto.paths.slice(0, 20), at: new Date().toISOString() };
+            update(id, { commitRecovery });
+            commitRecovered = true;
+            impHead = afterHead;
+            leftover = '';
+            writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'runner-commit-pass', failureSignatures: [] });
+        } else {
+            console.log(`runner commit not possible: ${auto.reason}`);
         }
     }
-    const numstat = git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
+    if (commitRecovery?.attempted && !commitRecovery.pass && !commitRecovery.inProgress && leftover) {
+        console.log('commit recovery previously failed; refusing to gate a dirty tree');
+        update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+        return COMMIT_RECOVERY_FAILED;
+    }
+    if (shouldPromptCommitRecovery({ dirty: leftover, attempted: Boolean(commitRecovery?.attempted) })) {
+        const claim = claimCommitRecovery(id);
+        if (!claim.claimed) {
+            if (claim.row.commitRecovery?.inProgress) {
+                console.log('commit recovery already in progress');
+                return COMMIT_RECOVERY_IN_PROGRESS;
+            }
+            if (claim.row.commitRecovery?.attempted && !claim.row.commitRecovery.pass && leftover) {
+                update(id, { outcome: COMMIT_RECOVERY_FAILED, gate: null });
+                return COMMIT_RECOVERY_FAILED;
+            }
+            return COMMIT_RECOVERY_IN_PROGRESS;
+        }
+        commitRecovery = claim.row.commitRecovery;
+        const claimedAt = claim.claimedAt;
+        const beforeHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        const recoveryModel = reserveQuota(quotaPool(r.model, MODEL_POOL), o.modelStrategy || 'fallback');
+        const recoveryTranscript = join(HOME, 'runs', id + '-commit-recovery.jsonl');
+        const allow = (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean);
+        let recoveryMetrics = null;
+        let recoveryError = null;
+        if (!recoveryModel) {
+            recoveryError = 'no model quota available for one-shot commit recovery';
+        } else {
+            const recoveryPrompt = [
+                'This is one bounded commit-only recovery for an existing Imp run. Do not edit or write files.',
+                'Issue: #' + r.issue + ' in ' + r.repo + '.',
+                'Allowed paths only: ' + (allow.join(', ') || '(none; do not commit)') + '.',
+                'Inspect git status and diff. If no safe changed path is inside the allowlist, stop without committing.',
+                'Stage only allowlisted changed paths. Do not use git add -A or stage any denied/out-of-scope path.',
+                'Do not stage .github/, imps/defaults.mjs, imps-config.yml, .env files, secrets, or lockfiles.',
+                'Create exactly one new commit with subject: imp: work for #' + r.issue + ' (commit recovery)',
+                'Include this exact trailer: Co-Authored-By: 9router imp <noreply@anthropic.com>',
+                'Do not amend, rebase, push, run tests/lint, or modify source files. Stop after the commit and report its SHA.'
+            ].join('\n');
+            try {
+                recoveryMetrics = await runClaude({
+                    cwd: r.worktree,
+                    prompt: recoveryPrompt,
+                    model: recoveryModel,
+                    tools: COMMIT_RECOVERY_TOOLS,
+                    minutes: 3,
+                    budget: Math.min(Number(o.budget) || 2, 2),
+                    maxTurns: 6,
+                    noEditByTurn: 0,
+                    transcript: recoveryTranscript,
+                });
+            } catch (e) {
+                recoveryError = 'commit-only recovery prompt errored; inspect local transcript';
+            }
+        }
+        const afterHead = git(r.worktree, 'rev-parse', 'HEAD').out;
+        removeStrayUntracked(r.worktree, meta.allow);
+        revertOutOfScope(r.worktree, meta.allow);
+        const dirtyAfter = git(r.worktree, 'status', '--porcelain').out;
+        const commitCount = afterHead === beforeHead ? 0 : (Number(git(r.worktree, 'rev-list', '--count', beforeHead + '..' + afterHead).out) || 0);
+        const recoveryDiff = commitCount === 1 ? git(r.worktree, 'diff', '--stat', afterHead + '^..' + afterHead).out : '';
+        const changed = Boolean(recoveryDiff.trim());
+        const recoveryMessage = commitCount === 1 ? git(r.worktree, 'log', '-1', '--format=%B').out : '';
+        const requiredTrailer = 'Co-Authored-By: 9router imp <noreply@anthropic.com>';
+        const trailerValid = recoveryMessage.trimEnd().split(/\r?\n/).at(-1) === requiredTrailer;
+        const verified = verifyCommitRecovery({ beforeHead, afterHead, commitCount, dirty: Boolean(dirtyAfter), changed, trailerValid });
+        const pass = !recoveryError && verified.pass;
+        const servedModel = Array.isArray(recoveryMetrics?.served) ? (recoveryMetrics.served[0] || null) : (recoveryMetrics?.served || null);
+        const recovery = {
+            attempted: true,
+            pass,
+            inProgress: false,
+            claimedAt,
+            pid: process.pid,
+            beforeHead,
+            afterHead,
+            clean: !dirtyAfter,
+            changed,
+            commitCount,
+            trailerValid,
+            reason: pass ? null : (recoveryError || verified.reason),
+            configuredModel: recoveryModel || null,
+            servedModel,
+            servedCheck: auditServed({ served: recoveryMetrics?.served, expected: expectedFamilies(loadHomeConfig(), process.env) }),
+            metrics: recoveryMetrics ? {
+                end: recoveryMetrics.end,
+                turns: recoveryMetrics.turns,
+                toolErrors: recoveryMetrics.toolErrors,
+                finalText: tailOutput(String(recoveryMetrics.finalText || ''), 500),
+            } : null,
+            transcript: recoveryTranscript,
+            at: new Date().toISOString(),
+        };
+        if (!pass) {
+            const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+                ? { outcome: COMMIT_RECOVERY_FAILED, gate: null, commitRecovery: recovery }
+                : {});
+            if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
+            writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: COMMIT_RECOVERY_FAILED, failureSignatures: ['commit-recovery-failed'] });
+            console.log('commit recovery failed: ' + (recovery.reason || 'new commit and clean status were not verified'));
+            return COMMIT_RECOVERY_FAILED;
+        }
+        const finalized = update(id, (current) => current.commitRecovery?.claimedAt === claimedAt
+            ? { commitRecovery: recovery }
+            : {});
+        if (finalized.commitRecovery?.claimedAt !== claimedAt) return COMMIT_RECOVERY_IN_PROGRESS;
+        commitRecovered = true;
+        commitRecovery = recovery;
+        impHead = afterHead;
+        writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'commit-recovery', outcome: 'commit-recovery-pass', failureSignatures: [] });
+    }
+    // A verified recovery commit is formatted as a separate runner commit; the
+    // normal gate then tests the final, clean tree.
+    if (commitRecovered && formatCmd) {
+        console.log('format (after commit recovery): ' + formatCmd);
+        shell(formatCmd);
+        if (git(r.worktree, 'status', '--porcelain').out) {
+            git(r.worktree, 'add', '-A');
+            const style = git(r.worktree, 'commit', '-q', '-m', 'style: apply the repo formatter (imp runner)\n\nCo-Authored-By: 9router imp <noreply@anthropic.com>');
+            if (!style.code) formatted = true;
+        }
+    }
+    const numstat =git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..HEAD`).out;
+    const diff = git(r.worktree, 'diff', '--no-renames', `${r.baseSha}..HEAD`).out;
     // Only the imp's own commits must carry the imp trailer: a human or the
     // hypervisor may push a fix to the PR branch between rounds.
     const log = git(r.worktree, 'log', '--format=%an%x01%B%x00', `${r.baseSha}..HEAD`).out;
     const commits = log.split('\0').map((s) => s.trim()).filter(Boolean)
         .map((s) => s.split('\x01')).filter(([author]) => author === '9router imp').map(([, msg]) => msg.trim());
-    const dirty = git(r.worktree, 'status', '--porcelain').out;
-    let testExit = earlyTestExit;
+    // Fix rounds: paths only a human pushed to the PR branch are exempt from scope.
+    // Before the first push there is no origin/<branch>, so nothing is exempt, and
+    // anything changed since the pushed head counts as the imp's (lib.humanOnlyPaths).
+    const pushed = r.branch ? git(r.worktree, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${r.branch}`).out : '';
+    const humanOnly = pushed
+        ? humanOnlyPaths(
+            git(r.worktree, 'log', '--no-renames', '--name-only', '--format=%x00%an', `${r.baseSha}..${pushed}`).out,
+            git(r.worktree, 'diff', '--no-renames', '--name-only', `${pushed}..HEAD`).out.split('\n').filter(Boolean),
+        )
+        : [];
+    const dirtyBeforeChecks = git(r.worktree, 'status', '--porcelain').out;
+    let testExit = null;
     let lintExit = null;
-    if (meta.test && commits.length && testExit == null) {
+    if (meta.test && commits.length) {
         console.log(`tests: ${meta.test}`);
-        testExit = shell(meta.test);
+        testExit = shell(meta.test, 'test');
     }
     if (meta.lint && commits.length) {
         console.log(`lint: ${meta.lint}`);
-        lintExit = shell(meta.lint);
+        lintExit = shell(meta.lint, 'lint');
     }
+    // Tests and lint can create untracked or modify tracked files; gate the final tree.
+    // A `mode: script` test is the generator itself, so re-running it here rewrites its outputs: what it
+    // leaves outside `allow:` is scratch (reports, logs) and is cleaned first. A change it makes inside
+    // `allow:` still counts as dirty, because that means the script's output is not reproducible.
+    if (String(meta.mode || '').trim() === 'script') {
+        removeStrayUntracked(r.worktree, meta.allow);
+        revertOutOfScope(r.worktree, meta.allow);
+    }
+    const dirtyAfterChecks = git(r.worktree, 'status', '--porcelain').out;
+    const dirty = Boolean(dirtyBeforeChecks || dirtyAfterChecks);
     const g = gate({
-        numstat, commits, testExit, dirty: Boolean(dirty),
+        numstat, commits, testExit, dirty, diff,
         sizeNumstat: git(r.worktree, 'diff', '--numstat', '--no-renames', `${r.baseSha}..${impHead}`).out,
         // A fix round (fix.mjs) passes --slack so its small follow-up commit fits.
-        maxLines: Number(meta.maxLines || DEFAULTS.maxLines) + Number(o.slack),
+        maxLines: effectiveMaxLines(meta.maxLines, o.slack),
+        maxTestLines: effectiveMaxTestLines(meta.maxTestLines, meta.maxLines, o.slack),
         allow: (meta.allow || '').split(',').map((s) => s.trim()).filter(Boolean),
         bugfix: meta.kind === 'bug',
+        humanOnlyPaths: humanOnly,
+        briefRisk: meta.risk,
     });
+    // The run and any commit-recovery round both count: a recovery served by an unexpected model fails too.
+    for (const sc of [r.servedCheck, (commitRecovery || r.commitRecovery)?.servedCheck])
+        if (sc && sc.ok === false) g.reasons.push(auditLine(sc)), (g.pass = false);
     if (meta.lint && commits.length && lintExit !== 0)
         g.reasons.push(lintExit == null ? 'lint not run' : `lint exit ${lintExit}`), (g.pass = false);
     // `head` binds the verdict to the commit that was gated (checked again by `pr`).
     const head = git(r.worktree, 'rev-parse', 'HEAD').out;
-    update(id, { gate: { ...g, formatted, autoCommitted, lintExit, head, at: new Date().toISOString() } });
-    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${autoCommitted ? ' (runner committed the imp\'s edits)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
+    update(id, (current) => ({
+        ...(current.outcome === COMMIT_RECOVERY_FAILED ? { outcome: null } : {}),
+        // Never lowered by a later gate of the same run (a fix round that reverts the sensitive file).
+        risk: current.risk ? maxRisk(current.risk, g.risk) : g.risk,
+        gate: { ...g, formatted, commitRecovered, ...(commitRecovery ? { commitRecovery } : {}), testExit, lintExit, ...(tails.test && testExit !== 0 ? { testTail: tails.test } : {}), ...(tails.lint && lintExit !== 0 ? { lintTail: tails.lint } : {}), ...(ends.test ? { testEnd: ends.test } : {}), ...(ends.lint ? { lintEnd: ends.lint } : {}), head, at: new Date().toISOString() },
+    }));
+    writeTelemetry({ home: HOME, runId: id, repo: r.repo, event: 'gate-end', outcome: g.pass ? 'gate-pass' : 'gate-fail', failureSignatures: gateFailureSignatures(g.reasons) });
+    console.log(g.pass ? `gate passed: ${g.lines} lines in ${g.files.join(', ')}${commitRecovered ? ' (one-shot commit recovery verified)' : ''}` : `gate failed: ${g.reasons.join('; ')}`);
+}
+
+/** Delete untracked files outside the brief's allow list; returns what was removed. */
+function removeStrayUntracked(wt, allowCsv) {
+    const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const strays = strayUntracked(porcelainStatus(wt, '--untracked-files=all'), allow);
+    const removed = [];
+    for (const p of strays) {
+        const full = resolve(wt, p);
+        // Never follow a path out of the worktree.
+        if (!full.startsWith(resolve(wt))) continue;
+        try { rmSync(full, { force: true }); removed.push(p); } catch { /* left for the dirty check */ }
+    }
+    return removed;
+}
+
+/**
+ * `git status --porcelain` with its leading status columns intact. The shared
+ * `git()` helper trims stdout, which turns a first entry of ` M a.js` into
+ * `M a.js` and makes the path parser drop a character.
+ */
+function porcelainStatus(wt, ...args) {
+    const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', ...args], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 ? String(r.stdout || '').replace(/\r?\n$/, '') : '';
+}
+
+/** Restore tracked out-of-scope files to HEAD (unstaging first); returns what was restored. */
+function revertOutOfScope(wt, allowCsv) {
+    const allow = String(allowCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const paths = outOfScopeTracked(porcelainStatus(wt), allow);
+    const done = [];
+    for (const p of paths) {
+        git(wt, 'reset', '-q', '--', p);
+        if (!git(wt, 'checkout', 'HEAD', '--', p).code) done.push(p);
+    }
+    return done;
 }
 
 // Poll `gh pr checks --json` until every check (required *and* optional) is
@@ -264,13 +670,16 @@ function openPr(id) {
     const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
     if (push.code) throw new Error(push.err);
+    // Classed from the branch itself, so a manual gate cannot skip it.
+    const changed = git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean);
+    const risk = maxRisk(riskClass(changed), r.risk);
     // The imp's own message, never the runner's format commit.
     const title = git(r.worktree, 'log', '-1', '--format=%s', '--invert-grep', '--fixed-strings', '--grep=(imp runner)', `${r.baseSha}..HEAD`).out;
     const body = [
         `Fixes #${r.issue}`, '',
         '> **Imp PR.** Written by a headless worker through 9router, then gated by the runner (tests in Docker, diff size, scope, trailer). ' +
-        'If the imp reviewer approves, every check (required *and* optional) is green, and the repo has earned auto-merge trust, ' +
-        'the runner squash-merges immediately. Nothing merges on red or pending CI.', '',
+        'A `risk:low` PR (tests and docs only) is squash-merged when the imp reviewer approves, every check (required *and* optional) is green, ' +
+        'and the repo has earned auto-merge trust. Other risk classes are never auto-merged. Nothing merges on red or pending CI.', '',
         '### Imp summary', m.finalText || '(none)', '',
         '### Run', `| run | model | served | turns | minutes | tool errors | tokens in / cache read / out |`, '| --- | --- | --- | --- | --- | --- | --- |',
         `| \`${r.id}\` | ${r.model} | ${m.served.join(', ')} | ${m.turns} | ${(m.durationMs / 60000).toFixed(1)} | ${m.toolErrors} | ${m.tokens.input} / ${m.tokens.cacheRead} / ${m.tokens.output} |`, '',
@@ -279,9 +688,17 @@ function openPr(id) {
         '🤖 Generated with [Claude Code](https://claude.com/claude-code) imps',
     ].join('\n');
     sh('gh', ['label', 'create', 'imp', '-R', repoSlug, '-c', '6f42c1', '-d', 'Opened by an imp (headless worker). Needs a human review.'], {});
-    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, '--label', 'imp', '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
+    // Briefs forbid CHANGELOG.md edits, so the risk guard needs no-changelog on every imp PR (#415).
+    sh('gh', ['label', 'create', 'no-changelog', '-R', repoSlug, '-c', 'cfd3d7', '-d', 'No CHANGELOG entry needed'], {});
+    const riskLabel = ensureRiskLabel(repoSlug, risk);
+    const labels = buildImpPrLabels(risk, riskLabel, NEEDS_HUMAN_LABEL);
+    // Nothing is approved yet, so a high-risk PR starts out as a human's.
+    if (risk === 'high') {
+        sh('gh', ['label', 'create', NEEDS_HUMAN_LABEL, '-R', repoSlug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
+    }
+    const pr = sh('gh', ['pr', 'create', '-R', repoSlug, ...labels.flatMap((l) => ['--label', l]), '--head', r.branch, '--base', r.base, '--title', title, '--body', body]);
     if (pr.code) throw new Error(pr.err);
-    update(id, { pr: pr.out, outcome: 'open', authorModel: (m.served || [])[0] || r.model });
+    update(id, { risk, pr: pr.out, outcome: 'open', authorModel: (m.served || [])[0] || r.model });
     console.log(pr.out);
     // Auto-review, then merge only on approve + all checks green + earned trust.
     // Merge immediately (no `gh pr merge --auto`): GitHub auto-merge only waits
@@ -313,6 +730,8 @@ function openPr(id) {
         trust: trustThreshold,
         githubCount,
         githubSeedError,
+        gate: r.gate,
+        risk,
     });
     if (!trust.ok) return console.log(`not merging: ${trust.reason}`);
     const w = waitForChecks(pr.out);
@@ -330,7 +749,14 @@ function openPr(id) {
     try { headSha = String(JSON.parse(live.out || '{}').headRefOid || ''); } catch { /* fall through */ }
     const ready = mergeReady({ headSha, pushedHead, checks: finalChecks });
     if (!ready.ok) return console.log(`pre-merge recheck failed: ${ready.reason}, leaving the PR open`);
-    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead]);
+    const commitInfo = sh('gh', ['pr', 'view', pr.out, '-R', slug, '--json', 'commits']);
+    if (commitInfo.code) return console.log(`could not collect squash attribution: ${commitInfo.err}, leaving the PR open`);
+    let commits = [];
+    try { commits = JSON.parse(commitInfo.out || '{}').commits || []; }
+    catch { return console.log('could not parse PR commits for squash attribution, leaving the PR open'); }
+    const mergeBody = mergedByAgentCommitBody(commits, machineName());
+    if (!mergeBody) return console.log('machine identity unavailable; leaving the PR open without an unattributed merge');
+    const merge = sh('gh', ['pr', 'merge', pr.out, '--squash', '--delete-branch', '--match-head-commit', pushedHead, '--body', mergeBody]);
     if (merge.code) return console.log(`merge refused: ${merge.err}`);
     update(id, { outcome: 'merged', mergedAt: new Date().toISOString(), autoMerged: true });
     console.log('merged (squash); every check was green');
@@ -365,13 +791,18 @@ function ingest(transcript) {
 
 switch (cmd) {
     case 'run': await run(); break;
-    case 'gate': runGate(pos[0]); break;
+    case 'gate': { const result = await runGate(pos[0]); if (result === COMMIT_RECOVERY_FAILED) process.exitCode = 75; else if (result === COMMIT_RECOVERY_IN_PROGRESS) process.exitCode = 76; break; }
     case 'pr': openPr(pos[0]); break;
     case 'outcome': outcome(pos[0]); break;
     case 'note': update(pos[0], (r) => ({ notes: [...(r.notes || []), { at: new Date().toISOString(), text: pos[1] }] })); break;
-    case 'verdict': // a gate decided by hand (backfilled runs): verdict <id> pass|fail "<reason>"
-        update(pos[0], (r) => ({ gate: { ...r.gate, pass: pos[1] === 'pass', reasons: pos[2] ? [pos[2]] : [], manual: true, at: new Date().toISOString() } }));
+    case 'verdict': { // a gate decided by hand (backfilled runs): verdict <id> pass|fail "<reason>"
+        const id = pos[0];
+        const pass = pos[1] === 'pass';
+        const current = rows().find((r) => r.id === id);
+        update(id, (r) => ({ gate: { ...r.gate, pass, reasons: pos[2] ? [pos[2]] : [], manual: true, at: new Date().toISOString() } }));
+        writeTelemetry({ home: HOME, runId: id, repo: current?.repo, event: 'gate-end', outcome: pass ? 'gate-pass' : 'gate-fail', failureSignatures: pass ? [] : [{ kind: 'gate-manual-fail', count: 1 }] });
         break;
+    }
     case 'report': {
         const vault = resolveVaultPrompt(loadHomeConfig());
         if (vault) console.log(`vault: ${vault}`);

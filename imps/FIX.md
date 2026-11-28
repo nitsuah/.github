@@ -21,6 +21,23 @@ You already opened a PR for this issue (your earlier commits are in this worktre
 - Commit your fixes as **one** commit (`fix: address review on #<PR>`, body listing the item ids you fixed, ending with the imp trailer). If every decision is pushback or skip, don't commit at all.
 - Replies are posted on GitHub as-is: one to three sentences, specific, no apologies, no "great catch".
 
+## Recurring misjudgements (fix-round model gets these wrong → gate fails)
+
+- **CodeRabbit "Review limit reached" / rate-limit banners** — noise, never feedback. `feedbackItems` drops them via `botLogin()`. If one slips through, `pushback` with "not feedback: bot summary".
+- **Netlify deploy preview comments** ("Deploy Preview ready", "Pages changed - x", "Header rules - x", "Redirect rules - x") — noise. `feedbackItems` drops via name filter on checks and `botLogin()` on comments. If one slips through, `pushback`.
+- **Threads where imp replied last** (`IMP_MARK` in last comment) — already handled, waiting on reviewer. `feedbackItems` skips these. If model sees one, `skip` with "already answered in previous round".
+- **Stale/outdated threads** (`isResolved` or `isOutdated`) — `feedbackItems` skips. If model sees one, `skip`.
+- **CI failures from deploy checks** (Netlify, Pages changed, Header rules, Redirect rules) — not code feedback. `feedbackItems` filters by name. If one slips through, `pushback` with "deploy check, not code".
+- **Imp reviewer nits** (severity `nit`) — `feedbackItems` only surfaces `blocker`/`major`. If a nit appears, `skip` with "nit, out of scope for fix round".
+- **Comments older than `since`** — `feedbackItems` filters by `createdAt`. If model sees one, `skip` with "before cutoff".
+- **`@coderabbitai approve` / commands** — `feedbackItems` drops comments starting with `@coderabbitai`. If one slips, `pushback` with "bot command, not feedback".
+- **Empty/whitespace comments** — `feedbackItems` drops. If one slips, `pushback`.
+- **Treating out-of-scope "fix" as in-scope** — Item is real but belongs in a different issue/PR. Action: `skip` with "out of scope: #<issue> tracks it". Do not `fix` and bloat diff.
+- **Treating wrong finding as "fix"** — Finding is outdated, already fixed, or about code this PR didn't touch. Action: `pushback` with evidence (file:line, test, or brief instruction it contradicts).
+- **Duplicate item IDs in model output** — `parseFixDecisions` nulls duplicates. Never emit same `id` twice.
+- **Non-string or missing `id` in decisions** — `parseFixDecisions` rejects. Always use exact `id` from item list.
+- **Invalid `action`** — Only `fix`, `pushback`, `skip` accepted. Others become `null` (unanswered → thread stays open → needs-human).
+
 ## Answer
 
 End with exactly one fenced `json` block:

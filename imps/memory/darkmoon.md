@@ -1,0 +1,6 @@
+- Lint runs inside RUNTEST; fix code to pass lint before committing, never edit lint config (darkmoon#497 lint exit 1).
+- One allowed command per Bash call; run tests only via `node C:/Users/ajhar/AppData/Local/imps-runner/imps/runtest.mjs` (13 denies in darkmoon runs).
+- Use forward-slash repo-relative paths (`imps/memory/darkmoon.md`), never Windows backslash paths (3 missing-path errors in darkmoon runs).
+- Commit immediately after RUNTEST passes: `git add <files>` then `git commit -m ...`; uncommitted work lost (darkmoon#543 no commits).
+- Brief's `allow:` lists only files you may edit (here: `imps/memory/darkmoon.md`); edits outside scope discarded at gate.
+- Max 180 non-test changed lines; stay within scope and size limits (darkmoon#543 diff over limit).

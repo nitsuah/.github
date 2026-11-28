@@ -32,14 +32,47 @@ test('imp.mjs imports isGitDirty, which the ledger row provenance calls', () => 
 });
 
 test('no-edit fail-fast is on by default and configurable', async () => {
-    assert.equal(DEFAULTS.noEditTurns, 12);
+    assert.equal(DEFAULTS.noEditTurns, 20);
     const { resolveNoEditTurns } = await import('./runner.mjs');
-    assert.equal(resolveNoEditTurns({}, {}), 12);
+    assert.equal(resolveNoEditTurns({}, {}), 20);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, {}), 12);
     assert.equal(resolveNoEditTurns({ noEditTurns: 12 }, { IMPS_NO_EDIT_TURNS: '5' }), 5);
     assert.equal(resolveNoEditTurns({ noEditTurns: 0 }, {}), 0); // 0 turns it off
-    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '' }), 12); // empty is unset, not 0
+    assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '' }), 20); // empty is unset, not 0
     assert.equal(resolveNoEditTurns({ noEditTurns: 7 }, { IMPS_NO_EDIT_TURNS: '  ' }), 7);
     assert.equal(resolveNoEditTurns({}, { IMPS_NO_EDIT_TURNS: '0' }), 0); // explicit 0 still disables
-    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 12); // junk falls back
+    assert.equal(resolveNoEditTurns({ noEditTurns: 'x' }, {}), 20); // junk falls back
+});
+
+test('max-turn cap is configurable and zero disables it', async () => {
+    assert.equal(DEFAULTS.maxTurns, 60);
+    const { resolveMaxTurns } = await import('./runner.mjs');
+    assert.equal(resolveMaxTurns({}, {}), 60);
+    assert.equal(resolveMaxTurns({ maxTurns: 25 }), 25);
+    assert.equal(resolveMaxTurns({ maxTurns: 0 }), 0);
+    assert.equal(resolveMaxTurns({ maxTurns: '0' }), 0);
+    assert.equal(resolveMaxTurns({ maxTurns: '' }), 60);
+    assert.equal(resolveMaxTurns({ maxTurns: 'invalid' }), 60);
+});
+
+
+test('dispatch skips missing target checkouts before pickIssues and logs only locally', () => {
+    const dispatch = src('dispatch.mjs');
+    const preflightAt = dispatch.indexOf('targetCheckout(i.repo');
+    const pickAt = dispatch.indexOf('const batch = pickIssues');
+    assert.ok(preflightAt >= 0, 'dispatcher invokes the checkout preflight');
+    assert.ok(pickAt > preflightAt, 'preflight occurs before pickIssues slot accounting');
+    assert.match(dispatch, /event: 'skip-missing-checkout'/);
+    assert.match(dispatch, /const codeRoot = resolveImpsCodeRoot\(\)/);
+    assert.match(dispatch, /queuedBeforePreflight: queuedRaw\.length/);
+    const preflightBlock = dispatch.slice(preflightAt, pickAt);
+    assert.doesNotMatch(preflightBlock, /\b(?:comment|relabel|work)\s*\(/, 'missing checkout handling must not comment, relabel, or claim');
+});
+
+test('imp gate attaches failure diagnostics to non-zero test/lint command results', () => {
+    const imp = src('imp.mjs');
+    assert.match(imp, /extractFailureDiagnostic/);
+    assert.match(imp, /if \(p\.status !== 0 \|\| p\.signal \|\| p\.error\)/);
+    assert.match(imp, /diagnostic:\s*extractFailureDiagnostic\(/);
+    assert.match(imp, /ends\[key\]\s*=/);
 });

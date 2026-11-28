@@ -1,0 +1,175 @@
+// node --test imps/*.test.mjs
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const tempHome = mkdtempSync(join(tmpdir(), 'imps-runner-stream-'));
+const previousHome = process.env.IMPS_HOME;
+process.env.IMPS_HOME = tempHome;
+const { runClaude, resolveMaxTurns, appendRow, claimCommitRecovery, update, resolveMachine, COMMIT_RECOVERY_CLAIM_TTL_MS } = await import('./runner.mjs');
+
+after(() => {
+    if (previousHome === undefined) delete process.env.IMPS_HOME;
+    else process.env.IMPS_HOME = previousHome;
+    rmSync(tempHome, { recursive: true, force: true });
+});
+
+test('resolveMachine trims blank and padded environment overrides', () => {
+    assert.equal(resolveMachine({ machine: 'configured' }, { IMPS_MACHINE: '   ' }), 'configured');
+    assert.equal(resolveMachine({ machine: 'configured' }, { IMPS_MACHINE: '  box-01  ' }), 'box-01');
+});
+
+function fakeCli(toolTurns = 0) {
+    const script = join(tempHome, 'fake-claude-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.mjs');
+    const source = [
+        '#!/usr/bin/env node',
+        "import { createInterface } from 'node:readline';",
+        'const args = process.argv.slice(2);',
+        'const toolTurns = ' + toolTurns + ';',
+        "const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n');",
+        "const finish = (result) => {",
+        "  const event = { type: 'result', subtype: 'success', result, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } };",
+        "  process.stdout.write(JSON.stringify(event) + '\\n', () => process.exit(0));",
+        '};',
+        'if (toolTurns > 0) {',
+        "  for (let i = 0; i < toolTurns; i++) emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: {} }] } });",
+        "  finish('TOOL_TURNS_COMPLETE');",
+        "} else if (!args.includes('--input-format')) {",
+        "  const promptIndex = args.indexOf('-p') + 1;",
+        "  finish(JSON.stringify({ args, prompt: args[promptIndex], marker: process.env.IMPS_TEST_MARKER || null, parentOnly: process.env.IMPS_TEST_PARENT_ONLY || null }));",
+        '} else {',
+        '  const received = [];',
+        '  const rl = createInterface({ input: process.stdin });',
+        "  rl.on('line', (line) => {",
+        '    let message;',
+        '    try { message = JSON.parse(line); } catch { return; }',
+        '    received.push(message);',
+        '    if (received.length === 1) {',
+        "      for (let i = 0; i < 3; i++) emit({ type: 'user', message: { content: [{ type: 'tool_result', is_error: true, content: 'No such file or directory' }] } });",
+        '    } else {',
+        '      finish(JSON.stringify(received));',
+        '    }',
+        '  });',
+        "  setTimeout(() => { if (received.length === 0) finish('NO_INITIAL_PROMPT'); }, 1000);",
+        '}',
+    ].join('\n');
+    writeFileSync(script, source);
+    chmodSync(script, 0o755);
+    return script;
+}
+
+async function runWithFake({ guard, prompt, name, maxTurns = 4, toolTurns = 0, env = null }) {
+    const previousGuard = process.env.IMPS_REPEAT_FAILURE_GUARD;
+    const previousBin = process.env.IMPS_CLAUDE_BIN;
+    process.env.IMPS_REPEAT_FAILURE_GUARD = guard ? '1' : '0';
+    process.env.IMPS_CLAUDE_BIN = fakeCli(toolTurns);
+    try {
+        return await runClaude({
+            cwd: tempHome,
+            prompt,
+            model: 'MAX',
+            tools: [],
+            deny: [],
+            minutes: 0.2,
+            budget: 0.1,
+            maxTurns,
+            noEditByTurn: 0,
+            transcript: join(tempHome, name + '.jsonl'),
+            ...(env ? { env } : {}),
+        });
+    } finally {
+        if (previousGuard === undefined) delete process.env.IMPS_REPEAT_FAILURE_GUARD;
+        else process.env.IMPS_REPEAT_FAILURE_GUARD = previousGuard;
+        if (previousBin === undefined) delete process.env.IMPS_CLAUDE_BIN;
+        else process.env.IMPS_CLAUDE_BIN = previousBin;
+    }
+}
+
+test('default-off launch preserves -p then prompt argv order', { skip: process.platform === 'win32' }, async () => {
+    const prompt = 'DEFAULT_ARGV_PROMPT';
+    const metrics = await runWithFake({ guard: false, prompt, name: 'default-argv' });
+    const launch = JSON.parse(metrics.finalText);
+    assert.equal(metrics.end, 'success');
+    assert.equal(launch.args[0], '-p');
+    assert.equal(launch.args[1], prompt);
+    assert.equal(launch.prompt, prompt);
+});
+
+test('maxTurns config rejects booleans and preserves numeric strings', () => {
+    const fallback = resolveMaxTurns({});
+    assert.equal(resolveMaxTurns({ maxTurns: true }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: false }), fallback);
+    assert.equal(resolveMaxTurns({ maxTurns: '12' }), 12);
+});
+
+test('maxTurns 0 disables the cap and still records tool turns', { skip: process.platform === 'win32' }, async () => {
+    const metrics = await runWithFake({
+        guard: false,
+        prompt: 'ZERO_MAX_TURNS',
+        name: 'zero-max-turns',
+        maxTurns: 0,
+        toolTurns: 6,
+    });
+    assert.equal(metrics.end, 'success');
+    assert.equal(metrics.toolTurns, 6);
+    assert.equal(metrics.finalText, 'TOOL_TURNS_COMPLETE');
+});
+
+test('opt-in stream-json delivers initial prompt and the third-repeat nudge to the live child', { skip: process.platform === 'win32' }, async () => {
+    const prompt = 'STREAM_JSON_INITIAL_PROMPT';
+    const metrics = await runWithFake({ guard: true, prompt, name: 'stream-json' });
+    const received = JSON.parse(metrics.finalText);
+    assert.equal(metrics.end, 'success');
+    assert.equal(metrics.toolErrors, 3);
+    assert.equal(received.length, 2);
+    assert.equal(received[0].type, 'user');
+    assert.equal(received[0].message.content, prompt);
+    assert.equal(received[1].type, 'user');
+    assert.match(received[1].message.content, /^Repeated missing-path:/);
+});
+
+test('commit-recovery claim is atomic, expires, and does not retry a finalized attempt', () => {
+    const id = 'imp_commit_recovery_claim_' + Date.now();
+    const now = Date.parse('2026-11-03T10:00:00Z');
+    appendRow({ id, repo: 'fire', issue: 1, outcome: 'commit-recovery-failed', startedAt: new Date(now).toISOString() });
+
+    const first = claimCommitRecovery(id, now);
+    assert.equal(first.claimed, true);
+    assert.equal(first.row.commitRecovery.inProgress, true);
+    assert.equal(first.row.outcome, null);
+
+    const second = claimCommitRecovery(id, now + 1000);
+    assert.equal(second.claimed, false);
+    assert.equal(second.row.commitRecovery.claimedAt, first.claimedAt);
+
+    const stale = claimCommitRecovery(id, now + COMMIT_RECOVERY_CLAIM_TTL_MS + 1000);
+    assert.equal(stale.claimed, true);
+    assert.notEqual(stale.claimedAt, first.claimedAt);
+
+    update(id, { commitRecovery: { attempted: true, pass: false, inProgress: false, claimedAt: stale.claimedAt, pid: process.pid } });
+    const finalized = claimCommitRecovery(id, now + COMMIT_RECOVERY_CLAIM_TTL_MS + 2000);
+    assert.equal(finalized.claimed, false);
+});
+
+test('runClaude passes a caller-supplied env to the child; default env does not carry it', { skip: process.platform === 'win32' }, async () => {
+    const custom = { PATH: process.env.PATH, HOME: process.env.HOME || tempHome, IMPS_TEST_MARKER: 'custom-env' };
+    process.env.IMPS_TEST_PARENT_ONLY = 'parent-secret';
+    let withEnv;
+    try {
+        withEnv = JSON.parse((await runWithFake({ guard: false, prompt: 'ENV_PROMPT', name: 'custom-env', env: custom })).finalText);
+    } finally { delete process.env.IMPS_TEST_PARENT_ONLY; }
+    assert.equal(withEnv.marker, 'custom-env');
+    assert.equal(withEnv.parentOnly, null, 'a custom env must not inherit parent variables');
+    process.env.IMPS_TEST_MARKER = 'leaked';
+    try {
+        const plain = JSON.parse((await runWithFake({ guard: false, prompt: 'ENV_PROMPT', name: 'default-env' })).finalText);
+        assert.equal(plain.marker, null);
+    } finally { delete process.env.IMPS_TEST_MARKER; }
+});
+
+test('a spawn that throws synchronously ends as spawn-failed', { skip: process.platform === 'win32' }, async () => {
+    const metrics = await runWithFake({ guard: false, prompt: 'P', name: 'nul-env', env: { PATH: process.env.PATH, BAD: 'a b' } });
+    assert.equal(metrics.end, 'spawn-failed');
+});

@@ -19,6 +19,12 @@ const KIT_POINTER = join(HOME, 'kit-path.txt');
 // dispatch.mjs skips a cycle while the lock is younger than this.
 const STALE_LOCK_MS = 3 * 3600_000;
 
+export function countDispatchSchedulers(cronLines, hourlyPath, systemdActive) {
+    const cron = cronLines.filter((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes(hourlyPath));
+    const names = cron.map((_, i) => 'cron: hourly.sh' + (cron.length > 1 ? ' #' + (i + 1) : ''));
+    if (systemdActive) names.push('systemd: imps-hourly.timer');
+    return { count: names.length, names };
+}
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok, detail });
 const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
@@ -83,16 +89,13 @@ if (!hourlyBody) {
 // ── exactly one warlock per machine ───────────────────────────────────────
 if (process.platform !== 'win32') {
     // Check cron for hourly.sh
-    let cronExists = false;
-    let cronCurrent = false;
+    let cronLines = [];
+    let cronMismatch = false;
     try {
         const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
         if (cron.status === 0) {
-            const lines = (cron.stdout || '').split('\n');
-            const hourlyLine = lines.find(l => l.includes('hourly.sh'));
-            cronExists = Boolean(hourlyLine);
-            // Check if the crontab line points to the correct hourly.sh path
-            cronCurrent = hourlyLine ? hourlyLine.includes(hourly) : false;
+            cronLines = (cron.stdout || '').split(/\r?\n/);
+            cronMismatch = cronLines.some((line) => line.trim() && !line.trimStart().startsWith('#') && line.includes('hourly.sh') && !line.includes(hourly));
         }
     } catch { /* crontab not available */ }
 
@@ -100,7 +103,7 @@ if (process.platform !== 'win32') {
     let systemdExists = false;
     let systemdCurrent = false;
     try {
-        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+        const timer = spawnSync('systemctl', ['--user', 'list-timers', '--no-legend'], { encoding: 'utf8', windowsHide: true });
         if (timer.status === 0) {
             const lines = (timer.stdout || '').split('\n');
             const impsTimer = lines.find(l => l.includes('imps-hourly'));
@@ -148,16 +151,45 @@ if (process.platform !== 'win32') {
         } catch { /* systemctl not available */ }
     }
 
-    const ok = cronExists || systemdExists;
-    const detail = ok
-        ? (cronExists && cronCurrent ? 'cron: hourly.sh' : cronExists ? `cron: ${hourly} (mismatch)` : '') +
-          (systemdExists && systemdCurrent ? 'systemd: imps-hourly.timer' : systemdExists ? `systemd: ${hourly} (mismatch)` : '') +
-          (watchBody ? (
-            (watchCronExists && watchCronCurrent ? ' + cron: label-watch.sh' : watchCronExists ? ` + cron: ${watch} (mismatch)` : '') +
-            (watchSystemdExists && watchSystemdCurrent ? ' + systemd: imps-label-watch.timer' : watchSystemdExists ? ` + systemd: ${watch} (mismatch)` : '')
-          ) : '')
-        : 'no crontab entry for hourly.sh and no systemd imps-hourly.timer — nothing is reading the queue';
-    check('exactly one dispatch task', ok, detail);
+    // Check groomer wrapper
+    const groom = join(HOME, 'groom.sh');
+    const groomBody = read(groom);
+    let groomCronExists = false;
+    let groomCronCurrent = false;
+    let groomSystemdExists = false;
+    let groomSystemdCurrent = false;
+    if (groomBody) {
+        // Check cron for groom.sh
+        try {
+            const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8', windowsHide: true });
+            if (cron.status === 0) {
+                const lines = (cron.stdout || '').split('\n');
+                const groomLine = lines.find(l => l.includes('groom.sh'));
+                groomCronExists = Boolean(groomLine);
+                groomCronCurrent = groomLine ? groomLine.includes(groom) : false;
+            }
+        } catch { /* crontab not available */ }
+        // Check systemd for groomer
+        try {
+            const timer = spawnSync('systemctl', ['--user', 'list-timers', '--all', '--no-legend'], { encoding: 'utf8', windowsHide: true });
+            if (timer.status === 0) {
+                const lines = (timer.stdout || '').split('\n');
+                const groomTimer = lines.find(l => l.includes('imps-groom'));
+                groomSystemdExists = Boolean(groomTimer);
+                if (groomTimer) {
+                    const svc = spawnSync('systemctl', ['--user', 'show', 'imps-groom.service', '-p', 'ExecStart'], { encoding: 'utf8', windowsHide: true });
+                    const execStart = (svc.stdout || '').trim().replace('ExecStart=', '');
+                    groomSystemdCurrent = execStart.includes(groom);
+                }
+            }
+        } catch { /* systemctl not available */ }
+    }
+
+    const topology = countDispatchSchedulers(cronLines, hourly, systemdExists && systemdCurrent);
+    const watchDetail = watchBody ? (watchCronExists && watchCronCurrent ? 'cron: label-watch.sh' : watchCronExists ? 'cron: ' + watch + ' (mismatch)' : '') + (watchSystemdExists && watchSystemdCurrent ? 'systemd: imps-label-watch.timer' : watchSystemdExists ? 'systemd: ' + watch + ' (mismatch)' : '') : '';
+    const groomDetail = groomBody ? (groomCronExists && groomCronCurrent ? 'cron: groom.sh' : groomCronExists ? 'cron: ' + groom + ' (mismatch)' : '') + (groomSystemdExists && groomSystemdCurrent ? 'systemd: imps-groom.timer' : groomSystemdExists ? 'systemd: ' + groom + ' (mismatch)' : '') : '';
+    const detail = [topology.names.join('; '), cronMismatch ? 'cron: hourly.sh (path mismatch)' : '', systemdExists && !systemdCurrent ? 'systemd: ' + hourly + ' (mismatch)' : '', watchDetail, groomDetail].filter(Boolean).join('; ') || 'no active dispatch scheduler';
+    check('exactly one dispatch task', topology.count === 1, detail);
 } else {
     const ps = [
         'Get-ScheduledTask | Where-Object { $_.Actions | Where-Object { "$($_.Execute) $($_.Arguments)" -match "hourly\\.cmd|dispatch\\.mjs" } }',
@@ -166,6 +198,14 @@ if (process.platform !== 'win32') {
     const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true });
     const tasks = (r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     check('exactly one dispatch task', tasks.length === 1, tasks.length ? tasks.join(', ') : 'no Scheduled Task runs a dispatcher — nothing is reading the queue');
+
+    // Check groomer Scheduled Task
+    const groomPs = 'Get-ScheduledTask -TaskName "imps-groom" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TaskName';
+    const groomResult = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', groomPs], { encoding: 'utf8', windowsHide: true });
+    const groomTask = (groomResult.stdout || '').trim();
+    const groomExists = groomTask === 'imps-groom';
+    // The groomer is opt-in (setup.ps1 -WithGroomer), so a missing task is not a failure.
+    check('groomer task (opt-in)', true, groomExists ? 'imps-groom registered' : 'not registered (opt-in: setup.ps1 -WithGroomer)');
 }
 
 // ── a cycle that died leaves the lock behind ──────────────────────────────
@@ -203,7 +243,7 @@ try {
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
         headers: { 'content-type': 'application/json', 'x-api-key': router.key || '', 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'MAX', max_tokens: 5, messages: [{ role: 'user', content: 'say ok' }] }),
+        body: JSON.stringify({ model: 'MAX', max_tokens: 5, stream: false, messages: [{ role: 'user', content: 'say ok' }] }),
     });
     check('9router answers a MAX probe', r.ok, `${base} → ${r.status} (${describeRouter(router)})`);
 } catch (e) {

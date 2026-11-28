@@ -4,10 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'warlock.mjs');
 
@@ -41,18 +42,24 @@ test('a stub runner that is not a git checkout fails the topology check', () => 
     }
 });
 
-test('hourly.cmd that launches a different path fails', () => {
+test('hourly wrapper that launches a different path fails', () => {
     const home = mkdtempSync(join(tmpdir(), 'imps-warlock-'));
     try {
         const runner = join(home, 'runner');
         mkdirSync(join(runner, 'imps'), { recursive: true });
         writeFileSync(join(runner, 'imps', 'dispatch.mjs'), 'export {};\n');
         writeFileSync(join(home, 'kit-path.txt'), runner);
-        writeFileSync(join(home, 'hourly.cmd'), 'set IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps\\dispatch.mjs\n');
+
+        const isWindows = process.platform === 'win32';
+        const wrapperName = isWindows ? 'hourly.cmd' : 'hourly.sh';
+        const wrapperBody = isWindows
+            ? 'set IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps\\dispatch.mjs\n'
+            : 'export IMPS_KIT_PATH=' + join(home, 'somewhere-else') + '\nnode imps/dispatch.mjs\n';
+        writeFileSync(join(home, wrapperName), wrapperBody);
 
         const { json } = run(home);
 
-        const pointed = byName(json, 'hourly.cmd points at the runner');
+        const pointed = byName(json, `${wrapperName} points at the runner`);
         assert.equal(pointed.ok, false);
         assert.match(pointed.detail, /somewhere-else/);
     } finally {
@@ -71,4 +78,28 @@ test('no kit-path and no env var is reported, not guessed', () => {
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
+});
+
+const warlockSource = readFileSync(SCRIPT, 'utf8');
+const helperStart = warlockSource.indexOf('export function countDispatchSchedulers');
+const helperEnd = warlockSource.indexOf('\n}', helperStart) + 2;
+const helperSource = warlockSource.slice(helperStart, helperEnd);
+assert.ok(helperSource.startsWith('export function'), 'scheduler topology helper is exported');
+const countDispatchSchedulers = runInNewContext('(' + helperSource.replace(/^export /, '') + ')');
+
+test('Unix dispatch scheduler topology counts exactly one active dispatch scheduler', () => {
+    const hourly = '/home/imps/hourly.sh';
+    const cases = [
+        { cron: ['0 * * * * ' + hourly, '0 5 * * * /home/imps/label-watch.sh'], systemd: false, count: 1 },
+        { cron: [], systemd: true, count: 1 },
+        { cron: ['0 * * * * ' + hourly], systemd: true, count: 2 },
+        { cron: ['0 * * * * ' + hourly, '30 * * * * ' + hourly], systemd: false, count: 2 },
+        { cron: [], systemd: false, count: 0 },
+    ];
+    for (const fixture of cases) {
+        const result = countDispatchSchedulers(fixture.cron, hourly, fixture.systemd);
+        assert.equal(result.count, fixture.count);
+        assert.equal(result.names.length, fixture.count);
+    }
+    assert.equal(countDispatchSchedulers(cases[3].cron, hourly, false).names.join(','), 'cron: hourly.sh #1,cron: hourly.sh #2');
 });

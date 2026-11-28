@@ -18,7 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // computes QUOTA at import time.
 function probe(home, body) {
     const spec = pathToFileURL(join(HERE, 'runner.mjs')).href;
-    const src = `import { pickModel, decrementQuota, MODEL_POOL } from ${JSON.stringify(spec)};
+    const src = `import { pickModel, reserveQuota, decrementQuota, MODEL_POOL } from ${JSON.stringify(spec)};
 const out = (v) => process.stdout.write(JSON.stringify(v));
 ${body}`;
     const r = spawnSync(process.execPath, ['--input-type=module', '--eval', src], {
@@ -49,16 +49,44 @@ test('quota file lives in IMPS_HOME and is not tracked in the kit checkout', () 
     }
 });
 
-test('a counter refills in the next window instead of stopping the fleet', () => {
+test('MAX-only pool selects MAX for fallback and prefer strategies', () => {
+    const h = home();
+    try {
+        const fallback = probe(
+            h,
+            'const t = 1000; out({ pool: MODEL_POOL, picked: reserveQuota(MODEL_POOL, "fallback", t) });',
+        );
+        assert.deepEqual(fallback.pool, { prefer: [], fallback: ['MAX'] });
+        assert.equal(fallback.picked, 'MAX');
+
+        const prefer = probe(
+            h,
+            'const t = 1000; out({ pool: MODEL_POOL, picked: reserveQuota(MODEL_POOL, "prefer", t) });',
+        );
+        assert.deepEqual(prefer.pool, { prefer: [], fallback: ['MAX'] });
+        assert.equal(prefer.picked, 'MAX');
+        const stored = JSON.parse(readFileSync(join(h, 'model_quota.json'), 'utf8'));
+        assert.equal(stored.MAX.used, 2);
+        assert.equal(stored['openrouter/free'], undefined);
+    } finally {
+        rmSync(h, { recursive: true, force: true });
+    }
+});
+
+test('MAX quota exhaustion returns null until the next window refills', () => {
     const h = home();
     try {
         // Same window: exhaust MAX down to zero by writing a spent counter.
         writeFileSync(join(h, 'model_quota.json'), JSON.stringify({ MAX: { used: 999, window: 0 } }));
         const spent = probe(
             h,
-            'const t = 1000; for (let i = 0; i < 20; i++) decrementQuota("MAX", t); out({ picked: pickModel(MODEL_POOL, "fallback", t) });',
+            'const t = 1000; for (let i = 0; i < 20; i++) decrementQuota("MAX", t); out({ picked: pickModel(MODEL_POOL, "fallback", t), reserved: reserveQuota(MODEL_POOL, "fallback", t) });',
         );
-        assert.equal(spent.picked, 'openrouter/free', 'the fallback model should be skipped once spent');
+        assert.equal(spent.picked, null, 'MAX-only fallback must stop when MAX is exhausted');
+        assert.equal(spent.reserved, null, 'reservation must not select an unconfigured free model');
+        const stored = JSON.parse(readFileSync(join(h, 'model_quota.json'), 'utf8'));
+        assert.equal(stored.MAX.used, 1000);
+        assert.equal(stored['openrouter/free'], undefined);
 
         // One window later the same stored counter is stale, so MAX is back.
         const later = 1000 + 24 * 3600_000;

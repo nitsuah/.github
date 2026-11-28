@@ -1,0 +1,44 @@
+# LEGACY/ADVISORY ONLY: this workflow emits a GitHub Actions check, which a PR can spoof
+# with a same-named job. Do not require this check for enforcement. New adopters must use
+# risk-guard-app.yml and require the Nitsuah Risk Guard GitHub App check.
+name: Risk guard (reusable)
+
+# Fails a pull request that changes non-docs files without a CHANGELOG line (unless labelled
+# no-changelog), or that is high risk without an owner's risk-ack label. No model is involved, and the
+# PR's code is never checked out. A repo adopts it with repo-health/templates/risk-guard.yml.
+# Rules: imps/STANDARD.md, Risk controls.
+on:
+  workflow_call:
+    inputs:
+      owners:
+        description: Comma-separated logins whose risk-ack counts. Defaults to the repository owner.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    name: Risk guard
+    if: github.event.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nitsuah/.github
+          # The guard comes from the same commit as this workflow file, so a caller pinned to a SHA
+          # runs exactly the code that SHA contains. It must be job.workflow_sha: in a called workflow,
+          # github.workflow_sha is the caller's commit.
+          ref: ${{ job.workflow_sha }}
+          path: .risk-guard-kit
+          persist-credentials: false
+
+      - name: Check the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GUARD_OWNERS: ${{ inputs.owners || github.repository_owner }}
+        run: node .risk-guard-kit/imps/ci-guard.mjs

@@ -21,8 +21,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
-import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews } from './lib.mjs';
-import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS } from './runner.mjs';
+import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, fixRoundProgress, feedbackCutoff } from './lib.mjs';
+import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
+import { prRisk, dropStaleAck } from './checks.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -60,7 +61,7 @@ for (const c of checks.filter((x) => /FAILURE|ERROR/i.test(x.state) && /actions\
     c.log = sh('gh', ['run', 'view', run, '-R', slug, '--log-failed']).out.split('\n').slice(-60).join('\n').slice(-3000);
 }
 const since = r.fixes?.length ? r.fixes[r.fixes.length - 1].at : r.gate?.at || null;
-const items = feedbackItems({ threads, comments, checks, impReview: r.review, since });
+const items = feedbackItems({ threads, comments, checks, impReview: r.review, since, allowedAuthors: parseBriefAuthors(process.env.IMPS_BRIEF_AUTHORS) });
 
 // ── 2. nothing to do / stale CodeRabbit block / limits ───────────────────
 const latestBy = latestDecisiveReviews(pr.reviews);
@@ -103,6 +104,35 @@ const metrics = await runClaude({
 const decisions = parseFixDecisions(metrics.finalText, items);
 const committed = git(r.worktree, 'rev-parse', 'HEAD').out !== before;
 
+const record = {
+    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
+    committed, gate: null,
+    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
+};
+const progress = fixRoundProgress(items, decisions);
+const noThreadProgress = progress.hasThreads && progress.addressedThreads === 0;
+const unanswered = progress.unanswered.length > 0;
+if (noThreadProgress || unanswered) {
+    let rollbackFailure = null;
+    if (committed) {
+        const rollback = git(r.worktree, 'reset', '-q', '--hard', before);
+        if (rollback.code) rollbackFailure = (rollback.err || 'git reset failed').trim();
+    }
+    const reason = noThreadProgress
+        ? 'Fix round addressed zero review threads; CI-only fixes do not count as thread progress'
+        : `Fix round left feedback decisions unanswered: ${progress.unanswered.join(', ')}`;
+    record.at = feedbackCutoff({ previousSince: since, failed: true, completedAt: record.at });
+    if (!dry) {
+        sh('gh', ['label', 'create', 'imp:failed', '-R', slug, '-c', 'b60205', '-d', 'The imp did not pass the gate; needs a new brief or a human', '--force']);
+        const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:failed']);
+        const labelNote = labelResult.code === 0 ? 'Labelled imp:failed.' : `Failed to apply imp:failed label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+        sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} failed: ${reason}.${rollbackFailure ? ` Rollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
+    }
+    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, failure: reason, rollbackFailure, pushed: false }] }));
+    say('gate-fail', { reasons: [reason] });
+    process.exit(1);
+}
+
 // ── 4. gate, push, reply ─────────────────────────────────────────────────
 let gatePass = true;
 let reasons = [];
@@ -112,21 +142,32 @@ if (committed) {
     gatePass = !!g?.pass;
     reasons = g?.reasons || [];
 }
-const record = {
-    at: new Date().toISOString(), round, items: items.map(({ id: iid, kind, author }) => ({ id: iid, kind, author })), decisions,
-    committed, gate: committed ? { pass: gatePass, reasons } : null,
-    metrics: { end: metrics.end, turns: metrics.turns, toolErrors: metrics.toolErrors, served: metrics.served, tokens: metrics.tokens, minutes: Number(((metrics.durationMs || 0) / 60000).toFixed(1)) },
-};
+record.gate = committed ? { pass: gatePass, reasons } : null;
 if (committed && !gatePass) {
-    git(r.worktree, 'reset', '-q', '--hard', before);
+    const rollback = git(r.worktree, 'reset', '-q', '--hard', before);
+    const rollbackFailure = rollback.code ? (rollback.err || 'git reset failed').trim() : null;
+    record.at = feedbackCutoff({ previousSince: since, failed: true, completedAt: record.at });
     sh('gh', ['label', 'create', 'imp:needs-human', '-R', slug, '-c', 'd93f0b', '-d', 'An imp could not finish this; a human or the hypervisor should look', '--force']);
-    sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:needs-human']);
-    sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} didn't pass the gate, so nothing was pushed:\n\n${reasons.map((x) => `- ${x}`).join('\n')}\n\nLabelled \`imp:needs-human\`.`]);
-    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, pushed: false }] }));
+    const labelResult = sh('gh', ['pr', 'edit', String(number), '-R', slug, '--add-label', 'imp:needs-human']);
+    const labelNote = labelResult.code === 0 ? 'Labelled imp:needs-human.' : `Failed to apply imp:needs-human label: ${labelResult.err || 'unknown GitHub CLI error'}.`;
+    sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', `<!-- imp-fix -->\nFix round ${round} didn't pass the gate, so nothing was pushed:\n\n${reasons.map((x) => `- ${x}`).join('\n')}${rollbackFailure ? `\nRollback also failed: ${rollbackFailure}.` : ''}\n\n${labelNote}`]);
+    update(id, (row) => ({ fixes: [...(row.fixes || []), { ...record, rollbackFailure, pushed: false }] }));
     say('gate-fail', { reasons });
     process.exit(1);
 }
 if (committed) {
+    // Re-class and drop any acknowledgement before the new commit is published.
+    const live = sh('gh', ['pr', 'view', String(number), '-R', slug, '--json', 'labels']);
+    if (live.code) throw new Error(`could not read the PR's labels, so nothing is pushed: ${live.err}`);
+    const { labels } = JSON.parse(live.out);
+    dropStaleAck(slug, number, labels, { run: (args) => sh('gh', args) });
+    // Live labels count, so a class someone raised by hand is never written back lower.
+    const level = prRisk({
+        paths: git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean),
+        recorded: rows().find((x) => x.id === id).risk, labels,
+    });
+    update(id, { risk: level });
+    applyRiskLabel(r.pr, slug, level);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
     const push = git(r.worktree, 'push', '-q', 'origin', `HEAD:${pr.headRefName}`);
     git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
@@ -135,11 +176,11 @@ if (committed) {
 const sha = git(r.worktree, 'rev-parse', '--short', 'HEAD').out;
 const label = { fix: `Fixed in ${sha}`, pushback: 'Pushing back', skip: 'Not in this PR' };
 for (const d of decisions) {
-    const body = `<!-- imp-fix -->\n**${label[d.action]}:** ${d.reply}\n\n<sub>Fix round ${round} by an imp through 9router (run \`${id}\`).</sub>`;
+    const body = `<!-- imp-fix -->\n**${label[d.action] ?? 'Skipped'}:** ${d.reply}\n\n<sub>Fix round ${round} by an imp through 9router (run \`${id}\`).</sub>`;
     const it = items.find((x) => x.id === d.id);
     if (d.kind === 'thread') {
         sh('gh', ['api', `repos/${slug}/pulls/${number}/comments/${it.commentId}/replies`, '-f', `body=${body}`]);
-        if (d.action !== 'pushback')
+        if (shouldResolveFixDecision(d))
             sh('gh', ['api', 'graphql', '-f', `query=mutation{resolveReviewThread(input:{threadId:"${d.id}"}){thread{isResolved}}}`]);
     } else if (d.kind === 'comment' || d.kind === 'review') {
         sh('gh', ['pr', 'comment', String(number), '-R', slug, '-b', body.replace('**', `**${d.id}: `)]);

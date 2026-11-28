@@ -1,0 +1,12 @@
+---
+name: bb-mcp-repo-lessons
+description: Repo-specific traps and rules for bb-mcp that differ from general preamble
+metadata:
+  type: project
+---
+
+- Tests: `npx vitest run --config config/vitest.config.ts tests/<file>.test.ts`, then `npx tsc --noEmit`; the bare `npm test` runs everything and is slow (bb-mcp#191, bb-mcp#194).
+- Lint is `npx eslint src --ext .ts --config config/eslint.config.mjs` and includes prettier; on `prettier/prettier` errors run `npx eslint <file> --fix` instead of hand-wrapping (bb-mcp#193).
+- ESM with NodeNext: relative imports in `src/` and `tests/` end in `.js` (`../src/foo.js`), even though the files are `.ts`.
+- Tracking docs are `docs/TASKS.md` and `docs/CHANGELOG.md`, not the repo root; the changelog bullet goes under `## [Unreleased]` / `### Added`.
+- Open the file the brief names and make the first edit within a few turns; two bb-mcp runs hit the turn cap exploring `src/tools/` (bb-mcp#191, bb-mcp#193).
