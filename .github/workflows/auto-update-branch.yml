@@ -18,7 +18,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Warn when cross-repository token is missing
+        if: ${{ secrets.IMPS_GITHUB_TOKEN == '' }}
+        run: echo '::warning::Set IMPS_GITHUB_TOKEN with pull-request read/write access to the target repositories.'
       - name: Update dirty PR branches
+        if: ${{ secrets.IMPS_GITHUB_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.IMPS_GITHUB_TOKEN }}
         run: node imps/auto-update-branch.mjs nitsuah/motor-pool nitsuah/vigil nitsuah/ats-fill nitsuah/fire nitsuah/gcp nitsuah/stash nitsuah/security-program
