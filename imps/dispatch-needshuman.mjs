@@ -11,8 +11,8 @@ function gh(args) {
 }
 
 function getNeedsHumanIssues() {
-  const out = gh(`issue list -R ${REPO} --state open --label "imp:needs-human" --json number,title,body`);
-  const issues = JSON.parse(out);
+  const out = gh(`api --paginate --slurp "repos/${REPO}/issues?state=open&labels=imp%3Aneeds-human&per_page=100"`);
+  const issues = JSON.parse(out).flat().filter(i => !i.pull_request);
   return issues.map(i => ({ number: i.number, title: i.title }));
 }
 
@@ -40,6 +40,7 @@ function main() {
     if (dispatchIssue(issue.number, issue.title)) dispatched++;
   }
   console.log(`Dispatched ${dispatched}/${issues.length} issues`);
+  if (dispatched !== issues.length) process.exitCode = 1;
 }
 
 main();
