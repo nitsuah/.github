@@ -131,3 +131,13 @@ test('auditServed: cannot judge without an expectation or a served id, and does 
     assert.equal(none.ok, true);
     assert.equal(none.verdict, 'unknown-served');
 });
+
+test("auditServed: the CLI's <synthetic> error turns are not a served model (#421)", () => {
+    const expected = ['nemotron'];
+    assert.deepEqual(auditServed({ served: ['<synthetic>'], expected }), { ok: true, verdict: 'unknown-served', models: [], expected });
+    assert.deepEqual(auditServed({ served: ['nvidia/nemotron-3-ultra', '<synthetic>'], expected }), { ok: true, verdict: 'match', models: ['nvidia/nemotron-3-ultra'], expected });
+    // A real unexpected model beside it still fails, and so does any other family-less id.
+    const bad = auditServed({ served: ['<synthetic>', 'recursive/flint-v1.0', '<other>'], expected });
+    assert.equal(bad.ok, false);
+    assert.deepEqual(bad.unexpected, ['recursive/flint-v1.0', '<other>']);
+});
