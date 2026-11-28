@@ -18,6 +18,16 @@ export function quotaPool(model, pool) {
     return isComboModel(model) ? pool : { prefer: [], fallback: [model] };
 }
 
+/**
+ * Unpinned run candidates: the requested model (normally the `MAX` combo) first, then the configured
+ * fallbacks (combos such as `nvd` or concrete ids) in order, deduplicated. probeCandidates takes the first
+ * one that serves an expected family, so a fallback is used only when the combo is down or exhausted.
+ */
+export function comboCandidates(model, fallback = []) {
+    const ids = [model, ...(Array.isArray(fallback) ? fallback : [])].map((m) => String(m || '').trim()).filter(Boolean);
+    return [...new Set(ids)];
+}
+
 /** The only ids a pinned run may request. No expected families means nothing can be vouched for. */
 export function allowedRequestModels({ pinned = [], expected = [] } = {}) {
     const families = expected.map(modelFamily).filter(Boolean);

@@ -28,7 +28,7 @@ import { parseArgs } from 'node:util';
 import { parseBrief, validateBriefMaxLines, summarizeRun, effectiveMaxLines, effectiveMaxTestLines, strayUntracked, outOfScopeTracked, gate, humanOnlyPaths, report, COMMIT_RECOVERY_FAILED, COMMIT_RECOVERY_IN_PROGRESS, shouldPromptCommitRecovery, verifyCommitRecovery, prGuard, outcomeFromPr, tailOutput, deriveFormat, uniqueImpBranchName, extractFailureDiagnostic, resolveRouter, briefRepoName, brokenCommandSignature, inScopeChanged, riskClass, maxRisk, targetCheckout, refDirName } from './lib.mjs';
 import { mergedByAgentCommitBody } from './merge-attribution.mjs';
 import { expectedFamilies, mismatchLine, auditServed, auditLine, MODEL_MISMATCH_MARK } from './served-model.mjs';
-import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, quotaPool } from './model-pin.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, quotaPool, comboCandidates } from './model-pin.mjs';
 import { DEFAULTS } from './defaults.mjs';
 import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
@@ -127,7 +127,8 @@ async function run() {
             console.error(`${MODEL_MISMATCH_MARK}: no pinned model is in expected ${expected.join('/')}; add one to pinnedModels or set "pinModels": false`);
             process.exit(1);
         }
-        const probe = await probeCandidates(pinned.length ? pinned : [o.model], { baseUrl: router.baseUrl, key: router.key, expected });
+        // Not pinning: the requested combo (MAX) first, then config `fallbackModels` (e.g. "nvd") only if it can't serve.
+        const probe = await probeCandidates(pinned.length ? pinned : comboCandidates(o.model, cfg.fallbackModels), { baseUrl: router.baseUrl, key: router.key, expected });
         if (!probe.ok) {
             console.error(mismatchLine(probe));
             process.exit(1);

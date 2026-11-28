@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv, quotaPool, retryModel } from './model-pin.mjs';
+import { isComboModel, allowedRequestModels, orderRequestModels, probeCandidates, pinnedModelEnv, quotaPool, retryModel, comboCandidates } from './model-pin.mjs';
 import { issueFailures } from './lib.mjs';
 import { readFileSync } from 'node:fs';
 import { auditServed } from './served-model.mjs';
@@ -107,3 +107,12 @@ test('a retry without a gate verdict is not a second issue attempt', () => {
     assert.equal(issueFailures([run('imp_1', { retriedBy: 'imp_2' }), run('imp_2', { retryOf: 'imp_1', gate: { pass: false } })], 'vhs', 1), 1);
 });
 
+
+test('comboCandidates puts the requested combo first and the configured fallbacks after it', async () => {
+    assert.deepEqual(comboCandidates('MAX', ['nvd']), ['MAX', 'nvd']);
+    assert.deepEqual(comboCandidates('MAX', ['nvd', 'MAX', ' ', null]), ['MAX', 'nvd']);
+    assert.deepEqual(comboCandidates('MAX', undefined), ['MAX']);
+    // MAX down: probeCandidates falls through to the first fallback that serves an expected family.
+    const probe = async ({ model }) => (model === 'MAX' ? { ok: true, verdict: 'unreachable' } : { ok: true, verdict: 'match', served: 'nvidia/nemotron-3-ultra' });
+    assert.equal((await probeCandidates(comboCandidates('MAX', ['nvd']), {}, probe)).model, 'nvd');
+});
