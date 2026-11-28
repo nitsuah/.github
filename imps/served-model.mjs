@@ -8,6 +8,9 @@
 
 export const SERVED_MODEL_HEADERS = ['x-served-model', 'x-model'];
 export const MODEL_MISMATCH_MARK = 'served model mismatch';
+// The Claude CLI puts this in `model` on messages it writes itself (an "API Error: 503 …" turn).
+// No model served those, so they are not evidence either way (.github#421).
+export const SYNTHETIC_MODEL = '<synthetic>';
 
 function headerValue(headers, name) {
     if (!headers) return '';
@@ -91,9 +94,11 @@ export function mismatchLine(r) {
  * against the expected families. The pre-run probe sees one request; a run can fall through to
  * several models, so the run row records the whole list and the verdict. No expectation configured
  * means nothing to judge (ok, verdict 'no-expectation').
+ * SYNTHETIC_MODEL is dropped: a run with nothing else is
+ * 'unknown-served', and the gate's other checks still judge it.
  */
 export function auditServed({ served = [], expected = [] } = {}) {
-    const models = [...new Set((Array.isArray(served) ? served : [served]).map((s) => String(s || '').trim()).filter(Boolean))];
+    const models = [...new Set((Array.isArray(served) ? served : [served]).map((s) => String(s || '').trim()).filter((s) => s && s !== SYNTHETIC_MODEL))];
     const families = expected.map(modelFamily).filter(Boolean);
     if (!families.length) return { ok: true, verdict: 'no-expectation', models };
     if (!models.length) return { ok: true, verdict: 'unknown-served', models, expected: families };
