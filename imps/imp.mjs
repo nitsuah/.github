@@ -34,6 +34,7 @@ import { ensureFinalNewlines } from './eol.mjs';
 import { evaluateChecks, checksFingerprint, mayAutoMerge, cleanMergesForRepo, fetchGithubSeedTrust, mergeReady, NEEDS_HUMAN_LABEL } from './checks.mjs';
 import { HOME, LEDGER, CODE, rows, save, update, appendRow, sh, git, runClaude, loadBrief, IMP_TOOLS, pickModel, reserveQuota, MODEL_POOL, resolveVaultPrompt, kitSha, machineName, isGitDirty, resolveNoEditTurns, lookupIssueGuard, gateShell, resolveClaudeBin, claudeBinCandidates, claimCommitRecovery, autoCommitScoped, ensureRiskLabel, originUrl } from './runner.mjs';
 import { writeTelemetry, runOutcome, gateFailureSignatures } from './telemetry.mjs';
+import { lockPush, pushUnlocked } from './push-lock.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COMMIT_RECOVERY_TOOLS = ['Read', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git log:*)'];
@@ -181,10 +182,8 @@ async function run() {
         branch = uniqueImpBranchName(meta.issue, `${runSuffix}-retry${attempt + 1}`, branchExists);
     }
     if (add?.code) throw new Error(add.err);
-    const lock = git(wt, 'remote', 'set-url', '--push', 'origin', 'no_push');
-    if (lock.code) throw new Error(`could not disable push: ${lock.err}`);
+    lockPush(wt);
     // Worktree-local identity: never inherit a repo's stale user (fire had `openhands`).
-    git(wt, 'config', 'extensions.worktreeConfig', 'true');
     git(wt, 'config', '--worktree', 'user.name', '9router imp');
     git(wt, 'config', '--worktree', 'user.email', 'imp@users.noreply.github.com');
     const { meta: bm, prompt, hash } = loadBrief(o.brief, wt);
@@ -667,9 +666,7 @@ function openPr(id) {
     // (#56).
     const guard = prGuard({ branch: r.branch, issue: r.issue, slug: repoSlug, ...lookupIssueGuard(repoSlug, r.issue) });
     if (!guard.ok) throw new Error(guard.reason);
-    git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
-    const push = git(r.worktree, 'push', '-q', '-u', 'origin', r.branch);
-    git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
+    const push = pushUnlocked(r.worktree, ['-q', '-u', 'origin', r.branch]);
     if (push.code) throw new Error(push.err);
     // Classed from the branch itself, so a manual gate cannot skip it.
     const changed = git(r.worktree, 'diff', '--name-only', '--no-renames', `${r.baseSha}..HEAD`).out.split('\n').filter(Boolean);

@@ -24,6 +24,7 @@ import { parseArgs } from 'node:util';
 import { outcomeFromPr, feedbackItems, shouldAskCodeRabbitApprove, parseFixDecisions, latestDecisiveReviews, shouldResolveFixDecision, parseBriefAuthors, fixRoundProgress, feedbackCutoff } from './lib.mjs';
 import { HOME, rows, update, sh, git, runClaude, loadBrief, IMP_TOOLS, applyRiskLabel } from './runner.mjs';
 import { prRisk, dropStaleAck } from './checks.mjs';
+import { lockPush, pushUnlocked } from './push-lock.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { values: o, positionals: [id] } = parseArgs({
@@ -97,6 +98,7 @@ const { meta: bm, prompt: base } = loadBrief(r.brief, r.worktree);
 const list = items.map((i) => `### ${i.id} · ${i.kind} · ${i.author}${i.path ? ` · \`${i.path}${i.line ? `:${i.line}` : ''}\`` : ''}\n\n${i.text}`).join('\n\n');
 const prompt = `${base}\n\n---\n\n${readFileSync(join(HERE, 'FIX.md'), 'utf8').replaceAll('<#PR>', `#${number}`)}\n\n## Feedback items (round ${round}, PR ${r.pr})\n\n${list}`;
 const tools = IMP_TOOLS;
+lockPush(r.worktree); // an older kit's worktree may have no lock of its own
 const metrics = await runClaude({
     cwd: r.worktree, prompt, model: r.model || 'MAX', tools, minutes: o.minutes, budget: 10, maxTurns: 25,
     transcript: join(HOME, 'runs', `${id}.fix${round}.jsonl`),
@@ -168,9 +170,7 @@ if (committed) {
     });
     update(id, { risk: level });
     applyRiskLabel(r.pr, slug, level);
-    git(r.worktree, 'remote', 'set-url', '--push', 'origin', git(r.worktree, 'remote', 'get-url', 'origin').out);
-    const push = git(r.worktree, 'push', '-q', 'origin', `HEAD:${pr.headRefName}`);
-    git(r.worktree, 'remote', 'set-url', '--push', 'origin', 'no_push');
+    const push = pushUnlocked(r.worktree, ['-q', 'origin', `HEAD:${pr.headRefName}`]);
     if (push.code) throw new Error(`push failed: ${push.err}`);
 }
 const sha = git(r.worktree, 'rev-parse', '--short', 'HEAD').out;
