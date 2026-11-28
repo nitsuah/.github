@@ -11,15 +11,16 @@
       "mcp__blender__*",
       "mcp__playwright__*",
       "mcp__MCP_DOCKER__*",
-      "Bash(git *)",
-      "Bash(docker *)",
       "PowerShell(Set-Location {{CODE}})",
-      "PowerShell(git *)",
-      "PowerShell(docker *)",
       "Read('{{CODE}}\\**')",
-      "Grep('{{CODE}}\\**')"
+      "Grep('{{CODE}}\\**')",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "PowerShell(git status*)",
+      "PowerShell(git diff*)",
+      "PowerShell(git log*)"
     ],
-    "defaultMode": "bypassPermissions",
     "additionalDirectories": [
       "{{CODE}}"
     ],
@@ -130,7 +131,6 @@
       "autoCompactWindow": "auto"
     }
   },
-  "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
   "editorMode": "normal",
   "preferredNotifChannel": "auto",
