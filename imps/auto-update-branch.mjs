@@ -11,11 +11,11 @@ function gh(args) {
 }
 
 function getDirtyPRs(repo) {
-  const out = gh(`pr list -R ${repo} --state open --json number,title,mergeable,mergeableState,headRefName --jq '.[] | select(.mergeableState=="DIRTY" or .mergeableState=="BEHIND") | "\(.number) \(.headRefName) \(.mergeableState)"'`);
-  return out.trim().split('\n').filter(Boolean).map(line => {
-    const [number, branch, state] = line.split(' ');
-    return { number, branch, state };
-  });
+  const out = gh(`pr list -R ${repo} --state open --json number,title,mergeable,mergeStateStatus,headRefName`);
+  const prs = JSON.parse(out);
+  return prs
+    .filter(p => ['DIRTY', 'BEHIND', 'UNSTABLE', 'BLOCKED'].includes(p.mergeStateStatus))
+    .map(p => ({ number: p.number, branch: p.headRefName, state: p.mergeStateStatus }));
 }
 
 function updateBranch(repo, number) {

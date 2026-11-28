@@ -11,11 +11,9 @@ function gh(args) {
 }
 
 function getNeedsHumanIssues() {
-  const out = gh(`issue list -R ${REPO} --state open --label "imp:needs-human" --json number,title,body --jq '.[] | "\(.number) | \(.title)"'`);
-  return out.trim().split('\n').filter(Boolean).map(line => {
-    const [number, ...titleParts] = line.split(' | ');
-    return { number, title: titleParts.join(' | ') };
-  });
+  const out = gh(`issue list -R ${REPO} --state open --label "imp:needs-human" --json number,title,body`);
+  const issues = JSON.parse(out);
+  return issues.map(i => ({ number: i.number, title: i.title }));
 }
 
 function dispatchIssue(number, title) {
