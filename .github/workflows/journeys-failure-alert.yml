@@ -1,0 +1,43 @@
+name: Journeys failure alert
+
+on:
+  workflow_run:
+    workflows: ["Journeys kit"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  alert:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check if dependabot PR
+        id: check
+        run: |
+          PR_NUM=$(echo "${{ github.event.workflow_run.head_branch }}" | grep -oE 'dependabot[^/]+/[0-9]+' | head -1 | cut -d'/' -f2)
+          if [ -n "$PR_NUM" ]; then
+            echo "pr=$PR_NUM" >> $GITHUB_OUTPUT
+            echo "is_dependabot=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_dependabot=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Comment on dependabot PR
+        if: steps.check.outputs.is_dependabot == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = ${{ steps.check.outputs.pr }};
+            const runId = ${{ github.event.workflow_run.id }};
+            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${runId}`;
+            await github.rest.issues.createComment({
+              owner: 'nitsuah',
+              repo: 'vigil',
+              issue_number: pr,
+              body: `⚠️ **Journeys failed** on this dependabot PR.\n\nWorkflow run: ${runUrl}\n\nPlease check the logs and fix any issues. This may be a flaky test or a real regression introduced by the dependency update.`
+            });
