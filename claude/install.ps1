@@ -1,17 +1,7 @@
 #!/usr/bin/env pwsh
-# Install the shared Claude Code kit from this checkout into ~/.claude.
-#
-# Three tiers, never mixed:
-#   kit      this repo (public). Skills, hooks, CLAUDE.md, settings/MCP templates.
-#            Improvements go upstream via PR; every machine picks them up on update.
-#   private  OneDrive claude-sync (or -PrivatePath). Memory, personal context,
-#            scheduled-task prompts, licensed assets, third-party hooks. No keys.
-#   machine  ~/.claude/machine.json. Keys, URLs and per-machine overrides.
-#            Local only: never synced, never committed.
-#
+# Install the shared Claude Code kit into ~/.claude: kit (this repo), private
+# (OneDrive sync, no keys), machine (~/.claude/machine.json, keys). See claude/README.md.
 # Dry run by default; pass -Apply to change anything.
-#   pwsh -File claude/install.ps1            # show the plan
-#   pwsh -File claude/install.ps1 -Apply     # do it
 [CmdletBinding()]
 param(
     [switch]$Apply,
