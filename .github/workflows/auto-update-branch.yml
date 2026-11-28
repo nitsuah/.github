@@ -20,6 +20,6 @@ jobs:
           node-version: '22'
       - name: Update dirty PR branches
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/imps/auto-update-branch.mjs nitsuah/motor-pool nitsuah/vigil nitsuah/ats-fill nitsuah/fire nitsuah/gcp nitsuah/stash nitsuah/security-program
+          GH_TOKEN: ${{ secrets.IMPS_GITHUB_TOKEN }}
+        run: node imps/auto-update-branch.mjs nitsuah/motor-pool nitsuah/vigil nitsuah/ats-fill nitsuah/fire nitsuah/gcp nitsuah/stash nitsuah/security-program
         working-directory: ${{ github.workspace }}
