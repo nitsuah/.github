@@ -60,7 +60,8 @@ async function gh(path) {
 
 async function listRepos(kind, name) {
   const items = [];
-  for (let page = 1; page <= 5; page++) {
+  // Page until a short page; 50 pages (5,000 repos) is only a runaway guard.
+  for (let page = 1; page <= 50; page++) {
     const path = kind === 'org'
       ? `/orgs/${name}/repos?per_page=100&page=${page}&type=public`
       : `/users/${name}/repos?per_page=100&page=${page}&type=owner`;

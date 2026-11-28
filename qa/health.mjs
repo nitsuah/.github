@@ -48,7 +48,8 @@ async function one(c) {
   }
   if (c.redirect) {
     const got = loc || '';
-    if (!got.startsWith(c.redirect)) {
+    const norm = (u) => u.replace(/\/+$/, '');
+    if (!norm(got).startsWith(norm(c.redirect))) {
       row.error = `redirect ${got || '(none)'} (expected ${c.redirect})`;
       return row;
     }
