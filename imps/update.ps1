@@ -72,3 +72,12 @@ try {
     Write-Host "updated $RunnerPath → origin/$Branch" -ForegroundColor Green
     git log -1 --oneline
 } finally { Pop-Location }
+
+# Claude kit: skills and hooks are links into this checkout, so they are already current.
+# Re-render the copied files (settings.json, mcp.json, CLAUDE.md) on machines that opted in
+# by having ~/.claude/machine.json (created by the first claude/install.ps1 -Apply).
+$claudeInstall = Join-Path $RunnerPath 'claude\install.ps1'
+if ((Test-Path -LiteralPath $claudeInstall) -and (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.claude\machine.json'))) {
+    & pwsh -NoProfile -File $claudeInstall -Apply -KitPath $RunnerPath
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'claude kit install failed; the imps kit update itself succeeded' }
+}
