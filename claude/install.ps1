@@ -102,7 +102,7 @@ function Expand($o) {
     if ($o -is [System.Collections.IList] -and $o -isnot [string]) { for ($i = 0; $i -lt $o.Count; $i++) { $o[$i] = Expand $o[$i] }; return ,$o }
     if ($o -is [string]) {
         foreach ($k in $vars.Keys) { $o = $o.Replace($k, $vars[$k]) }
-        $o = [regex]::Replace($o, '\{\{secret:([A-Z0-9_]+)\}\}', {
+        $o = [regex]::Replace($o, '\{\{secret:([A-Za-z0-9_]+)\}\}', {
             param($mm) $n = $mm.Groups[1].Value
             if ($machine.secrets.Contains($n)) { $machine.secrets[$n] } else { $missing.Add($n); '' } })
     }
