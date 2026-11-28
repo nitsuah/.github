@@ -1,0 +1,10 @@
+{
+  "note": "Throwaway fixture for a live bugbot test. Not read by any code.",
+  "convention": "Every entry sets \"visual\": \"none\" except entries still waiting for a capture.",
+  "entries": [
+    { "id": "alpha", "visual": "none" },
+    { "id": "bravo", "visual": "none" },
+    { "id": "charlie" },
+    { "id": "delta", "visual": "none" }
+  ]
+}
